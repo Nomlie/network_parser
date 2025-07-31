@@ -15,9 +15,9 @@ Flexible Parsimony: Supports Camin-Sokal, Wagner, Dollo, and Fitch algorithms
 
 🚀 Quick Start
 🔧 Installation
-bash# Clone the repository
-git clone https://github.com/your-repo/phylogenetic-analysis.git
-cd phylogenetic-analysis
+# Clone the repository
+git clone https://github.com/Nomlie/dtree.git
+cd dtree
 
 # Option 1: Create Conda environment
 conda env create -f environment.yml
@@ -25,49 +25,50 @@ conda activate phylogenetic_analysis
 
 # Option 2: Install dependencies with pip
 pip install -r requirements.txt
+
 ▶️ Basic Usage
 Tree-Based Analysis
-bashpython phylogenetic_analysis.py \
+python phylogenetic_analysis.py \
   --newick data/tree.tre \
   --polymorphisms data/snps.fasta \
   --target_clade "23_YP48_MANG,23_YP47_MANG,23_YP45_MANG" \
   --output_dir results \
   --json_output
+
 Label-Based Analysis
-bashpython phylogenetic_analysis.py \
+python phylogenetic_analysis.py \
   --input_file data/snps.csv \
   --label_file data/labels.txt \
   --output_dir results \
   --json_output
+
 
 📊 Input Data Formats
 Polymorphism Data
 
 
 
+Format
+Description
+Example
 
 
 
+CSV
+Sample names with binary SNP columns (0/1)
+sample,SNP1,SNP2,SNP3...
 
 
+VCF
+Standard VCF format with genotype data
+Standard VCF with GT fields
 
 
+FASTA
+Binary (0/1) or nucleotide sequences
+>sample1\n010110101...
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-FormatDescriptionExampleCSVSample names with binary SNP columns (0/1)sample,SNP1,SNP2,SNP3...VCFStandard VCF format with genotype dataStandard VCF with GT fieldsFASTABinary (0/1) or nucleotide sequences>sample1\n010110101...
 Tree Data
 
 Format: Newick (.nwk, .tre)
@@ -75,24 +76,23 @@ Compatibility: BEAST, MrBayes, RAxML outputs
 Note: Sample names must match those in polymorphism data
 
 Label Data
-text# Format: sample_name|group_label
+# Format: sample_name|group_label
 sample1|N
 sample2|P
 sample3|N
 unlabeled_sample
 
+
 🔧 Command Line Options
 Required Arguments
 
 Tree-Based Mode:
-
 --newick: Path to Newick tree file
 --polymorphisms: Path to polymorphism data
 --target_clade: Comma-separated list of target clade samples
 
 
 Label-Based Mode:
-
 --input_file: Path to polymorphism data
 --label_file: Path to group labels
 
@@ -102,48 +102,46 @@ Optional Parameters
 
 
 
+Parameter
+Default
+Description
 
 
 
+--algorithm
+Camin-Sokal
+Parsimony algorithm (Camin-Sokal, Wagner, Dollo, Fitch)
 
 
+--tree_levels
+3
+Maximum decision tree depth
 
 
+--min_accuracy
+0.95
+Minimum classification accuracy
 
 
+--bootstrap_iterations
+1000
+Number of bootstrap validation iterations
 
 
+--fdr_threshold
+0.05
+False discovery rate threshold
 
 
+--max_workers
+4
+Number of parallel processing threads
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-ParameterDefaultDescription--algorithmCamin-SokalParsimony algorithm (Camin-Sokal, Wagner, Dollo, Fitch)--tree_levels3Maximum decision tree depth--min_accuracy0.95Minimum classification accuracy--bootstrap_iterations1000Number of bootstrap validation iterations--fdr_threshold0.05False discovery rate threshold--max_workers4Number of parallel processing threads
 
 📈 Output
 Text Report
-yaml================================================================================
+================================================================================
 Phylogenetic Polymorphism Analysis Results (v2.0.1)
 ================================================================================
 
@@ -164,11 +162,12 @@ Decision Tree Rules:
   |   |--- class: Group_N
   |--- SNP1 > 0.50
       |--- class: Group_P
+
 JSON Output (Optional)
 Structured output for programmatic parsing and integration with other tools.
 
 📁 Project Structure
-textphylogenetic_analysis/
+dtree/
 ├── phylogenetic_analysis.py    # Main script
 ├── environment.yml             # Conda environment
 ├── requirements.txt            # Python dependencies
@@ -179,6 +178,7 @@ textphylogenetic_analysis/
 │   ├── snps.fasta
 │   └── labels.txt
 └── README.md
+
 
 🧪 Example Analysis
 Dataset
@@ -196,11 +196,12 @@ Classification accuracy: 93.3%
 
 ⚙️ Advanced Configuration
 Use a config.yml for reproducible or batch analysis:
-yamlalgorithm: Camin-Sokal
+algorithm: Camin-Sokal
 min_accuracy: 0.95
 bootstrap_iterations: 1000
 fdr_threshold: 0.05
 max_workers: 8
+
 
 🔬 Methods
 Statistical Framework
@@ -221,25 +222,29 @@ Fitch: Unordered character states
 
 🐛 Troubleshooting
 Sample Name Mismatches
-bash# Check sample names in input files
+# Check sample names in input files
 grep ">" data/snps.fasta | head -5
 head -5 data/labels.txt
+
 Duplicate Samples
-bash# Check for duplicates
+# Check for duplicates
 cut -d',' -f1 data/snps.csv | sort | uniq -d
+
 Memory Issues with Large Datasets
-bash# Reduce bootstrap iterations
+# Reduce bootstrap iterations
 python phylogenetic_analysis.py --bootstrap_iterations 100 ...
+
 
 📚 Citation
 If you use this tool in your research, please cite:
-bibtex@software{phylogenetic_polymorphism_tool,
+@software{phylogenetic_polymorphism_tool,
   title = {Phylogenetic Polymorphism Analysis Tool},
-  author = {Your Name},
+  author = {Nomlie Fuphi},
   version = {2.0.1},
   year = {2025},
-  url = {https://github.com/your-repo/phylogenetic-analysis}
+  url = {https://github.com/Nomlie/dtree}
 }
+
 
 🤝 Contributing
 Contributions are welcome! To contribute:
@@ -255,6 +260,6 @@ This project is licensed under the MIT License. See the LICENSE file for details
 
 🆘 Support
 
-Issues: https://github.com/your-repo/phylogenetic-analysis/issues
-Discussions: https://github.com/your-repo/phylogenetic-analysis/discussions
-Email: your.email@institution.edu
+Issues: https://github.com/Nomlie/dtree/issues
+Discussions: https://github.com/Nomlie/dtree/discussions
+Email: nmfuphi@csir.co.za
