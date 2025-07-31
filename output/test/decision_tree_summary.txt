@@ -1,0 +1,9 @@
+Decision Tree Analysis Summary
+Date: 2025-07-29T13:19:18.300442
+Levels: 3
+Minimum Accuracy: 0.95
+
+=== Subtree Classifier Summary ===
+No subtrees achieved sufficient classification accuracy.
+
+Final pooled accuracy: 0.000 (on 0 of 0 classified samples)

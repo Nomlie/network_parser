@@ -1,0 +1,11 @@
+# Configuration for Phylogenetic Polymorphism Analysis Tool
+input_dir: input
+output_dir: output
+project_dir: ""
+algorithm: Camin-Sokal
+tree_levels: 3
+min_accuracy: 0.95
+bootstrap_iterations: 1000
+fdr_threshold: 0.05
+json_output: false
+max_workers: 4
