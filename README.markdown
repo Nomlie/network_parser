@@ -32,7 +32,7 @@ A next-generation bioinformatics framework for identifying statistically validat
 ## Overview
 NetworkParser is a next-generation genomic intelligence framework that decodes evolutionary processes underlying traits such as antimicrobial resistance emergence, virulence adaptation, and lineage diversification. By identifying statistically validated genetic drivers of cluster segregation—ranging from single polymorphisms to higher-order epistatic interactions—it transforms complex genomic variation into interpretable, actionable insights.
 
-Designed to operate on binary genomic matrices (e.g., SNP presence/absence, gene content, or other markers), NetworkParser integrates statistical validation, enabling high-confidence discovery of both novel and unknown markers linked to phenotypic outcomes. It bridges statistical genetics with deep learning by automatically generating optimized, explainability-ready inputs for architectures such as graph neural networks (GNNs) and transformers.
+
 
 Its explainability-by-design paradigm demystifies the “black box” of AI: each model prediction can be traced back to causal genetic features, validated through bootstrapping, cluster-aware statistical testing, and epistasis-aware modeling. This transparency enhances trust in AI predictions and facilitates downstream analyses in public health surveillance, outbreak tracing, and precision medicine.
 
