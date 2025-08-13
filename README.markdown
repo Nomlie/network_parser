@@ -467,5 +467,3 @@ This project is licensed under the MIT License. See the [LICENSE](LICENSE) file 
 - **Documentation**: [Full Documentation](https://networkparser.readthedocs.io/) (coming soon)  
 - **Email**: support@networkparser.org  
 
-NetworkParser enhances interpretability and biological insight in evolutionary genomics, microbial surveillance, and precision medicine through robust statistical validation and integration of prior biological knowledge.  
-Keywords: antimicrobial resistance prediction, AI diagnostics, microbial genomics, explainable AI, virulence evolution, deep learning interpretability, epistasis modelling, phylogenomics.
