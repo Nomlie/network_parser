@@ -36,23 +36,20 @@ Designed to operate on binary genomic matrices (e.g., SNP presence/absence, gene
 
 ## How It Works
 1. Pattern Discovery- Uses label-aware decision trees to recursively identify genetic features that best separate biological groups:
-
-Root splits capture major discriminative variants
-Deeper branches reveal conditional and epistatic effects
-Each node asks: "What genetic change made this lineage different?"
+- Root splits capture major discriminative variants
+- Deeper branches reveal conditional and epistatic effects
+- Each node asks: "What genetic change made this lineage different?"
 
 2. Statistical Validation- Every discovered pattern undergoes rigorous testing:
-
-Null model comparison against evolutionary background
-Bootstrap resampling for stability assessment
-Multiple testing correction for false discovery control
-Cross-validation for generalizability
+- Null model comparison against evolutionary background
+- Bootstrap resampling for stability assessment
+- Multiple testing correction for false discovery control
+- Cross-validation for generalizability
 
 3. Feature Integration- Outputs clean, interpretable results:
-
-Ranked feature lists with effect sizes and confidence intervals
-Sample-feature networks for visualization
-Feature interaction graphs for downstream ML analysis
+-  Ranked feature lists with effect sizes and confidence intervals
+-  Sample-feature networks for visualization
+-  Feature interaction graphs for downstream ML analysis
 
 ### Purpose  
 - **Identify Diagnostic Markers:** Pinpoint features and epistatic interactions that distinguish evolutionary lineages or phenotypic groups.  
