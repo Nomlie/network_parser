@@ -34,6 +34,29 @@ NetworkParser is a next-generation genomic intelligence framework that decodes e
 
 Designed to operate on binary genomic matrices (e.g., SNP presence/absence, gene content, or other markers), NetworkParser integrates statistical validation, enabling high-confidence discovery of both novel and known markers linked to phenotypic outcomes. It bridges statistical genetics with deep learning by automatically generating optimized, explainability-ready inputs for architectures such as graph neural networks (GNNs) and transformers. The core innovation of NetworkParser lies in its use of label-aware recursive partitioning, combined with advanced machine learning techniques, to explicitly model hierarchical relationships among samples—such as clade structures or lineage trees—and capture non-linear, epistatic interactions among genetic variants. This approach addresses critical shortcomings of traditional genome-wide association studies (GWAS) and phylogenetic analyses, which often assume linear effects and fail to incorporate the nested structure of evolutionary or epidemiological relationships. Its explainability-by-design paradigm demystifies the “black box” of AI: each model prediction can be traced back to causal genetic features, validated through bootstrapping, cluster-aware statistical testing, and epistasis-aware modeling. This transparency enhances trust in AI predictions and facilitates downstream analyses in public health surveillance, outbreak tracing, and precision medicine.
 
+## How It Works
+1. Pattern Discovery
+Uses label-aware decision trees to recursively identify genetic features that best separate biological groups:
+
+Root splits capture major discriminative variants
+Deeper branches reveal conditional and epistatic effects
+Each node asks: "What genetic change made this lineage different?"
+
+2. Statistical Validation
+Every discovered pattern undergoes rigorous testing:
+
+Null model comparison against evolutionary background
+Bootstrap resampling for stability assessment
+Multiple testing correction for false discovery control
+Cross-validation for generalizability
+
+3. Feature Integration
+Outputs clean, interpretable results:
+
+Ranked feature lists with effect sizes and confidence intervals
+Sample-feature networks for visualization
+Feature interaction graphs for downstream ML analysis
+
 ### Purpose  
 - **Identify Diagnostic Markers:** Pinpoint features and epistatic interactions that distinguish evolutionary lineages or phenotypic groups.  
 - **Hierarchical Analysis:** Detect discriminative features at multiple levels of biological organization.  
