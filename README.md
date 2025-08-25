@@ -1,5 +1,5 @@
 # NetworkParser  
-A next-generation bioinformatics framework for identifying statistically validated features that drive cluster segregation using interpretable machine learning, epistatic interaction modeling, and hierarchical analysis.
+A next-generation bioinformatics framework for identifying statistically validated features that drive **cluster** segregation using interpretable machine learning, epistatic interaction modeling, and hierarchical analysis.
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)  
 [![Python](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)  
@@ -30,34 +30,32 @@ A next-generation bioinformatics framework for identifying statistically validat
 - [Support](#support)  
 
 ## Overview
+NetworkParser is a next-generation genomic intelligence framework that decodes evolutionary processes underlying traits such as antimicrobial resistance emergence, virulence adaptation, and lineage diversification. By identifying statistically validated genetic drivers of cluster segregation—ranging from single polymorphisms to higher-order epistatic interactions—it transforms complex genomic variation into interpretable, actionable insights.
 
-NetworkParser is a genomic intelligence framework designed to decode the evolutionary mechanisms driving critical microbial traits, including antimicrobial resistance, virulence adaptation, and lineage diversification. By leveraging label-aware recursive partitioning through decision trees, it identifies statistically validated cluster segregation drivers, from single nucleotide polymorphisms (SNPs) to complex epistatic interactions, transforming intricate genomic variation into clear, actionable insights for researchers and clinicians.
-
-Operating on binary genomic matrices (e.g., SNP presence/absence, gene content, or other molecular markers), NetworkParser integrates rigorous statistical validation, including bootstrap resampling and multiple hypothesis testing (p < 0.05), to ensure high-confidence discovery of both novel and established markers linked to phenotypic outcomes. Its innovative architecture bridges statistical genetics with modern deep learning by generating optimized, explainability-ready inputs for advanced models such as graph neural networks (GNNs) and transformers. Unlike traditional genome-wide association studies (GWAS) or phylogenetic approaches, which often assume linear effects and overlook hierarchical or non-linear variant interactions, NetworkParser explicitly models nested relationships, such as clade structures or lineage hierarchies, and captures complex epistatic dynamics.
-
-The framework’s explainability-by-design paradigm demystifies AI's "black-box" nature: every prediction is traceable to causal genetic features, validated through robust methods like permutation importance, cluster-aware statistical testing, and epistasis-aware modeling. This transparency fosters trust in AI outputs and enables seamless integration into downstream applications, including public health surveillance, outbreak tracing, and precision medicine. Implemented in Python and supporting standard formats like VCF and FASTA, NetworkParser is open-source, scalable, and poised to redefine genomic analysis by delivering interpretable, reproducible, and clinically deployable insights into microbial evolution and pathogen surveillance.
-
+Designed to operate on binary genomic matrices (e.g., SNP presence/absence, gene content, or other markers), NetworkParser integrates statistical validation, enabling high-confidence discovery of both novel and known markers linked to phenotypic outcomes. It bridges statistical genetics with deep learning by automatically generating optimized, explainability-ready inputs for architectures such as graph neural networks (GNNs) and transformers. The core innovation of NetworkParser lies in its use of label-aware recursive partitioning, combined with advanced machine learning techniques, to explicitly model hierarchical relationships among samples—such as clade structures or lineage trees—and capture non-linear, epistatic interactions among genetic variants. This approach addresses critical shortcomings of traditional genome-wide association studies (GWAS) and phylogenetic analyses, which often assume linear effects and fail to incorporate the nested structure of evolutionary or epidemiological relationships. Its explainability-by-design paradigm demystifies the “black box” of AI: each model prediction can be traced back to causal genetic features, validated through bootstrapping, cluster-aware statistical testing, and epistasis-aware modeling. This transparency enhances trust in AI predictions and facilitates downstream analyses in public health surveillance, outbreak tracing, and precision medicine.
 
 ## How It Works
-1. **Pattern Discovery** - Uses label-aware decision trees to recursively identify genetic features that best separate biological groups:
+1. **Pattern Discovery**
+Uses label-aware decision trees to recursively identify genetic features that best separate biological groups:
 
-- Root splits capture major discriminative variants
-- Deeper branches reveal conditional and epistatic effects
-- Each node asks: "What genetic change made this lineage different?"
+Root splits capture major discriminative variants
+Deeper branches reveal conditional and epistatic effects
+Each node asks: "What genetic change made this lineage different?"
 
-2. **Statistical Validation** - Every discovered pattern undergoes rigorous testing:
+2. **Statistical Validation**
+Every discovered pattern undergoes rigorous testing:
 
-- Null model comparison against evolutionary background
-- Bootstrap resampling for stability assessment
-- Multiple testing correction for false discovery control
-- Cross-validation for generalizability
+Null model comparison against evolutionary background
+Bootstrap resampling for stability assessment
+Multiple testing correction for false discovery control
+Cross-validation for generalizability
 
-3. **Feature Integration** - Outputs clean, interpretable results:
+3. **Feature Integration**
+Outputs clean, interpretable results:
 
-- Ranked feature lists with effect sizes and confidence intervals
-- Sample-feature networks for visualization
-- Feature interaction graphs for downstream ML analysis
-
+Ranked feature lists with effect sizes and confidence intervals
+Sample-feature networks for visualization
+Feature interaction graphs for downstream ML analysis
 
 ### Purpose  
 - **Identify Diagnostic Markers:** Pinpoint features and epistatic interactions that distinguish evolutionary lineages or phenotypic groups.  
@@ -102,7 +100,7 @@ The framework’s explainability-by-design paradigm demystifies AI's "black-box"
 
 - **Epistatic Interaction Modeling:** Captures non-linear feature combinations beyond individual effects.  
 - **Hierarchical Feature Discovery:** Identifies markers at multiple biological organization levels.  
-- **Prior Knowledge Integration:** Incorporates known trait-associated features.  
+- **Prior Knowledge Integration:** Optionally incorporates known trait-associated features.  
 - **Multiple Input Formats:** Supports CSV, VCF, FASTA, and metadata files.  
 - **Bootstrap Validation:** Statistical significance testing with confidence intervals.  
 - **Decision Tree Construction:** Interpretable sample hierarchies with annotated branches.  
@@ -471,3 +469,5 @@ This project is licensed under the MIT License. See the [LICENSE](LICENSE) file 
 - **Documentation**: [Full Documentation](https://networkparser.readthedocs.io/) (coming soon)  
 - **Email**: support@networkparser.org  
 
+NetworkParser enhances interpretability and biological insight in evolutionary genomics, microbial surveillance, and precision medicine through robust statistical validation and integration of prior biological knowledge.  
+Keywords: antimicrobial resistance prediction, AI diagnostics, microbial genomics, explainable AI, virulence evolution, deep learning interpretability, epistasis modelling, phylogenomics.
