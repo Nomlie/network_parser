@@ -19,10 +19,10 @@ import pickle
 from datetime import datetime
 import warnings
 
-from .config import NetworkParserConfig
+from .network_parser import NetworkParserConfig
 from .data_loader import DataLoader
-from .enhanced_decision_tree import EnhancedDecisionTreeBuilder
-from .statistical_validator import StatisticalValidator
+from .decision_tree_builder import EnhancedDecisionTreeBuilder
+from .statistical_validation import StatisticalValidator
 
 
 class NetworkParser:
@@ -468,4 +468,4 @@ def run_networkparser_analysis(genomic_data_path: str,
     if output_dir:
         parser.export_results(output_dir)
     
-    return parser
+    return parser  
