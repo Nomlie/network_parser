@@ -137,7 +137,7 @@ Get started in minutes:
 
 3. Run a simple analysis on example data:
    ```bash
-   python networkparser.py \
+   python network_parser/network_parser.py \
      --input_matrix data/genomic_matrix.csv \
      --metadata data/metadata.csv \
      --hierarchy_column "lineage" \
@@ -175,7 +175,7 @@ After installation, you can run NetworkParser in several primary modes:
 
 **Hierarchical Analysis**
 ```bash
-python networkparser.py \
+python network_parser/network_parser.py \
   --input_matrix data/genomic_features.csv \
   --metadata data/sample_metadata.csv \
   --hierarchy_column "lineage" \
@@ -185,7 +185,7 @@ python networkparser.py \
 
 **Phenotype-Based Analysis**
 ```bash
-python networkparser.py \
+python network_parser/network_parser.py \
   --input_matrix data/resistance_profiles.csv \
   --phenotype_file data/phenotypes.txt \
   --target_groups "resistant,sensitive" \
@@ -195,7 +195,7 @@ python networkparser.py \
 
 **Prior Knowledge Integration**
 ```bash
-python networkparser.py \
+python network_parser/network_parser.py \
   --input_matrix data/snp_matrix.csv \
   --metadata data/metadata.csv \
   --known_markers data/resistance_snps.txt \
@@ -295,7 +295,7 @@ Structured output for programmatic parsing and integration with downstream tools
 ## Project Structure
 ```
 networkparser/
-├── networkparser.py           # Main script
+├── network_parser/network_parser.py           # Main script
 ├── environment.yml           # Conda environment  
 ├── requirements.txt          # Python dependencies
 ├── config.yml               # Configuration file
@@ -417,7 +417,7 @@ print('Intersection:', len(set(matrix.index) & set(meta.index)))
 **Memory Issues with Large Datasets**
 ```bash
 # Reduce memory usage
-python networkparser.py \
+python network_parser/network_parser.py \
   --memory_efficient \
   --chunk_size 500 \
   --max_interaction_order 2 \
@@ -427,7 +427,7 @@ python networkparser.py \
 **Insufficient Statistical Power**
 ```bash
 # Increase bootstrap iterations and adjust thresholds
-python networkparser.py \
+python network_parser/network_parser.py \
   --bootstrap_iterations 5000 \
   --confidence_threshold 0.90 \
   --min_group_size 3
