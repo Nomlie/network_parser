@@ -19,7 +19,7 @@ import pickle
 from datetime import datetime
 import warnings
 
-from .network_parser import NetworkParserConfig
+from .config import NetworkParserConfig
 from .data_loader import DataLoader
 from .decision_tree_builder import EnhancedDecisionTreeBuilder
 from .statistical_validation import StatisticalValidator
@@ -34,7 +34,7 @@ class NetworkParser:
     for multiple testing and validating epistatic interactions.
     """
     
-    def __init__(self, config: NetworkParserConfig):
+    def __init__(self, config: None):
         self.config = config
         self.data = None
         self.labels = None
