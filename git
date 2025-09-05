@@ -1,0 +1,13 @@
+# Check remotes and branch
+git remote -v
+git status
+git rev-parse --abbrev-ref HEAD   # shows current branch
+
+# Be on master
+git switch master  # or: git checkout master
+git pull --rebase origin master   # get latest before pushing
+
+# Stage/commit and push
+git add .
+git commit -m "Your message"
+git push --set-upstream origin changesss
