@@ -1,4 +1,4 @@
-name: phylogenetic_analysis
+name: network_parser
 channels:
   - conda-forge
   - defaults
