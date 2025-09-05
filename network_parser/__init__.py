@@ -8,4 +8,4 @@ epistatic interaction modeling.
 """
 
 from .config import NetworkParserConfig
-from .core import NetworkParsers
+from .network_parser import NetworkParsers
