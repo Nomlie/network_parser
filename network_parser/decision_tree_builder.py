@@ -15,7 +15,7 @@ from collections import defaultdict, Counter
 from typing import Dict, List, Optional
 
 from .config import NetworkParserConfig
-from .statistical_validator import StatisticalValidator
+from .statistical_validation import StatisticalValidator
 
 
 class EnhancedDecisionTreeBuilder:
