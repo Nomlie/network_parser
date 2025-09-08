@@ -1,15 +1,22 @@
-# network_parser/data_loader.py
 """
 Data loading and preprocessing module.
 
 This module provides utilities for loading and preprocessing genomic data
 from various file formats, including CSV, TSV, FASTA (binary sequences),
-and VCF files. It also handles loading metadata and known markers.
+and VCF files. It also handles loading optional metadata and known markers.
 """
 
 import pandas as pd
 from pathlib import Path
-from typing import List
+from typing import List, Optional
+import logging
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 class DataLoader:
     """Handles loading and preprocessing of various input formats.
@@ -19,14 +26,16 @@ class DataLoader:
     """
     
     @staticmethod
-    def load_genomic_matrix(filepath: str) -> pd.DataFrame:
+    def load_genomic_matrix(filepath: str, output_dir: Optional[str] = None) -> pd.DataFrame:
         """Load genomic data matrix from various formats.
         
-        Supported formats: CSV, TSV, FASTA (assuming binary 0/1 sequences),
-        and VCF (simplified binary conversion).
+        Supported formats: CSV, TSV, FASTA (binary sequences), and VCF.
+        Removes duplicate sample IDs, keeping the first occurrence, and saves
+        the deduplicated matrix to output_dir if provided.
         
         Args:
             filepath: Path to the input file.
+            output_dir: Directory to save deduplicated matrix (optional).
         
         Returns:
             A pandas DataFrame representing the genomic matrix.
@@ -35,113 +44,94 @@ class DataLoader:
             ValueError: If the file format is unsupported.
             FileNotFoundError: If the file does not exist.
         """
-        # Convert to Path object for consistent handling
         filepath = Path(filepath)
-        
-        # Check if file exists before proceeding
         if not filepath.exists():
             raise FileNotFoundError(f"File not found: {filepath}")
         
-        # Handle CSV format
         if filepath.suffix.lower() == '.csv':
-            return pd.read_csv(filepath, index_col=0)
-        
-        # Handle TSV format
+            df = pd.read_csv(filepath, index_col=0)
         elif filepath.suffix.lower() == '.tsv':
-            return pd.read_csv(filepath, sep='\t', index_col=0)
-        
-        # Handle FASTA/FA formats (binary sequences)
+            df = pd.read_csv(filepath, sep='\t', index_col=0)
         elif filepath.suffix.lower() in ['.fasta', '.fa']:
-            return DataLoader._load_fasta_binary(filepath)
-        
-        # Handle VCF format
+            df = DataLoader._load_fasta_binary(filepath)
         elif filepath.suffix.lower() == '.vcf':
-            return DataLoader._load_vcf_binary(filepath)
-        
-        # Raise error for unsupported formats
+            df = DataLoader._load_vcf_binary(filepath)
         else:
             raise ValueError(f"Unsupported file format: {filepath.suffix}")
+        
+        if df.index.duplicated().any():
+            duplicates = df.index[df.index.duplicated()].tolist()
+            logger.warning(f"Duplicate sample IDs found in genomic matrix: {duplicates}. Keeping first occurrence.")
+            df = df[~df.index.duplicated(keep='first')]
+            if output_dir:
+                output_dir = Path(output_dir)
+                output_dir.mkdir(parents=True, exist_ok=True)
+                output_file = output_dir / "deduplicated_genomic_matrix.csv"
+                df.to_csv(output_file)
+                logger.info(f"Saved deduplicated genomic matrix to: {output_file}")
+        
+        return df
     
     @staticmethod
     def _load_fasta_binary(filepath: Path) -> pd.DataFrame:
         """Convert FASTA sequences to binary matrix.
         
         Assumes sequences are composed of '0' and '1' characters only.
-        Pads shorter sequences with '0' to match the longest sequence.
+        Removes duplicates and pads shorter sequences with '0'.
         
         Args:
             filepath: Path to the FASTA file.
         
         Returns:
             A pandas DataFrame with samples as rows and positions as columns.
-        
-        Raises:
-            ValueError: If a character in the sequence cannot be converted to int (not '0' or '1').
         """
-        # Dictionary to store sequence IDs and their sequences
         sequences = {}
-        
-        # Read the FASTA file line by line
         with open(filepath, 'r') as f:
             current_id = None
             current_seq = ""
-            
             for line in f:
-                # Header line starts a new sequence
                 if line.startswith('>'):
                     if current_id:
                         sequences[current_id] = current_seq
                     current_id = line[1:].strip()
                     current_seq = ""
                 else:
-                    # Append sequence data, stripping whitespace
                     current_seq += line.strip()
-            
-            # Add the last sequence if present
             if current_id:
                 sequences[current_id] = current_seq
         
-        # If no sequences found, return empty DataFrame
         if not sequences:
             return pd.DataFrame()
         
-        # Determine the maximum sequence length for padding
+        if len(sequences) != len(set(sequences.keys())):
+            duplicates = [k for k in sequences.keys() if list(sequences.keys()).count(k) > 1]
+            logger.warning(f"Duplicate sample IDs found in FASTA: {duplicates}. Keeping first occurrence.")
+            unique_sequences = {}
+            seen = set()
+            for k, v in sequences.items():
+                if k not in seen:
+                    unique_sequences[k] = v
+                    seen.add(k)
+            sequences = unique_sequences
+        
         max_length = max(len(seq) for seq in sequences.values())
-        
-        # List to hold binary rows
         binary_matrix = []
-        
         for sample_id, sequence in sequences.items():
-            # Pad sequence with '0' if shorter than max_length
             padded_seq = sequence.ljust(max_length, '0')
-            
             try:
-                # Convert each character to integer (0 or 1)
                 binary_row = [int(char) for char in padded_seq]
             except ValueError:
                 raise ValueError(f"Invalid character in sequence for {sample_id}. Sequences must consist of '0' and '1' only.")
-            
-            # Append the binary row
             binary_matrix.append(binary_row)
         
-        # Create column names as position indices
         columns = [f"pos_{i}" for i in range(max_length)]
-        
-        # Construct and return the DataFrame
         return pd.DataFrame(binary_matrix, index=list(sequences.keys()), columns=columns)
     
     @staticmethod
     def _load_vcf_binary(filepath: Path) -> pd.DataFrame:
         """Convert VCF to binary matrix (simplified implementation).
         
-        This is a basic parser that converts genotypes to binary:
-        - 0 for reference homozygous (0/0, 0|0)
-        - 1 for any variant (heterozygous or homozygous alt)
-        - 0 for missing data
-        
-        Note: For production use, consider libraries like cyvcf2 or hail for
-        more robust VCF handling. This ignores multi-allelic variants and
-        complex genotypes.
+        Converts genotypes to binary and removes duplicate sample IDs.
         
         Args:
             filepath: Path to the VCF file.
@@ -149,110 +139,124 @@ class DataLoader:
         Returns:
             A pandas DataFrame with samples as rows and variants as columns.
         """
-        # Lists to store variant data and sample names
         variants = []
         samples = []
-        
-        # Read the VCF file line by line
         with open(filepath, 'r') as f:
             for line in f:
-                # Skip metadata lines
                 if line.startswith('##'):
                     continue
-                
-                # Extract sample names from header
                 elif line.startswith('#CHROM'):
                     samples = line.strip().split('\t')[9:]
-                
-                # Process variant lines
                 elif not line.startswith('#'):
                     fields = line.strip().split('\t')
-                    
-                    # Extract key fields: chrom, pos, ref, alt
                     chrom, pos, ref, alt = fields[0], fields[1], fields[3], fields[4]
-                    
-                    # Genotypes start from column 9
                     genotypes = fields[9:]
-                    
-                    # Convert to binary
                     binary_genotypes = []
                     for gt in genotypes:
-                        gt_field = gt.split(':')[0]  # Take the genotype field
+                        gt_field = gt.split(':')[0]
                         if gt_field in ['0/0', '0|0']:
                             binary_genotypes.append(0)
                         elif gt_field in ['1/1', '1|1', '0/1', '1/0', '0|1', '1|0']:
                             binary_genotypes.append(1)
                         else:
-                            binary_genotypes.append(0)  # Treat missing or other as 0
-                    
-                    # Store variant info
+                            binary_genotypes.append(0)
                     variants.append({
                         'id': f"{chrom}_{pos}_{ref}_{alt}",
                         'genotypes': binary_genotypes
                     })
         
-        # If no variants or samples, return empty DataFrame
         if not variants or not samples:
             return pd.DataFrame()
         
-        # Create DataFrame with variants as rows initially
+        if len(samples) != len(set(samples)):
+            duplicates = [s for s in samples if samples.count(s) > 1]
+            logger.warning(f"Duplicate sample IDs found in VCF: {duplicates}. Keeping first occurrence.")
+            unique_samples = []
+            seen = set()
+            for s in samples:
+                if s not in seen:
+                    unique_samples.append(s)
+                    seen.add(s)
+            samples = unique_samples
+            variants = [
+                {
+                    'id': v['id'],
+                    'genotypes': [v['genotypes'][i] for i in range(len(v['genotypes'])) if samples[i] in unique_samples]
+                } for v in variants
+            ]
+        
         matrix = pd.DataFrame(
             [variant['genotypes'] for variant in variants],
             columns=samples,
             index=[variant['id'] for variant in variants]
         )
-        
-        # Transpose to have samples as rows, variants as columns
         return matrix.T
     
     @staticmethod
-    def load_metadata(filepath: str) -> pd.DataFrame:
-        """Load sample metadata.
+    def load_metadata(filepath: Optional[str], output_dir: Optional[str] = None) -> pd.DataFrame:
+        """Load sample metadata if provided.
         
-        Assumes CSV format with sample IDs as index.
+        Assumes CSV format with sample IDs as index. Removes duplicate sample IDs
+        and saves the deduplicated metadata to output_dir if provided.
         
         Args:
-            filepath: Path to the metadata CSV file.
+            filepath: Path to the metadata CSV file, or None if no metadata.
+            output_dir: Directory to save deduplicated metadata (optional).
         
         Returns:
-            A pandas DataFrame with metadata.
-        
-        Raises:
-            FileNotFoundError: If the file does not exist.
+            A pandas DataFrame with metadata, or an empty DataFrame if filepath is None.
         """
-        # Convert to Path
-        filepath = Path(filepath)
+        if filepath is None:
+            return pd.DataFrame()
         
-        # Check existence
+        filepath = Path(filepath)
         if not filepath.exists():
             raise FileNotFoundError(f"File not found: {filepath}")
         
-        # Load CSV with index_col=0
-        return pd.read_csv(filepath, index_col=0)
+        df = pd.read_csv(filepath, index_col=0)
+        
+        if df.index.duplicated().any():
+            duplicates = df.index[df.index.duplicated()].tolist()
+            logger.warning(f"Duplicate sample IDs found in metadata: {duplicates}. Keeping first occurrence.")
+            df = df[~df.index.duplicated(keep='first')]
+            if output_dir:
+                output_dir = Path(output_dir)
+                output_dir.mkdir(parents=True, exist_ok=True)
+                output_file = output_dir / "deduplicated_metadata.csv"
+                df.to_csv(output_file)
+                logger.info(f"Saved deduplicated metadata to: {output_file}")
+        
+        return df
     
     @staticmethod
-    def load_known_markers(filepath: str) -> List[str]:
-        """Load list of known markers.
+    def load_known_markers(filepath: Optional[str], output_dir: Optional[str] = None) -> List[str]:
+        """Load list of known markers if provided.
         
-        Reads a text file with one marker per line, stripping whitespace
-        and ignoring empty lines.
+        Reads a text file with one marker per line and saves a copy to output_dir if provided.
         
         Args:
-            filepath: Path to the markers file.
+            filepath: Path to the markers file, or None if no markers.
+            output_dir: Directory to save a copy of the markers file (optional).
         
         Returns:
-            List of marker strings.
-        
-        Raises:
-            FileNotFoundError: If the file does not exist.
+            List of marker strings, or empty list if filepath is None.
         """
-        # Convert to Path
-        filepath = Path(filepath)
+        if filepath is None:
+            return []
         
-        # Check existence
+        filepath = Path(filepath)
         if not filepath.exists():
             raise FileNotFoundError(f"File not found: {filepath}")
         
-        # Read lines, strip, and filter empty
         with open(filepath, 'r') as f:
-            return [line.strip() for line in f if line.strip()]
+            markers = [line.strip() for line in f if line.strip()]
+        
+        if output_dir:
+            output_dir = Path(output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            output_file = output_dir / "known_markers.txt"
+            with open(output_file, 'w') as f:
+                f.write('\n'.join(markers))
+            logger.info(f"Saved known markers to: {output_file}")
+        
+        return markers
