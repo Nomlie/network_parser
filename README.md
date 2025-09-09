@@ -61,56 +61,230 @@ NetworkParser enables researchers to:
 ---
 
 ## How It Works
-### 1. Feature Discovery
-Purpose: Identifies discriminative features using decision trees and detects epistatic interactions.  
+**1. Data Loading & Preprocessing**
 
-Process:  
-- **Decision Trees**: Employs sklearn.tree.DecisionTreeClassifier to recursively partition data, identifying features that best separate classes (e.g., 11 labels: IP2666pIB1, MANG, MKUM, etc.).  
-- **Root Features**: Major discriminative features at low tree depths.  
-- **Branch Features**: Context-specific features revealing conditional dependencies.  
-- **Epistatic Interactions**: Detects feature pairs with synergistic effects by analyzing tree paths.  
-- **Confidence Scores**: Computes feature importance using mutual information and bootstrap stability.  
+Purpose: Loads and prepares genomic and metadata files for analysis, ensuring data consistency.
 
-Outputs (saved to `results/`):  
-- `decision_tree_rules.txt`  
-- `feature_confidence.json`  
-- `epistatic_interactions.json`  
+Inputs:
 
-### 2. Feature Integration
-Purpose: Identifies discriminative features using decision trees and detects epistatic interactions.  
 
-Process: *(same as above – preserved text)*  
 
-Outputs (saved to `results/`):  
-- `decision_tree_rules.txt`  
-- `feature_confidence.json`  
-- `epistatic_interactions.json`  
 
-### 3. Statistical Validation
-Purpose: Validates discovered features and interactions using rigorous statistical methods.  
 
-Methods:  
-- **Bootstrap Resampling (1000 iterations)**  
-- **Chi-Squared/Fisher’s Exact Tests**  
-- **Multiple Testing Correction**  
-- **Permutation Tests (500 iterations)**  
-- **Feature Set Validation**  
+data/matrix.csv: Genomic matrix (rows: samples, columns: features like SNPs or variants).
 
-Outputs:  
-- `bootstrap_results.json`  
-- `chi_squared_results.json`  
-- `multiple_testing_results.json`  
-- `interaction_permutation_results.json`  
-- `feature_set_validation.json`  
 
-### 4. Feature Integration & Outputs
-Purpose: Compiles results into interpretable and ML-ready formats.  
 
-Outputs:  
-- **Feature Rankings**  
-- **Interaction Graphs**  
-- **Binary-Encoded Matrices**  
-- **Summary Reports** (`networkparser_results_YYYYMMDD_HHMMSS.json`)  
+data/labels.csv: Metadata with sample IDs and a label column (e.g., phenotypes, lineages).
+
+Steps:
+
+
+
+
+
+Loads data using pandas.
+
+
+
+Removes duplicate sample IDs (e.g., 31_YP37_SZ, keeping the first occurrence).
+
+
+
+Aligns genomic and metadata files to ensure matching samples (e.g., 23 samples with 89 features).
+
+
+
+Saves preprocessed files to results/:
+
+
+
+
+
+deduplicated_genomic_matrix.csv
+
+
+
+deduplicated_metadata.csv
+
+
+
+aligned_genomic_matrix.csv
+
+
+
+aligned_metadata.csv
+
+Details:
+
+
+Handles hierarchical or phenotypic labels.
+
+
+
+Ensures robust data alignment for downstream analysis.
+
+**2. Feature Discovery**
+
+Purpose: Identifies discriminative features using decision trees and detects epistatic interactions.
+
+Process:
+
+
+
+
+
+Decision Trees: Employs sklearn.tree.DecisionTreeClassifier to recursively partition data, identifying features that best separate classes (e.g., 11 labels: IP2666pIB1, MANG, MKUM, etc.).
+
+
+
+
+
+Root Features: Major discriminative features at low tree depths.
+
+
+
+Branch Features: Context-specific features revealing conditional dependencies.
+
+
+
+Epistatic Interactions: Detects feature pairs with synergistic effects by analyzing tree paths.
+
+
+
+Confidence Scores: Computes feature importance using mutual information and bootstrap stability.
+
+Outputs (saved to results/):
+
+
+
+
+
+decision_tree_rules.txt: Text representation of the decision tree.
+
+
+
+feature_confidence.json: Confidence scores for root and branch features.
+
+
+
+epistatic_interactions.json: Feature pairs with interaction strengths and sample counts.
+
+**3. Statistical Validation**
+
+Purpose: Validates discovered features and interactions using rigorous statistical methods.
+
+Methods:
+
+
+
+
+
+Bootstrap Resampling (1000 iterations):
+
+
+
+
+
+Tests feature stability and computes confidence intervals.
+
+
+
+Saves: bootstrap_results.json.
+
+
+
+Chi-Squared/Fisher’s Exact Tests:
+
+
+
+
+
+Assesses feature-label associations, using Fisher’s exact test for sparse data.
+
+
+
+Calculates effect sizes (Cramér’s V) and mutual information.
+
+
+
+Saves: chi_squared_results.json.
+
+
+
+Multiple Testing Correction:
+
+
+
+
+
+Applies FDR correction (Benjamini-Hochberg, default α=0.05).
+
+
+
+Saves: multiple_testing_results.json.
+
+
+
+Permutation Tests (500 iterations):
+
+
+
+
+
+Validates epistatic interactions against a null distribution.
+
+
+
+Saves: interaction_permutation_results.json.
+
+
+
+Feature Set Validation:
+
+
+
+
+
+Compares discovered features against random baselines and individual features.
+
+
+
+Saves: feature_set_validation.json.
+
+**4. Feature Integration & Outputs**
+
+Purpose: Compiles results into interpretable and ML-ready formats.
+
+Outputs:
+
+
+
+
+
+Feature Rankings: Lists features with effect sizes and confidence intervals.
+
+
+
+Interaction Graphs: Represents sample–feature networks for visualization or GNNs.
+
+
+
+Binary-Encoded Matrices: Provides data for ML models (e.g., GNNs, transformers).
+
+
+
+Summary Reports:
+
+
+
+
+
+Human-readable console summary (tree accuracy, significant features, interactions).
+
+
+
+Structured JSON: networkparser_results_YYYYMMDD_HHMMSS.json.
 
 ---
 
