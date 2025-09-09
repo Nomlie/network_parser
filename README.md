@@ -71,9 +71,9 @@ data/matrix.csv: Genomic matrix (rows: samples, columns: features like SNPs or v
 data/labels.csv: Metadata with sample IDs and a label column (e.g., phenotypes, lineages).
 
 Steps:
-- Loads data using pandas.
-- Removes duplicate sample IDs (e.g., 31_YP37_SZ, keeping the first occurrence).
-- Aligns genomic and metadata files to ensure matching samples (e.g., 23 samples with 89 features).
+1. Loads data using pandas.
+2. Removes duplicate sample IDs (e.g., 31_YP37_SZ, keeping the first occurrence).
+3.  Aligns genomic and metadata files to ensure matching samples (e.g., 23 samples with 89 features).
 Saves preprocessed files to results/:
 
 - deduplicated_genomic_matrix.csv
@@ -109,10 +109,9 @@ Purpose: Validates discovered features and interactions using rigorous statistic
 
 Methods:
 
-- Bootstrap Resampling (1000 iterations):
+Bootstrap Resampling (1000 iterations):
 - Tests feature stability and computes confidence intervals.
 - Saves: bootstrap_results.json.
-
 
 
 Chi-Squared/Fisher’s Exact Tests:
@@ -153,14 +152,98 @@ Summary Reports:
 ---
 
 ## Example Console Summary
+
 ```bash
+python -m network_parser.cli --genomic data/matrix.csv --meta data/labels.csv --label label --output-dir results/
+2025-09-09 15:13:37,354 - INFO - Attempting to import run_networkparser_analysis and NetworkParserConfig
+2025-09-09 15:13:38,148 - INFO - NumExpr defaulting to 8 threads.
+2025-09-09 15:13:40,279 - INFO - Successfully imported run_networkparser_analysis and NetworkParserConfig
+2025-09-09 15:13:40,279 - INFO - Running cli.py from: /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/network_parser/cli.py
+2025-09-09 15:13:40,280 - INFO - Starting NetworkParser pipeline
+2025-09-09 15:13:40,280 - INFO - Genomic data: data/matrix.csv
+2025-09-09 15:13:40,280 - INFO - Metadata: data/labels.csv
+2025-09-09 15:13:40,280 - INFO - Label column: label
+2025-09-09 15:13:40,280 - INFO - Output directory: results/
+2025-09-09 15:13:40,281 - INFO - Running network_parser.py from: /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/network_parser/network_parser.py
+Initialized StatisticalValidator with provided configuration.
+2025-09-09 15:13:40,281 - INFO - Initialized NetworkParser with provided configuration.
+2025-09-09 15:13:40,281 - INFO - Loading genomic data...
+2025-09-09 15:13:40,281 - INFO - Loading genomic matrix from: data/matrix.csv
+2025-09-09 15:13:40,346 - INFO - Saved deduplicated genomic matrix to: results/deduplicated_genomic_matrix.csv
+2025-09-09 15:13:40,346 - INFO - Loading metadata...
+2025-09-09 15:13:40,346 - INFO - Loading metadata from: data/labels.csv
+2025-09-09 15:13:40,350 - WARNING - Duplicate sample IDs found in metadata: ['31_YP37_SZ']. Keeping first occurrence.
+2025-09-09 15:13:40,352 - INFO - Saved deduplicated metadata to: results/deduplicated_metadata.csv
+2025-09-09 15:13:40,352 - INFO - Aligning data...
+2025-09-09 15:13:40,352 - INFO - Aligning genomic data and metadata...
+2025-09-09 15:13:40,356 - INFO - Saved aligned genomic matrix to: results/aligned_genomic_matrix.csv
+2025-09-09 15:13:40,359 - INFO - Saved aligned metadata to: results/aligned_metadata.csv
+2025-09-09 15:13:40,359 - INFO - Aligned data: 23 samples retained.
+2025-09-09 15:13:40,359 - INFO - Starting feature discovery on 23 samples with 89 features...
+🔍 Starting feature discovery on 23 samples with 89 features...
+📊 Found 11 distinct labels: ['IP2666pIB1', 'MANG', 'MKUM', 'NP', 'PAK', 'PB', 'PrU', 'SZ', 'TLH', 'UST', 'VU']
+Initialized StatisticalValidator with provided configuration.
+🔄 Running bootstrap validation with 1000 samples...
+   Bootstrap sample 1/1000
+   Bootstrap sample 101/1000
+   Bootstrap sample 201/1000
+   Bootstrap sample 301/1000
+   Bootstrap sample 401/1000
+   Bootstrap sample 501/1000
+   Bootstrap sample 601/1000
+   Bootstrap sample 701/1000
+   Bootstrap sample 801/1000
+   Bootstrap sample 901/1000
+Saved bootstrap results to: results/bootstrap_results.json
+🧮 Running chi-squared tests for 89 features...
+Saved chi-squared results to: results/chi_squared_results.json
+🔧 Applying multiple testing correction using fdr_bh...
+Saved multiple testing results to: results/multiple_testing_results.json
+Saved decision tree rules to: results/decision_tree_rules.txt
+Saved feature confidence scores to: results/feature_confidence.json
+Saved epistatic interactions to: results/epistatic_interactions.json
+
+============================================================
 🎯 FEATURE DISCOVERY SUMMARY
-📈 Tree Accuracy: 0.XXX
-🏷️ Label Classes: decision_tree_rules
-🌳 ROOT FEATURES (Global Discriminators): X
-🔗 EPISTATIC INTERACTIONS: X
+============================================================
+📈 Tree Accuracy: 0.783
+🏷️  Label Classes: |--- 0.10 <= 0.50
+
+🌳 ROOT FEATURES (Global Discriminators): 7
+  1. 0.30 (confidence: 0.337)
+  2. 0.10 (confidence: 0.363)
+  3. 0.15 (confidence: 0.262)
+  4. 0.32 (confidence: 0.390)
+  5. 0.17 (confidence: 0.469)
+
+🔗 EPISTATIC INTERACTIONS: 2
+  0.30 → 0.6 (strength: 0.811)
+  0.10 → 0.30 (strength: 0.414)
+
 ✅ STATISTICAL VALIDATION:
-Significant features after correction: X
+  Significant features after correction: 0
+============================================================
+
+🔄 Running bootstrap validation with 1000 samples...
+   Bootstrap sample 1/1000
+   Bootstrap sample 101/1000
+   Bootstrap sample 201/1000
+   Bootstrap sample 301/1000
+   Bootstrap sample 401/1000
+   Bootstrap sample 501/1000
+   Bootstrap sample 601/1000
+   Bootstrap sample 701/1000
+   Bootstrap sample 801/1000
+   Bootstrap sample 901/1000
+Saved bootstrap results to: results/bootstrap_results.json
+🧮 Running chi-squared tests for 89 features...
+Saved chi-squared results to: results/chi_squared_results.json
+🔧 Applying multiple testing correction using fdr_bh...
+Saved multiple testing results to: results/multiple_testing_results.json
+2025-09-09 15:13:45,582 - INFO - Saved decision tree features to: results/decision_tree_features.json
+2025-09-09 15:13:45,666 - INFO - Saved final results to: results/networkparser_results_20250909_151345.json
+2025-09-09 15:13:45,667 - INFO - NetworkParser pipeline completed successfully
+
 ```
 ---
 
