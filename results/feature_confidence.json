@@ -2,26 +2,20 @@
   "0.30": {
     "type": "root",
     "mutual_info": 0.5739644913933235,
-    "stability": 0.0,
-    "confidence": 0.28698224569666175
-  },
-  "0.15": {
-    "type": "root",
-    "mutual_info": 0.423781316096863,
-    "stability": 0.0,
-    "confidence": 0.2118906580484315
+    "stability": 0.1,
+    "confidence": 0.33698224569666174
   },
   "0.10": {
     "type": "root",
     "mutual_info": 0.5255431693112531,
-    "stability": 0.5,
-    "confidence": 0.5127715846556266
+    "stability": 0.2,
+    "confidence": 0.36277158465562653
   },
-  "0.6": {
-    "type": "branch",
-    "mutual_info": 0.5255431693112532,
-    "conditional_power": 0.31498738074090993,
-    "confidence": 0.4202652750260816
+  "0.15": {
+    "type": "root",
+    "mutual_info": 0.423781316096863,
+    "stability": 0.1,
+    "confidence": 0.2618906580484315
   },
   "0.32": {
     "type": "branch",
@@ -29,16 +23,22 @@
     "conditional_power": 0.38580627748815693,
     "confidence": 0.38976272489490216
   },
+  "0.17": {
+    "type": "branch",
+    "mutual_info": 0.5285527984000337,
+    "conditional_power": 0.4098928679411408,
+    "confidence": 0.4692228331705872
+  },
   "0.26": {
     "type": "branch",
     "mutual_info": 0.4336823166863948,
     "conditional_power": 0.37709056403743624,
     "confidence": 0.4053864403619155
   },
-  "0.17": {
+  "0.6": {
     "type": "branch",
-    "mutual_info": 0.5285527984000337,
-    "conditional_power": 0.4098928679411407,
-    "confidence": 0.4692228331705872
+    "mutual_info": 0.5255431693112532,
+    "conditional_power": 0.31498738074090993,
+    "confidence": 0.4202652750260816
   }
 }
