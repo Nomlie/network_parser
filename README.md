@@ -67,108 +67,41 @@ Purpose: Loads and prepares genomic and metadata files for analysis, ensuring da
 
 Inputs:
 
-
-
-
-
 data/matrix.csv: Genomic matrix (rows: samples, columns: features like SNPs or variants).
-
-
-
 data/labels.csv: Metadata with sample IDs and a label column (e.g., phenotypes, lineages).
 
 Steps:
-
-
-
-
-
-Loads data using pandas.
-
-
-
-Removes duplicate sample IDs (e.g., 31_YP37_SZ, keeping the first occurrence).
-
-
-
-Aligns genomic and metadata files to ensure matching samples (e.g., 23 samples with 89 features).
-
-
-
+- Loads data using pandas.
+- Removes duplicate sample IDs (e.g., 31_YP37_SZ, keeping the first occurrence).
+- Aligns genomic and metadata files to ensure matching samples (e.g., 23 samples with 89 features).
 Saves preprocessed files to results/:
 
-
-
-
-
-deduplicated_genomic_matrix.csv
-
-
-
-deduplicated_metadata.csv
-
-
-
-aligned_genomic_matrix.csv
-
-
-
-aligned_metadata.csv
+- deduplicated_genomic_matrix.csv
+- deduplicated_metadata.csv
+- aligned_genomic_matrix.csv
+- aligned_metadata.csv
 
 Details:
 
-
-Handles hierarchical or phenotypic labels.
-
-
-
-Ensures robust data alignment for downstream analysis.
+- Handles hierarchical or phenotypic labels.
+- Ensures robust data alignment for downstream analysis.
 
 **2. Feature Discovery**
 
 Purpose: Identifies discriminative features using decision trees and detects epistatic interactions.
 
 Process:
-
-
-
-
-
-Decision Trees: Employs sklearn.tree.DecisionTreeClassifier to recursively partition data, identifying features that best separate classes (e.g., 11 labels: IP2666pIB1, MANG, MKUM, etc.).
-
-
-
-
-
-Root Features: Major discriminative features at low tree depths.
-
-
-
-Branch Features: Context-specific features revealing conditional dependencies.
-
-
-
-Epistatic Interactions: Detects feature pairs with synergistic effects by analyzing tree paths.
-
-
-
-Confidence Scores: Computes feature importance using mutual information and bootstrap stability.
+- Decision Trees: Employs sklearn.tree.DecisionTreeClassifier to recursively partition data, identifying features that best separate classes (e.g., 11 labels: IP2666pIB1, MANG, MKUM, etc.).
+- Root Features: Major discriminative features at low tree depths.
+- Branch Features: Context-specific features revealing conditional dependencies.
+- Epistatic Interactions: Detects feature pairs with synergistic effects by analyzing tree paths.
+- Confidence Scores: Computes feature importance using mutual information and bootstrap stability.
 
 Outputs (saved to results/):
 
-
-
-
-
-decision_tree_rules.txt: Text representation of the decision tree.
-
-
-
-feature_confidence.json: Confidence scores for root and branch features.
-
-
-
-epistatic_interactions.json: Feature pairs with interaction strengths and sample counts.
+- decision_tree_rules.txt: Text representation of the decision tree.
+- feature_confidence.json: Confidence scores for root and branch features.
+- epistatic_interactions.json: Feature pairs with interaction strengths and sample counts.
 
 **3. Statistical Validation**
 
@@ -176,81 +109,31 @@ Purpose: Validates discovered features and interactions using rigorous statistic
 
 Methods:
 
-
-
-
-
-Bootstrap Resampling (1000 iterations):
-
-
-
-
-
-Tests feature stability and computes confidence intervals.
-
-
-
-Saves: bootstrap_results.json.
+- Bootstrap Resampling (1000 iterations):
+- Tests feature stability and computes confidence intervals.
+- Saves: bootstrap_results.json.
 
 
 
 Chi-Squared/Fisher’s Exact Tests:
-
-
-
-
-
-Assesses feature-label associations, using Fisher’s exact test for sparse data.
-
-
-
-Calculates effect sizes (Cramér’s V) and mutual information.
-
-
-
-Saves: chi_squared_results.json.
-
+- Assesses feature-label associations, using Fisher’s exact test for sparse data.
+- Calculates effect sizes (Cramér’s V) and mutual information.
+- Saves: chi_squared_results.json.
 
 
 Multiple Testing Correction:
-
-
-
-
-
-Applies FDR correction (Benjamini-Hochberg, default α=0.05).
-
-
-
-Saves: multiple_testing_results.json.
-
-
+- Applies FDR correction (Benjamini-Hochberg, default α=0.05).
+- Saves: multiple_testing_results.json.
 
 Permutation Tests (500 iterations):
 
-
-
-
-
-Validates epistatic interactions against a null distribution.
-
-
-
-Saves: interaction_permutation_results.json.
-
-
+- Validates epistatic interactions against a null distribution.
+- Saves: interaction_permutation_results.json.
 
 Feature Set Validation:
 
-
-
-
-
-Compares discovered features against random baselines and individual features.
-
-
-
-Saves: feature_set_validation.json.
+- Compares discovered features against random baselines and individual features.
+- Saves: feature_set_validation.json.
 
 **4. Feature Integration & Outputs**
 
@@ -258,37 +141,21 @@ Purpose: Compiles results into interpretable and ML-ready formats.
 
 Outputs:
 
-
-
-
-
-Feature Rankings: Lists features with effect sizes and confidence intervals.
-
-
-
-Interaction Graphs: Represents sample–feature networks for visualization or GNNs.
-
-
-
-Binary-Encoded Matrices: Provides data for ML models (e.g., GNNs, transformers).
+- Feature Rankings: Lists features with effect sizes and confidence intervals.
+- Interaction Graphs: Represents sample–feature networks for visualization or GNNs.
+- Binary-Encoded Matrices: Provides data for ML models (e.g., GNNs, transformers).
 
 
 
 Summary Reports:
 
-
-
-
-
-Human-readable console summary (tree accuracy, significant features, interactions).
-
-
-
-Structured JSON: networkparser_results_YYYYMMDD_HHMMSS.json.
+- Human-readable console summary (tree accuracy, significant features, interactions).
+- Structured JSON: networkparser_results_YYYYMMDD_HHMMSS.json.
 
 ---
 
 ## Example Console Summary
+```bash
 🎯 FEATURE DISCOVERY SUMMARY
 📈 Tree Accuracy: 0.XXX
 🏷️ Label Classes: decision_tree_rules
@@ -296,12 +163,11 @@ Structured JSON: networkparser_results_YYYYMMDD_HHMMSS.json.
 🔗 EPISTATIC INTERACTIONS: X
 ✅ STATISTICAL VALIDATION:
 Significant features after correction: X
-yaml
-Copy code
-
+```
 ---
 
 ## Directory Structure
+```bash
 network_parser/
 ├── network_parser/
 │   ├── __init__.py          # Package version (0.1.0)
@@ -329,7 +195,7 @@ network_parser/
 │   ├── feature_set_validation.json
 │   ├── networkparser_results_YYYYMMDD_HHMMSS.json
 
-
+```
 ---
 
 ## Installation
@@ -339,8 +205,9 @@ git clone https://github.com/Nomlie/network_parser.git
 cd network_parser
 conda env create -f environment.yml
 conda activate network_parser
-Option 2: Pip Installation
 ```
+
+### Option 2: Pip Installation
 
 ```bash
 git clone https://github.com/Nomlie/network_parser.git
@@ -369,16 +236,19 @@ python -m network_parser.cli  \
   --label phenotype \
   --output results/
 ```
-Outputs will be saved in the results/ directory.
 
 Command-Line Options:
-
+```bash
 --genomic: Path to genomic matrix (e.g., data/matrix.csv).
 --meta: Path to metadata (e.g., data/labels.csv).
 --label: Label column name (e.g., label).
 --output-dir: Output directory (e.g., results/).
+```
+
 Config File: Supports YAML/JSON for reproducibility (defined in config.py).
 Scalability: Multi-threaded execution for large datasets.
+
+Outputs will be saved in the results/ directory.
 
 ---
 **Analysis Modes**
