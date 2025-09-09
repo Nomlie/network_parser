@@ -1,0 +1,16 @@
+[
+  {
+    "parent_feature": "0.30",
+    "child_feature": "0.6",
+    "depth": 2,
+    "interaction_strength": 0.810559117089051,
+    "samples_at_split": 9
+  },
+  {
+    "parent_feature": "0.10",
+    "child_feature": "0.30",
+    "depth": 1,
+    "interaction_strength": 0.41371591402168645,
+    "samples_at_split": 15
+  }
+]

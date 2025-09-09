@@ -1,0 +1,249 @@
+NetworkParser: Genomic Feature Discovery and Validation Pipeline
+Overview
+NetworkParser is a Python-based pipeline for genomic feature discovery and statistical validation, designed to identify and validate significant genetic features (e.g., SNPs, variants, or motifs) that distinguish between biological classes (e.g., phenotypes, lineages, or disease states). It leverages decision trees for feature discovery, detects epistatic interactions, and applies rigorous statistical tests to ensure robust, reproducible results. The pipeline is ideal for bioinformatics research, supporting applications like biomarker discovery, genetic association studies, and machine learning model development (e.g., Graph Neural Networks).
+Purpose
+NetworkParser enables researchers to:
+
+Discover Diagnostic Markers: Identify genetic features specific to phenotypes or lineages.
+Model Epistatic Interactions: Capture non-linear interactions between features.
+Ensure Statistical Rigor: Validate findings using bootstrap resampling, chi-squared tests, and FDR correction.
+Support Hierarchical Analysis: Analyze features across multiple biological levels (e.g., phylogenetic or phenotypic).
+Generate ML-Ready Outputs: Produce feature matrices and interaction graphs for modern ML frameworks like GNNs.
+Handle Diverse Data: Process binary-encoded datasets (SNPs, pan-genomes, motifs, or metadata).
+
+Key Features
+
+Epistatic Interaction Modeling: Detects feature pairs with synergistic effects.
+Hierarchical Feature Discovery: Identifies features at multiple biological levels.
+Prior Knowledge Integration: Incorporates trait-linked features for guided analysis.
+Flexible Input Formats: Supports CSV, VCF, FASTA, and hierarchical metadata.
+Robust Validation: Uses bootstrap resampling (1000 iterations), chi-squared/Fisher’s exact tests, and FDR correction.
+Explainable AI: Generates interpretable decision trees with annotated branches.
+Scalable Execution: Supports multi-threaded processing for large datasets.
+ML Compatibility: Outputs feature matrices and graphs for GNNs, transformers, and other models.
+Comprehensive Outputs: Produces human-readable summaries, JSON/XML files, and ML-ready matrices.
+
+How It Works
+1. Data Loading & Preprocessing
+Purpose: Loads and prepares genomic and metadata files for analysis, ensuring data consistency.
+Inputs:
+
+data/matrix.csv: Genomic matrix (rows: samples, columns: features like SNPs or variants).
+data/labels.csv: Metadata with sample IDs and a label column (e.g., phenotypes, lineages).
+
+Steps:
+
+Loads data using pandas.
+Removes duplicate sample IDs (e.g., 31_YP37_SZ, keeping the first occurrence).
+Aligns genomic and metadata files to ensure matching samples (e.g., 23 samples with 89 features).
+Saves preprocessed files to results/:
+deduplicated_genomic_matrix.csv
+deduplicated_metadata.csv
+aligned_genomic_matrix.csv
+aligned_metadata.csv
+
+
+Details:
+
+Handles hierarchical or phenotypic labels.
+Ensures robust data alignment for downstream analysis.
+
+2. Feature Discovery
+Purpose: Identifies discriminative features using decision trees and detects epistatic interactions.
+Process:
+
+Decision Trees: Employs sklearn.tree.DecisionTreeClassifier to recursively partition data, identifying features that best separate classes (e.g., 11 labels: IP2666pIB1, MANG, MKUM, etc.).
+Root Features: Major discriminative features at low tree depths.
+Branch Features: Context-specific features revealing conditional dependencies.
+
+
+Epistatic Interactions: Detects feature pairs with synergistic effects by analyzing tree paths.
+Confidence Scores: Computes feature importance using mutual information and bootstrap stability.
+
+Outputs (saved to results/):
+
+decision_tree_rules.txt: Text representation of the decision tree.
+feature_confidence.json: Confidence scores for root and branch features.
+epistatic_interactions.json: Feature pairs with interaction strengths and sample counts.
+
+3. Statistical Validation
+Purpose: Validates discovered features and interactions using rigorous statistical methods.
+Methods:
+
+Bootstrap Resampling (1000 iterations):
+Tests feature stability and computes confidence intervals.
+Saves: bootstrap_results.json.
+
+
+Chi-Squared/Fisher’s Exact Tests:
+Assesses feature-label associations, using Fisher’s exact test for sparse data.
+Calculates effect sizes (Cramér’s V) and mutual information.
+Saves: chi_squared_results.json.
+
+
+Multiple Testing Correction:
+Applies FDR correction (Benjamini-Hochberg, default α=0.05).
+Saves: multiple_testing_results.json.
+
+
+Permutation Tests (500 iterations):
+Validates epistatic interactions against a null distribution.
+Saves: interaction_permutation_results.json.
+
+
+Feature Set Validation:
+Compares discovered features against random baselines and individual features.
+Saves: feature_set_validation.json.
+
+
+
+4. Feature Integration & Outputs
+Purpose: Compiles results into interpretable and ML-ready formats.
+Outputs:
+
+Feature Rankings: Lists features with effect sizes and confidence intervals.
+Interaction Graphs: Represents sample–feature networks for visualization or GNNs.
+Binary-Encoded Matrices: Provides data for ML models (e.g., GNNs, transformers).
+Summary Reports:
+Human-readable console summary (tree accuracy, significant features, interactions).
+Structured JSON: networkparser_results_YYYYMMDD_HHMMSS.json.
+
+
+
+Example Console Summary:
+🎯 FEATURE DISCOVERY SUMMARY
+============================================================
+📈 Tree Accuracy: 0.XXX
+🏷️  Label Classes: decision_tree_rules
+🌳 ROOT FEATURES (Global Discriminators): X
+🔗 EPISTATIC INTERACTIONS: X
+✅ STATISTICAL VALIDATION:
+  Significant features after correction: X
+============================================================
+
+Directory Structure
+network_parser/
+├── network_parser/
+│   ├── __init__.py          # Package version (0.1.0)
+│   ├── cli.py               # Command-line interface
+│   ├── config.py            # Configuration settings
+│   ├── data_loader.py       # Data loading and preprocessing
+│   ├── decision_tree_builder.py  # Feature discovery and interactions
+│   ├── network_parser.py    # Pipeline orchestration
+│   ├── statistical_validation.py  # Statistical tests
+├── data/
+│   ├── matrix.csv           # Genomic data (samples × features)
+│   ├── labels.csv           # Metadata (sample IDs + labels)
+├── results/
+│   ├── deduplicated_genomic_matrix.csv
+│   ├── deduplicated_metadata.csv
+│   ├── aligned_genomic_matrix.csv
+│   ├── aligned_metadata.csv
+│   ├── decision_tree_rules.txt
+│   ├── feature_confidence.json
+│   ├── epistatic_interactions.json
+│   ├── bootstrap_results.json
+│   ├── chi_squared_results.json
+│   ├── multiple_testing_results.json
+│   ├── interaction_permutation_results.json
+│   ├── feature_set_validation.json
+│   ├── networkparser_results_YYYYMMDD_HHMMSS.json
+
+Analysis Modes
+
+Hierarchical Mode: Analyzes phylogenetic or lineage-based contexts.
+Phenotype Mode: Focuses on metadata-driven comparisons (e.g., disease vs. healthy).
+Interactive Mode: Supports custom group or cluster definitions.
+
+Configuration
+
+Command-Line Options:
+--genomic: Path to genomic matrix (e.g., data/matrix.csv).
+--meta: Path to metadata (e.g., data/labels.csv).
+--label: Label column name (e.g., label).
+--output-dir: Output directory (e.g., results/).
+
+
+Config File: Supports YAML/JSON for reproducibility (defined in config.py).
+Scalability: Multi-threaded execution for large datasets.
+
+Installation
+
+Prerequisites:
+Python 3.8+ (Anaconda recommended: /Users/nmfuphicsir.co.za/anaconda3/bin/python).
+Install dependencies:pip install pandas numpy scikit-learn scipy statsmodels
+
+
+
+
+Setup:
+Clone or create the project directory:/Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/
+
+
+Set PYTHONPATH:export PYTHONPATH=$PYTHONPATH:/Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser
+
+
+
+
+
+Usage
+
+Prepare Input Files:
+data/matrix.csv: Genomic data (rows: samples, columns: features).
+data/labels.csv: Metadata with sample_id and label columns.sample_id,label
+sample1,IP2666pIB1
+sample2,MANG
+...
+
+
+
+
+Run the Pipeline:cd /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser
+python -m network_parser.cli --genomic data/matrix.csv --meta data/labels.csv --label label --output-dir results/
+
+
+Clear Cache (if needed):find /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser -name '__pycache__' -type d -exec rm -r {} +
+
+
+Verify Outputs:
+Check results/ for generated files.
+Review console output for the feature discovery summary.
+
+
+
+Notes
+
+Labels: The pipeline detects 11 labels (e.g., IP2666pIB1, MANG). Confirm if this multi-class setup is expected. If expecting binary labels (e.g., class1, class2), verify data/labels.csv:head -n 5 /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/data/labels.csv
+
+
+Duplicates: Duplicate sample IDs (e.g., 31_YP37_SZ) are kept as the first occurrence. Confirm if this is appropriate or if alternative handling (e.g., error or merge) is needed.
+Troubleshooting:
+Verify Python environment:which python
+
+Expected: /Users/nmfuphicsir.co.za/anaconda3/bin/python
+Check module imports:python -c "import network_parser.network_parser; print(network_parser.network_parser.__file__)"
+
+
+If errors occur, share:
+Full log.
+tree /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser.
+Contents of data/labels.csv and config.py (if modified).
+
+
+
+
+
+Future Enhancements
+
+Add visualization for decision trees and interaction graphs.
+Support additional input formats (e.g., VCF, FASTA parsing).
+Implement custom duplicate handling in data_loader.py.
+Add configuration for tuning statistical thresholds or tree parameters.
+Enhance ML outputs for specific frameworks (e.g., PyTorch, TensorFlow).
+
+Contact
+For issues or questions, provide:
+
+Full error logs.
+Relevant file contents (e.g., data/labels.csv, config.py).
+Details on expected labels and duplicate handling preferences.

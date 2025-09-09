@@ -1,5 +1,26 @@
 # NetworkParser  
-A next-generation bioinformatics framework for identifying statistically validated features that drive **cluster** segregation using interpretable machine learning, epistatic interaction modeling, and hierarchical analysis.
+A next-generation bioinformatics framework for identifying statistically validated genomic features that drive **cluster** segregation using interpretable machine learning, epistatic interaction modeling, and hierarchical analysis.
+
+**Data Preprocessing**: Loads, deduplicates, and aligns genomic and metadata files.
+**Feature Discovery**: Uses decision trees to identify discriminative features, classifying them as root (global) or branch (context-specific) features.
+**Epistatic Interaction Detection**: Identifies interactions between genetic features that jointly influence classification.
+**Statistical Validation**: Applies bootstrap validation, chi-squared tests, multiple testing correction, permutation tests, and feature set validation to ensure robust and significant results.
+**Comprehensive Outputs**: Generates detailed reports, including decision tree rules, feature confidence scores, and statistical validation results, saved as CSV and JSON files.
+
+Project Structure
+network_parser/
+├── network_parser/
+│   ├── __init__.py
+│   ├── cli.py
+│   ├── config.py
+│   ├── data_loader.py
+│   ├── decision_tree_builder.py
+│   ├── network_parser.py
+│   ├── statistical_validation.py
+├── data/
+│   ├── matrix.csv
+│   ├── labels.csv
+├── results/
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)  
 [![Python](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)  
@@ -32,176 +53,194 @@ A next-generation bioinformatics framework for identifying statistically validat
 ## Overview
 NetworkParser is a next-generation genomic intelligence framework that decodes evolutionary processes underlying traits such as antimicrobial resistance emergence, virulence adaptation, and lineage diversification. By identifying statistically validated genetic drivers of cluster segregation—ranging from single polymorphisms to higher-order epistatic interactions—it transforms complex genomic variation into interpretable, actionable insights.
 
-Designed to operate on binary genomic matrices (e.g., SNP presence/absence, gene content, or other markers), NetworkParser integrates statistical validation, enabling high-confidence discovery of both novel and known markers linked to phenotypic outcomes. It bridges statistical genetics with deep learning by automatically generating optimized, explainability-ready inputs for architectures such as graph neural networks (GNNs) and transformers. The core innovation of NetworkParser lies in its use of label-aware recursive partitioning, combined with advanced machine learning techniques, to explicitly model hierarchical relationships among samples—such as clade structures or lineage trees—and capture non-linear, epistatic interactions among genetic variants. This approach addresses critical shortcomings of traditional genome-wide association studies (GWAS) and phylogenetic analyses, which often assume linear effects and fail to incorporate the nested structure of evolutionary or epidemiological relationships. Its explainability-by-design paradigm demystifies the “black box” of AI: each model prediction can be traced back to causal genetic features, validated through bootstrapping, cluster-aware statistical testing, and epistasis-aware modeling. This transparency enhances trust in AI predictions and facilitates downstream analyses in public health surveillance, outbreak tracing, and precision medicine.
+## Purpose
+NetworkParser enables researchers to:
+
+**Discover Diagnostic Markers**: Identify genetic features specific to phenotypes or lineages.
+**Model Epistatic Interactions**: Capture non-linear interactions between features.
+**Ensure Statistical Rigor**: Validate findings using bootstrap resampling, chi-squared tests, and FDR correction.
+**Support Hierarchical Analysis**: Analyze features across multiple biological levels (e.g., phylogenetic or phenotypic).
+**Generate ML-Ready Outputs**: Produce feature matrices and interaction graphs for modern ML frameworks like GNNs.
+**Handle Diverse Data**: Process binary-encoded datasets (SNPs, pan-genomes, motifs, or metadata), 
+handles hierarchical or phenotypic labels.
+
 
 ## How It Works
-1. **Pattern Discovery**
-Uses label-aware decision trees to recursively identify genetic features that best separate biological groups:
+1. **Feature Discovery**
+Purpose: Identifies discriminative features using decision trees and detects epistatic interactions.
+Process:
 
-Root splits capture major discriminative variants
-Deeper branches reveal conditional and epistatic effects
-Each node asks: "What genetic change made this lineage different?"
+Decision Trees: Employs sklearn.tree.DecisionTreeClassifier to recursively partition data, identifying features that best separate classes (e.g., 11 labels: IP2666pIB1, MANG, MKUM, etc.).
+Root Features: Major discriminative features at low tree depths.
+Branch Features: Context-specific features revealing conditional dependencies.
 
-2. **Statistical Validation**
-Every discovered pattern undergoes rigorous testing:
 
-Null model comparison against evolutionary background
-Bootstrap resampling for stability assessment
-Multiple testing correction for false discovery control
-Cross-validation for generalizability
+Epistatic Interactions: Detects feature pairs with synergistic effects by analyzing tree paths.
+Confidence Scores: Computes feature importance using mutual information and bootstrap stability.
 
-3. **Feature Integration**
-Outputs clean, interpretable results:
+Outputs (saved to results/):
 
-Ranked feature lists with effect sizes and confidence intervals
-Sample-feature networks for visualization
-Feature interaction graphs for downstream ML analysis
+decision_tree_rules.txt: Text representation of the decision tree.
+feature_confidence.json: Confidence scores for root and branch features.
+epistatic_interactions.json: Feature pairs with interaction strengths and sample counts.
 
-### Purpose  
-- **Identify Diagnostic Markers:** Pinpoint features and epistatic interactions that distinguish evolutionary lineages or phenotypic groups.  
-- **Hierarchical Analysis:** Detect discriminative features at multiple levels of biological organization.  
-- **Epistatic Modeling:** Explicitly capture non-linear interactions between features that jointly contribute to group separation.  
-- **Statistical Rigor:** Ensure robust results through bootstrap validation and multiple hypothesis testing correction.  
-- **GNN-ready Outputs:** Produces feature matrices and interaction graphs optimized for training Graph Neural Networks, with node/edge attributes derived from biologically validated markers.  
-- **Generality:** Applicable to any binary-encoded dataset paired with hierarchical labels or metadata, extending beyond SNPs to pan-genome presence/absence data, protein motifs, or phenotypic traits.
+2. **Feature Integration**
+Purpose: Identifies discriminative features using decision trees and detects epistatic interactions.
+Process:
 
-### Key Components
+Decision Trees: Employs sklearn.tree.DecisionTreeClassifier to recursively partition data, identifying features that best separate classes (e.g., 11 labels: IP2666pIB1, MANG, MKUM, etc.).
+Root Features: Major discriminative features at low tree depths.
+Branch Features: Context-specific features revealing conditional dependencies.
 
-**Input Processing:**  
-- **Supported Formats:** Binary matrices (CSV), VCF files, FASTA sequences, and hierarchical metadata.  
-- **Data Types:** SNPs, gene presence/absence, protein motifs, metabolic pathways, or any binary-encoded genomic features.  
-- **Prior Knowledge:** Optional integration of known trait-associated features for enhanced biological relevance.  
-- Sample names must be consistent across input files.
 
-**Analysis Modes:**  
-- **Hierarchical Mode:** Analyzes features in the context of sample hierarchies and phylogenetic relationships.  
-- **Phenotype Mode:** Compares predefined groups using phenotypic or metadata classifications.  
-- **Interactive Mode:** Supports custom target groups and cluster-specific analysis.
+Epistatic Interactions: Detects feature pairs with synergistic effects by analyzing tree paths.
+Confidence Scores: Computes feature importance using mutual information and bootstrap stability.
 
-**Methodology:**  
-- **Label-aware Recursive Partitioning:** Constructs decision trees reflecting inferred sample relationships.  
-- **Epistatic Interaction Detection:** Models combinations of features that jointly contribute to group separation.  
-- **Bootstrap Validation:** Performs statistical significance testing (default: 1000 iterations).  
-- **Multiple Testing Correction:** FDR adjustment for robust statistical inference (default threshold: 0.05).  
-- **Prior Knowledge Integration:** Incorporates known trait-linked features for hypothesis-driven analysis.
+Outputs (saved to results/):
 
-**Output:**  
-- **Text Report:** Summarizes hierarchical relationships, discriminative features, and statistical confidence measures.  
-- **JSON/XML Output:** Structured results for downstream applications and integration.  
-- **Processed Matrices:** Binary-encoded data ready for Graph Neural Networks or other ML models.  
-- **Example Results:** For a dataset with 500 samples and 10K features, identifies hierarchical markers with epistatic interactions.
+decision_tree_rules.txt: Text representation of the decision tree.
+feature_confidence.json: Confidence scores for root and branch features.
+epistatic_interactions.json: Feature pairs with interaction strengths and sample counts.
+3. **Statistical Validation**
+Purpose: Validates discovered features and interactions using rigorous statistical methods.
+Methods:
 
-**Configuration:**  
-- **Command Line Options:** Customizable parameters for bootstrap iterations, confidence thresholds, and interaction complexity.  
-- **Config File:** Supports YAML/JSON configuration for reproducible batch analyses.  
-- **Parallel Processing:** Multi-threaded execution for large-scale genomic datasets.
+Bootstrap Resampling (1000 iterations):
+Tests feature stability and computes confidence intervals.
+Saves: bootstrap_results.json.
 
-## Key Features
 
-- **Epistatic Interaction Modeling:** Captures non-linear feature combinations beyond individual effects.  
-- **Hierarchical Feature Discovery:** Identifies markers at multiple biological organization levels.  
-- **Prior Knowledge Integration:** Optionally incorporates known trait-associated features.  
-- **Multiple Input Formats:** Supports CSV, VCF, FASTA, and metadata files.  
-- **Bootstrap Validation:** Statistical significance testing with confidence intervals.  
-- **Decision Tree Construction:** Interpretable sample hierarchies with annotated branches.  
-- **Flexible Output:** Text reports, JSON/XML, and processed matrices for downstream analysis.  
-- **Scalability:** Handles large datasets with parallel processing and memory-efficient modes.  
-- **Explainable AI Integration:** Generates inputs for GNNs and transformers with traceable features.
+Chi-Squared/Fisher’s Exact Tests:
+Assesses feature-label associations, using Fisher’s exact test for sparse data.
+Calculates effect sizes (Cramér’s V) and mutual information.
+Saves: chi_squared_results.json.
 
-## Dependencies
 
-NetworkParser requires Python 3.8+ and the following key libraries:
+Multiple Testing Correction:
+Applies FDR correction (Benjamini-Hochberg, default α=0.05).
+Saves: multiple_testing_results.json.
 
-- `pandas`: For data manipulation and input processing.  
-- `numpy`: For numerical computations.  
-- `scikit-learn`: For machine learning algorithms like random forests and partitioning.  
-- `scipy`: For statistical functions and multiple testing corrections.  
-- `joblib`: For parallel processing.  
-- `biopython`: For handling FASTA and VCF formats (optional, but recommended for genomic data).  
 
-Full dependencies are listed in `requirements.txt` or `environment.yml`.
-## Quick Start
+Permutation Tests (500 iterations):
+Validates epistatic interactions against a null distribution.
+Saves: interaction_permutation_results.json.
 
-Get started in minutes:
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/username/networkparser.git
-   cd networkparser
-   ```
+Feature Set Validation:
+Compares discovered features against random baselines and individual features.
+Saves: feature_set_validation.json.
 
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
+4. **Feature Integration & Outputs**
+Purpose: Compiles results into interpretable and ML-ready formats.
+Outputs:
 
-3. Run a simple analysis on example data:
-   ```bash
-   python network_parser/network_parser.py \
-     --input_matrix data/genomic_matrix.csv \
-     --metadata data/metadata.csv \
-     --hierarchy_column "lineage" \
-     --output_dir results
-   ```
+Feature Rankings: Lists features with effect sizes and confidence intervals.
+Interaction Graphs: Represents sample–feature networks for visualization or GNNs.
+Binary-Encoded Matrices: Provides data for ML models (e.g., GNNs, transformers).
+Summary Reports:
+Human-readable console summary (tree accuracy, significant features, interactions).
+Structured JSON: networkparser_results_YYYYMMDD_HHMMSS.json.
 
-This will perform a hierarchical analysis and generate outputs in the `results/` directory.
+
+## Example Console Summary:
+🎯 FEATURE DISCOVERY SUMMARY
+============================================================
+📈 Tree Accuracy: 0.XXX
+🏷️  Label Classes: decision_tree_rules
+🌳 ROOT FEATURES (Global Discriminators): X
+🔗 EPISTATIC INTERACTIONS: X
+✅ STATISTICAL VALIDATION:
+  Significant features after correction: X
+============================================================
+
+## Directory Structure
+network_parser/
+├── network_parser/
+│   ├── __init__.py          # Package version (0.1.0)
+│   ├── cli.py               # Command-line interface
+│   ├── config.py            # Configuration settings
+│   ├── data_loader.py       # Data loading and preprocessing
+│   ├── decision_tree_builder.py  # Feature discovery and interactions
+│   ├── network_parser.py    # Pipeline orchestration
+│   ├── statistical_validation.py  # Statistical tests
+├── data/
+│   ├── matrix.csv           # Genomic data (samples × features)
+│   ├── labels.csv           # Metadata (sample IDs + labels)
+├── results/
+│   ├── deduplicated_genomic_matrix.csv
+│   ├── deduplicated_metadata.csv
+│   ├── aligned_genomic_matrix.csv
+│   ├── aligned_metadata.csv
+│   ├── decision_tree_rules.txt
+│   ├── feature_confidence.json
+│   ├── epistatic_interactions.json
+│   ├── bootstrap_results.json
+│   ├── chi_squared_results.json
+│   ├── multiple_testing_results.json
+│   ├── interaction_permutation_results.json
+│   ├── feature_set_validation.json
+│   ├── networkparser_results_YYYYMMDD_HHMMSS.json
 
 ## Installation
 
-```bash
+You can install NetworkParser using either conda (recommended) or pip.
+
+Option 1: Conda Environment (recommended)
 # Clone the repository
-git clone https://github.com/username/networkparser.git
-cd networkparser
-```
+git clone https://github.com/Nomlie/network_parser.git
+cd network_parser
 
-**Option 1: Create Conda environment**
-```bash
+# Create conda environment from environment.yml
 conda env create -f environment.yml
-conda activate networkparser
-```
+conda activate network_parser
 
-**Option 2: Install dependencies with pip**
-```bash
+Option 2: Pip Installation
+# Clone the repository
+git clone https://github.com/Nomlie/network_parser.git
+cd network_parser
+
+# Create a virtual environment (optional but recommended)
+python -m venv venv
+source venv/bin/activate   # (Linux/Mac)
+venv\Scripts\activate      # (Windows)
+
+# Install dependencies
 pip install -r requirements.txt
-```
 
-**Option 3: Install from PyPI**
-```bash
-pip install networkparser
-```
+Set PYTHONPATH
 
-## Basic Usage
-After installation, you can run NetworkParser in several primary modes:
+The pipeline requires the repository path to be added to your Python environment:
 
-**Hierarchical Analysis**
-```bash
-python network_parser/network_parser.py \
-  --input_matrix data/genomic_features.csv \
-  --metadata data/sample_metadata.csv \
-  --hierarchy_column "lineage" \
-  --output_dir results \
-  --json_output
-```
+export PYTHONPATH=$PYTHONPATH:$(pwd)
 
-**Phenotype-Based Analysis**
-```bash
-python network_parser/network_parser.py \
-  --input_matrix data/resistance_profiles.csv \
-  --phenotype_file data/phenotypes.txt \
-  --target_groups "resistant,sensitive" \
-  --output_dir results \
-  --include_interactions
-```
+Add this line to your shell configuration (~/.bashrc or ~/.zshrc) if you want it permanent.
 
-**Prior Knowledge Integration**
-```bash
-python network_parser/network_parser.py \
-  --input_matrix data/snp_matrix.csv \
-  --metadata data/metadata.csv \
-  --known_markers data/resistance_snps.txt \
-  --output_dir results \
-  --bootstrap_iterations 2000
-```
+# Usage
+
+Once installed and environment is set up, you can run the pipeline as a module:
+
+python -m network_parser -h
+
+This will display available options and usage instructions.
+
+Example run (with data & labels):
+
+python -m network_parser \
+  --matrix data/matrix.csv \
+  --labels data/labels.csv \
+  --label phenotype \
+  --output results/
+
+Outputs will be saved in the results/ directory (see [Directory Structure]).
+
+Usage
+
+Prepare Input Files:
+data/matrix.csv: Genomic data (rows: samples, columns: features).
+data/labels.csv: Metadata with sample_id and label columns.sample_id,label
+sample1,IP2666pIB1
+sample2,MANG
+...
 
 ## Input Data Formats
 **Genomic Data Matrix**
@@ -250,70 +289,6 @@ Purpose: Enhanced biological interpretation and hypothesis-driven analysis.
 | `--output_format` | text | Output format (text, json, xml) |
 | `--memory_efficient` | False | Enable memory-efficient processing for large datasets |
 | `--include_interactions` | False | Explicitly include epistatic interaction detection |
-
-## Output
-**Text Report**
-```
-================================================================================
-NetworkParser Analysis Results (v1.0.0)
-================================================================================
-
-Dataset Summary:
-  Samples: 500
-  Features: 10,247 genomic markers
-  Groups: 4 hierarchical levels
-  
-Hierarchical Analysis:
-  Level 1: 2 major clusters (confidence: 0.98)
-  Level 2: 4 sub-clusters (confidence: 0.94)
-  Level 3: 8 fine-scale groups (confidence: 0.87)
-
-Discriminative Features:
-  Single Features: 23 significant markers (FDR < 0.05)
-  Epistatic Interactions: 7 two-way interactions (FDR < 0.01)
-  Known Markers Validated: 5/8 previously known features confirmed
-
-Top Discriminative Features:
-  Feature_12845: Level 1 separator (bootstrap p < 0.001)
-  Feature_3421 × Feature_8765: Epistatic interaction (bootstrap p = 0.003)
-  Known_ResMarker_1: Confirmed resistance association (p < 0.001)
-
-Decision Tree Summary:
-  Root → Feature_12845 (splits cluster A vs B)
-    ├── Cluster A → Feature_3421 × Feature_8765 (sub-cluster classification)  
-    └── Cluster B → Feature_9876 (sub-cluster classification)
-
-Statistical Validation:
-  Bootstrap iterations: 1000
-  Overall stability: 0.923
-  FDR correction: Benjamini-Hochberg
-```
-
-**JSON Output (Optional)**  
-Structured output for programmatic parsing and integration with downstream tools, including processed matrices ready for Graph Neural Networks.
-
-## Project Structure
-```
-networkparser/
-├── network_parser/network_parser.py           # Main script
-├── environment.yml           # Conda environment  
-├── requirements.txt          # Python dependencies
-├── config.yml               # Configuration file
-├── setup.py                 # Package setup
-├── src/
-│   ├── __init__.py
-│   ├── core.py              # Core algorithms
-│   ├── statistics.py        # Statistical validation
-│   ├── interactions.py      # Epistatic modeling
-│   └── outputs.py           # Result formatting
-├── data/                    # Example datasets
-│   ├── genomic_matrix.csv
-│   ├── metadata.csv
-│   ├── known_features.txt
-│   └── example_config.yml
-├── tests/                   # Unit tests
-└── README.md
-```
 
 ## Example Analysis
 **Dataset**  
