@@ -10,25 +10,6 @@ A next-generation bioinformatics framework for identifying statistically validat
 - **Statistical Validation**: Applies bootstrap validation, chi-squared tests, multiple testing correction, permutation tests, and feature set validation to ensure robust and significant results.  
 - **Comprehensive Outputs**: Generates detailed reports, including decision tree rules, feature confidence scores, and statistical validation results, saved as CSV and JSON files.  
 
----
-
-## Project Structure
-network_parser/
-├── network_parser/
-│ ├── init.py
-│ ├── cli.py
-│ ├── config.py
-│ ├── data_loader.py
-│ ├── decision_tree_builder.py
-│ ├── network_parser.py
-│ ├── statistical_validation.py
-├── data/
-│ ├── matrix.csv
-│ ├── labels.csv
-├── results/
-
----
-
 ## Badges
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)  
 [![Python](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)  
@@ -149,33 +130,31 @@ Copy code
 ## Directory Structure
 network_parser/
 ├── network_parser/
-│ ├── init.py # Package version (0.1.0)
-│ ├── cli.py # Command-line interface
-│ ├── config.py # Configuration settings
-│ ├── data_loader.py # Data loading and preprocessing
-│ ├── decision_tree_builder.py # Feature discovery and interactions
-│ ├── network_parser.py # Pipeline orchestration
-│ ├── statistical_validation.py # Statistical tests
+│   ├── __init__.py          # Package version (0.1.0)
+│   ├── cli.py               # Command-line interface
+│   ├── config.py            # Configuration settings
+│   ├── data_loader.py       # Data loading and preprocessing
+│   ├── decision_tree_builder.py  # Feature discovery and interactions
+│   ├── network_parser.py    # Pipeline orchestration
+│   ├── statistical_validation.py  # Statistical tests
 ├── data/
-│ ├── matrix.csv # Genomic data (samples × features)
-│ ├── labels.csv # Metadata (sample IDs + labels)
+│   ├── matrix.csv           # Genomic data (samples × features)
+│   ├── labels.csv           # Metadata (sample IDs + labels)
 ├── results/
-│ ├── deduplicated_genomic_matrix.csv
-│ ├── deduplicated_metadata.csv
-│ ├── aligned_genomic_matrix.csv
-│ ├── aligned_metadata.csv
-│ ├── decision_tree_rules.txt
-│ ├── feature_confidence.json
-│ ├── epistatic_interactions.json
-│ ├── bootstrap_results.json
-│ ├── chi_squared_results.json
-│ ├── multiple_testing_results.json
-│ ├── interaction_permutation_results.json
-│ ├── feature_set_validation.json
-│ ├── networkparser_results_YYYYMMDD_HHMMSS.json
+│   ├── deduplicated_genomic_matrix.csv
+│   ├── deduplicated_metadata.csv
+│   ├── aligned_genomic_matrix.csv
+│   ├── aligned_metadata.csv
+│   ├── decision_tree_rules.txt
+│   ├── feature_confidence.json
+│   ├── epistatic_interactions.json
+│   ├── bootstrap_results.json
+│   ├── chi_squared_results.json
+│   ├── multiple_testing_results.json
+│   ├── interaction_permutation_results.json
+│   ├── feature_set_validation.json
+│   ├── networkparser_results_YYYYMMDD_HHMMSS.json
 
-yaml
-Copy code
 
 ---
 
@@ -187,76 +166,47 @@ cd network_parser
 conda env create -f environment.yml
 conda activate network_parser
 Option 2: Pip Installation
-bash
-Copy code
+```
+
+```bash
 git clone https://github.com/Nomlie/network_parser.git
 cd network_parser
 python -m venv venv
 source venv/bin/activate   # (Linux/Mac)
 venv\Scripts\activate      # (Windows)
 pip install -r requirements.txt
+```
 Set PYTHONPATH
-bash
-Copy code
+```bash
 export PYTHONPATH=$PYTHONPATH:$(pwd)
+```
 Add this line to your shell configuration (~/.bashrc or ~/.zshrc) if you want it permanent.
 
-Usage
-bash
-Copy code
+```bash
 python -m network_parser -h
+```
+
 Example run:
 
-bash
-Copy code
-python -m network_parser \
-  --matrix data/matrix.csv \
-  --labels data/labels.csv \
+```bash
+python -m network_parser.cli  \
+  --genomic data/matrix.csv \
+  --meta data/labels.csv \
   --label phenotype \
   --output results/
+```
 Outputs will be saved in the results/ directory.
 
-Input Data Formats
-(kept your tables + examples intact here)
+Command-Line Options:
 
-Command Line Options
-(kept your full table intact here)
+--genomic: Path to genomic matrix (e.g., data/matrix.csv).
+--meta: Path to metadata (e.g., data/labels.csv).
+--label: Label column name (e.g., label).
+--output-dir: Output directory (e.g., results/).
+Config File: Supports YAML/JSON for reproducibility (defined in config.py).
+Scalability: Multi-threaded execution for large datasets.
 
-Example Analysis
-(kept your dataset + results intact here)
-
-Advanced Configuration
-(kept your YAML block intact here)
-
-Methods
-(kept intact here)
-
-Comparison to Existing Tools
-(kept intact here)
-
-Benchmarks and Performance
-(kept intact here)
-
-Troubleshooting
-(kept intact here)
-
-Citation
-(kept intact here)
-
-Contributing
-(kept intact here)
-
-License
-This project is licensed under the MIT License. See the LICENSE file for details.
-
-Support
-Issues: GitHub Issues
-
-Discussions: GitHub Discussions
-
-Documentation: Full Documentation (coming soon)
-
-Email: support@networkparser.org
-
-yaml
-Copy code
+---
+**Analysis Modes**
+Hierarchical Mode: Analyzes phylogenetic or lineage-based contexts.
+Phenotype Mode: Focuses on metadata-driven comparisons (e.g., disease vs. healthy).
