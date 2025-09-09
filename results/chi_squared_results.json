@@ -1,0 +1,714 @@
+{
+  "0": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.1": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "1": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.2": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "1.1": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.3": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "1.2": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.4": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.5": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.6": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.7": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "1.3": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "1.4": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "1.5": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.8": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.9": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "1.6": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "1.7": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.10": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "1.8": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.11": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.12": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.13": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.14": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.15": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.16": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.17": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "1.9": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.18": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.19": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.20": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "1.10": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.21": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "1.11": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "1.12": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.22": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "1.13": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.23": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.24": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.25": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "1.14": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.26": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.27": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.28": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "1.15": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.29": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "1.16": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.30": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "1.17": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.31": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "1.18": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.32": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.33": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.34": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "1.19": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.35": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "1.20": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.36": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.37": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "1.21": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "1.22": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "1.23": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.38": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.39": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.40": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.41": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.42": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.43": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.44": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.45": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.46": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.47": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.48": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.49": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.50": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "1.24": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.51": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.52": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.53": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.54": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.55": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.56": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.57": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.58": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "1.25": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.59": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.60": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "0.61": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  },
+  "1.26": {
+    "chi2_statistic": null,
+    "p_value": 1.0,
+    "cramers_v": 0.0,
+    "mutual_information": 0.0,
+    "error": "Sparse contingency table; test skipped",
+    "test_type": "skipped"
+  }
+}
