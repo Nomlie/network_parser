@@ -145,8 +145,6 @@ Outputs:
 - Interaction Graphs: Represents sample–feature networks for visualization or GNNs.
 - Binary-Encoded Matrices: Provides data for ML models (e.g., GNNs, transformers).
 
-
-
 Summary Reports:
 
 - Human-readable console summary (tree accuracy, significant features, interactions).
@@ -237,7 +235,7 @@ python -m network_parser.cli  \
   --output results/
 ```
 
-Command-Line Options:
+## Command-Line Options:
 ```bash
 --genomic: Path to genomic matrix (e.g., data/matrix.csv).
 --meta: Path to metadata (e.g., data/labels.csv).
@@ -245,12 +243,12 @@ Command-Line Options:
 --output-dir: Output directory (e.g., results/).
 ```
 
-Config File: Supports YAML/JSON for reproducibility (defined in config.py).
-Scalability: Multi-threaded execution for large datasets.
+- Config File: Supports YAML/JSON for reproducibility (defined in config.py).
+- Scalability: Multi-threaded execution for large datasets.
 
 Outputs will be saved in the results/ directory.
 
 ---
 **Analysis Modes**
-Hierarchical Mode: Analyzes phylogenetic or lineage-based contexts.
-Phenotype Mode: Focuses on metadata-driven comparisons (e.g., disease vs. healthy).
+- Hierarchical Mode: Analyzes phylogenetic or lineage-based contexts.
+- Phenotype Mode: Focuses on metadata-driven comparisons (e.g., disease vs. healthy).
