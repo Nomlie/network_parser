@@ -1,15 +1,3 @@
-"""
-NetworkParser - Integrated Genomic Feature Discovery Pipeline
-
-A comprehensive pipeline for discovering discriminative genomic features using:
-1. Decision trees as feature discovery engines
-2. Statistical validation (bootstrap, chi-squared, multiple testing)
-3. Epistatic interaction detection
-4. Multi-format data loading (CSV, TSV, FASTA, VCF)
-
-Main pipeline class that orchestrates all components.
-"""
-
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -24,7 +12,6 @@ from .data_loader import DataLoader
 from .decision_tree_builder import EnhancedDecisionTreeBuilder
 from .statistical_validation import StatisticalValidator
 
-
 class NetworkParser:
     """
     Main NetworkParser pipeline for genomic feature discovery.
@@ -34,76 +21,84 @@ class NetworkParser:
     for multiple testing and validating epistatic interactions.
     """
     
-    def __init__(self, config: None):
-        self.config = config
+    def __init__(self, config: Optional[NetworkParserConfig] = None):
+        self.config = config or NetworkParserConfig()
         self.data = None
         self.labels = None
         self.metadata = None
         self.results = None
-        
-        # Initialize components
         self.data_loader = DataLoader()
-        self.tree_builder = EnhancedDecisionTreeBuilder(config)
-        self.validator = StatisticalValidator(config)
-        
-        # Pipeline state
+        self.tree_builder = EnhancedDecisionTreeBuilder(self.config)
+        self.validator = StatisticalValidator(self.config)
         self.pipeline_complete = False
         self.processing_time = None
         
     def load_data(self, 
                   genomic_data_path: str,
-                  metadata_path: str,
                   label_column: str,
-                  known_markers_path: Optional[str] = None) -> 'NetworkParser':
+                  metadata_path: Optional[str] = None,
+                  known_markers_path: Optional[str] = None,
+                  output_dir: Optional[str] = None) -> 'NetworkParser':
         """
-        Load genomic data and metadata.
+        Load genomic data and optional metadata, saving intermediates to output_dir.
         
         Args:
             genomic_data_path: Path to genomic matrix (CSV, TSV, FASTA, VCF)
-            metadata_path: Path to sample metadata with labels
             label_column: Column name containing class labels
-            known_markers_path: Optional path to known marker list for comparison
-            
+            metadata_path: Optional path to sample metadata with labels
+            known_markers_path: Optional path to known marker list
+            output_dir: Directory to save intermediate files (optional)
+        
         Returns:
             Self for method chaining
         """
-        print("Loading genomic data and metadata...")
-        
-        # Load genomic matrix
+        print("Loading genomic data...")
         try:
-            self.data = self.data_loader.load_genomic_matrix(genomic_data_path)
+            self.data = self.data_loader.load_genomic_matrix(genomic_data_path, output_dir)
             print(f"Loaded genomic matrix: {self.data.shape[0]} samples × {self.data.shape[1]} features")
         except Exception as e:
             raise ValueError(f"Failed to load genomic data from {genomic_data_path}: {e}")
         
-        # Load metadata
-        try:
-            self.metadata = self.data_loader.load_metadata(metadata_path)
-            print(f"Loaded metadata for {len(self.metadata)} samples")
-        except Exception as e:
-            raise ValueError(f"Failed to load metadata from {metadata_path}: {e}")
+        if metadata_path:
+            try:
+                self.metadata = self.data_loader.load_metadata(metadata_path, output_dir)
+                print(f"Loaded metadata for {len(self.metadata)} samples")
+            except Exception as e:
+                raise ValueError(f"Failed to load metadata from {metadata_path}: {e}")
+        else:
+            if label_column not in self.data.columns:
+                raise ValueError(f"Label column '{label_column}' not found in genomic data")
+            self.labels = self.data[label_column]
+            self.data = self.data.drop(columns=[label_column])
+            self.metadata = pd.DataFrame(index=self.data.index)
+            print(f"Using labels from genomic data: {len(self.labels)} samples")
         
-        # Extract labels
-        if label_column not in self.metadata.columns:
-            raise ValueError(f"Label column '{label_column}' not found in metadata")
+        if self.metadata is not None and metadata_path:
+            common_samples = list(set(self.data.index) & set(self.metadata.index))
+            if len(common_samples) == 0:
+                raise ValueError("No common samples found between genomic data and metadata")
+            
+            self.data = self.data.loc[common_samples]
+            self.metadata = self.metadata.loc[common_samples]
+            self.labels = self.metadata[label_column]
+            
+            if output_dir:
+                output_dir = Path(output_dir)
+                output_dir.mkdir(parents=True, exist_ok=True)
+                aligned_data_file = output_dir / "aligned_genomic_matrix.csv"
+                aligned_metadata_file = output_dir / "aligned_metadata.csv"
+                self.data.to_csv(aligned_data_file)
+                self.metadata.to_csv(aligned_metadata_file)
+                print(f"Saved aligned genomic matrix to: {aligned_data_file}")
+                print(f"Saved aligned metadata to: {aligned_metadata_file}")
         
-        # Align data and metadata
-        common_samples = list(set(self.data.index) & set(self.metadata.index))
-        if len(common_samples) == 0:
-            raise ValueError("No common samples found between genomic data and metadata")
-        
-        self.data = self.data.loc[common_samples]
-        self.metadata = self.metadata.loc[common_samples]
-        self.labels = self.metadata[label_column]
-        
-        print(f"Aligned data: {len(common_samples)} samples")
+        print(f"Aligned data: {len(self.data)} samples")
         print(f"Label distribution: {self.labels.value_counts().to_dict()}")
         
-        # Load known markers if provided
         self.known_markers = None
         if known_markers_path:
             try:
-                self.known_markers = self.data_loader.load_known_markers(known_markers_path)
+                self.known_markers = self.data_loader.load_known_markers(known_markers_path, output_dir)
                 print(f"Loaded {len(self.known_markers)} known markers for comparison")
             except Exception as e:
                 warnings.warn(f"Could not load known markers: {e}")
@@ -112,13 +107,15 @@ class NetworkParser:
     
     def run_feature_discovery(self, 
                             validate_statistics: bool = True,
-                            validate_interactions: bool = False) -> 'NetworkParser':
+                            validate_interactions: bool = False,
+                            output_dir: Optional[str] = None) -> 'NetworkParser':
         """
-        Run the complete feature discovery pipeline.
+        Run the complete feature discovery pipeline, saving intermediates to output_dir.
         
         Args:
             validate_statistics: Whether to run statistical validation
-            validate_interactions: Whether to validate epistatic interactions with permutation tests
+            validate_interactions: Whether to validate epistatic interactions
+            output_dir: Directory to save intermediate files (optional)
             
         Returns:
             Self for method chaining
@@ -131,50 +128,59 @@ class NetworkParser:
         print("NETWORKPARSER FEATURE DISCOVERY PIPELINE")
         print("="*70)
         
-        # Phase 1: Decision tree feature discovery
         print("\nPHASE 1: Decision Tree Feature Discovery")
         print("-" * 40)
-        
         discovery_results = self.tree_builder.discover_features(
             self.data, 
             self.labels,
             validate_statistics=validate_statistics
         )
         
-        # Phase 2: Additional statistical validation if requested
+        if output_dir:
+            output_dir = Path(output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            with open(output_dir / "discovered_features.json", 'w') as f:
+                json.dump({
+                    'root_features': discovery_results.get('root_features', []),
+                    'branch_features': discovery_results.get('branch_features', []),
+                    'epistatic_interactions': discovery_results.get('epistatic_interactions', [])
+                }, f, indent=2)
+            print(f"Saved discovered features to: {output_dir / 'discovered_features.json'}")
+        
         additional_validation = {}
         if validate_interactions and discovery_results.get('epistatic_interactions'):
             print("\nPHASE 2: Interaction Validation")
             print("-" * 40)
-            
-            # Extract interaction pairs for permutation testing
             interaction_pairs = [
                 (interaction['parent_feature'], interaction['child_feature'])
-                for interaction in discovery_results['epistatic_interactions'][:10]  # Limit to top 10
+                for interaction in discovery_results['epistatic_interactions'][:10]
             ]
-            
             if interaction_pairs:
                 interaction_validation = self.validator.permutation_test_interactions(
                     self.data, self.labels, interaction_pairs
                 )
                 additional_validation['interaction_permutation_tests'] = interaction_validation
+                if output_dir:
+                    with open(output_dir / "interaction_validation.json", 'w') as f:
+                        json.dump(interaction_validation, f, indent=2)
+                    print(f"Saved interaction validation results to: {output_dir / 'interaction_validation.json'}")
         
-        # Phase 3: Comprehensive feature set validation
         print("\nPHASE 3: Feature Set Validation")
         print("-" * 40)
-        
         all_discovered_features = (
             discovery_results['root_features'] + 
             discovery_results['branch_features']
         )
-        
         if all_discovered_features:
             feature_set_validation = self.validator.validate_feature_set(
                 self.data, self.labels, all_discovered_features
             )
             additional_validation['feature_set_validation'] = feature_set_validation
+            if output_dir:
+                with open(output_dir / "feature_set_validation.json", 'w') as f:
+                    json.dump(feature_set_validation, f, indent=2)
+                print(f"Saved feature set validation results to: {output_dir / 'feature_set_validation.json'}")
         
-        # Phase 4: Known marker comparison if available
         known_marker_comparison = {}
         if self.known_markers:
             print("\nPHASE 4: Known Marker Comparison")
@@ -182,8 +188,11 @@ class NetworkParser:
             known_marker_comparison = self._compare_with_known_markers(
                 all_discovered_features, self.known_markers
             )
+            if output_dir:
+                with open(output_dir / "known_marker_comparison.json", 'w') as f:
+                    json.dump(known_marker_comparison, f, indent=2)
+                print(f"Saved known marker comparison to: {output_dir / 'known_marker_comparison.json'}")
         
-        # Compile comprehensive results
         self.results = {
             'discovery_results': discovery_results,
             'additional_validation': additional_validation,
@@ -199,8 +208,6 @@ class NetworkParser:
         
         self.processing_time = self.results['pipeline_metadata']['processing_time']
         self.pipeline_complete = True
-        
-        # Print final summary
         self._print_pipeline_summary()
         
         return self
@@ -224,42 +231,33 @@ class NetworkParser:
             raise ValueError("Pipeline not complete. Run run_feature_discovery() first.")
         
         results = self.results['discovery_results']
-        
-        # Get base feature lists
         root_features = results.get('root_features', [])
         branch_features = results.get('branch_features', [])
         
-        # Apply confidence filtering
         confidence_scores = results.get('feature_confidence', {})
-        
         filtered_root = [
             f for f in root_features 
             if confidence_scores.get(f, {}).get('confidence', 0) >= confidence_threshold
         ]
-        
         filtered_branch = [
             f for f in branch_features 
             if confidence_scores.get(f, {}).get('confidence', 0) >= confidence_threshold
         ]
         
-        # Apply statistical significance filtering if available
         if 'statistical_validation' in results:
             corrected_results = results['statistical_validation'].get('multiple_testing', {})
-            
             statistically_significant = [
                 f for f, stats in corrected_results.items()
                 if isinstance(stats, dict) and stats.get('significant', False)
             ]
-            
             filtered_root = [f for f in filtered_root if f in statistically_significant]
             filtered_branch = [f for f in filtered_branch if f in statistically_significant]
         
-        # Return based on requested type
         if feature_type == 'root':
             return {'root_features': filtered_root}
         elif feature_type == 'branch':
             return {'branch_features': filtered_branch}
-        else:  # 'all'
+        else:
             return {
                 'root_features': filtered_root,
                 'branch_features': filtered_branch,
@@ -283,23 +281,18 @@ class NetworkParser:
             raise ValueError("Pipeline not complete. Run run_feature_discovery() first.")
         
         interactions = self.results['discovery_results'].get('epistatic_interactions', [])
-        
-        # Filter by strength threshold
         filtered_interactions = [
             interaction for interaction in interactions
             if interaction.get('interaction_strength', 0) >= strength_threshold
         ]
         
-        # Add permutation test results if available
         permutation_results = self.results['additional_validation'].get(
             'interaction_permutation_tests', {}
         )
-        
         for interaction in filtered_interactions:
             parent = interaction['parent_feature']
             child = interaction['child_feature']
             key = f"{parent}_x_{child}"
-            
             if key in permutation_results:
                 interaction['permutation_p_value'] = permutation_results[key]['p_value']
                 interaction['permutation_significant'] = permutation_results[key]['significant']
@@ -324,23 +317,17 @@ class NetworkParser:
         
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
-        
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
         if export_format == 'json':
-            # Convert non-serializable objects for JSON
             exportable_results = self._prepare_for_json_export(self.results)
             output_file = output_dir / f"networkparser_results_{timestamp}.json"
-            
             with open(output_file, 'w') as f:
                 json.dump(exportable_results, f, indent=2, default=str)
-                
         elif export_format == 'pickle':
             output_file = output_dir / f"networkparser_results_{timestamp}.pkl"
-            
             with open(output_file, 'wb') as f:
                 pickle.dump(self.results, f)
-        
         else:
             raise ValueError("export_format must be 'json' or 'pickle'")
         
@@ -353,11 +340,9 @@ class NetworkParser:
         """Compare discovered features with known markers."""
         discovered_set = set(discovered_features)
         known_set = set(known_markers)
-        
         overlap = discovered_set & known_set
         discovered_only = discovered_set - known_set
         known_only = known_set - discovered_set
-        
         return {
             'n_discovered': len(discovered_set),
             'n_known': len(known_set),
@@ -374,7 +359,7 @@ class NetworkParser:
         """Recursively convert data to JSON-serializable format."""
         if isinstance(data, dict):
             return {k: self._prepare_for_json_export(v) for k, v in data.items() 
-                   if not k.startswith('decision_tree')}  # Skip sklearn objects
+                   if not k.startswith('decision_tree')}
         elif isinstance(data, (list, tuple)):
             return [self._prepare_for_json_export(item) for item in data]
         elif isinstance(data, np.ndarray):
@@ -383,7 +368,7 @@ class NetworkParser:
             return int(data)
         elif isinstance(data, (np.float64, np.float32)):
             return float(data)
-        elif hasattr(data, '__dict__'):  # Complex objects
+        elif hasattr(data, '__dict__'):
             return str(data)
         else:
             return data
@@ -392,18 +377,15 @@ class NetworkParser:
         """Print comprehensive pipeline summary."""
         if not self.results:
             return
-            
         results = self.results['discovery_results']
         metadata = self.results['pipeline_metadata']
         
         print("\n" + "="*70)
         print("NETWORKPARSER PIPELINE SUMMARY")
         print("="*70)
-        
         print(f"Processing Time: {metadata['processing_time']}")
         print(f"Data Shape: {metadata['data_shape'][0]} samples × {metadata['data_shape'][1]} features")
         print(f"Classes: {metadata['n_classes']} ({list(metadata['class_distribution'].keys())})")
-        
         print(f"\nFEATURE DISCOVERY RESULTS:")
         print(f"  Root Features (Global): {len(results.get('root_features', []))}")
         print(f"  Branch Features (Conditional): {len(results.get('branch_features', []))}")
@@ -412,7 +394,6 @@ class NetworkParser:
         if results.get('epistatic_interactions'):
             print(f"  Epistatic Interactions: {len(results['epistatic_interactions'])}")
         
-        # Statistical validation summary
         if 'statistical_validation' in results:
             stats = results['statistical_validation']
             if 'multiple_testing' in stats and '_summary' in stats['multiple_testing']:
@@ -423,7 +404,6 @@ class NetworkParser:
                 print(f"  Significant (Corrected): {summary['n_significant_corrected']}")
                 print(f"  Correction Method: {summary['correction_method']}")
         
-        # Known marker comparison
         if self.results.get('known_marker_comparison'):
             comp = self.results['known_marker_comparison']
             print(f"\nKNOWN MARKER COMPARISON:")
@@ -435,23 +415,28 @@ class NetworkParser:
         print("="*70)
 
 
-# Convenience function for quick analysis
 def run_networkparser_analysis(genomic_data_path: str,
-                              metadata_path: str,
                               label_column: str,
+                              metadata_path: Optional[str] = None,
                               output_dir: Optional[str] = None,
                               config: Optional[NetworkParserConfig] = None,
-                              **kwargs) -> NetworkParser:
+                              validate_statistics: bool = True,
+                              validate_interactions: bool = False,
+                              export_format: str = 'json',
+                              known_markers_path: Optional[str] = None) -> NetworkParser:
     """
     Convenience function to run complete NetworkParser analysis.
     
     Args:
         genomic_data_path: Path to genomic data file
-        metadata_path: Path to metadata file
         label_column: Column name with class labels
-        output_dir: Optional directory to save results
+        metadata_path: Optional path to metadata file
+        output_dir: Directory to save results and intermediate files
         config: Optional custom configuration
-        **kwargs: Additional arguments for run_feature_discovery()
+        validate_statistics: Whether to run statistical validation
+        validate_interactions: Whether to validate epistatic interactions
+        export_format: Format for saving results ('json' or 'pickle')
+        known_markers_path: Optional path to known markers file
         
     Returns:
         Completed NetworkParser instance
@@ -459,13 +444,13 @@ def run_networkparser_analysis(genomic_data_path: str,
     if config is None:
         config = NetworkParserConfig()
     
-    # Run analysis
     parser = (NetworkParser(config)
-              .load_data(genomic_data_path, metadata_path, label_column)
-              .run_feature_discovery(**kwargs))
+              .load_data(genomic_data_path, label_column, metadata_path, known_markers_path, output_dir)
+              .run_feature_discovery(validate_statistics=validate_statistics,
+                                    validate_interactions=validate_interactions,
+                                    output_dir=output_dir))
     
-    # Export results if output directory provided
     if output_dir:
-        parser.export_results(output_dir)
+        parser.export_results(output_dir, export_format)
     
-    return parser  
+    return parser
