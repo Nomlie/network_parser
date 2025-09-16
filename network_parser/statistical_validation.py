@@ -1,17 +1,3 @@
-"""
-Statistical Validator module for NetworkParser.
-Implements rigorous statistical validation for discovered features:
-1. Bootstrap validation for feature stability
-2. Chi-squared testing for feature-label associations
-3. Multiple testing corrections (Bonferroni, FDR)
-4. Permutation tests for interaction validation
-5. Effect size calculations
-
-This module provides a comprehensive suite of statistical tests to validate
-features discovered by the decision tree builder, ensuring robustness and
-significance of findings.
-"""
-
 import numpy as np
 import pandas as pd
 from scipy import stats
@@ -199,6 +185,19 @@ class StatisticalValidator:
         for feature in data.columns:
             try:
                 contingency_table = pd.crosstab(data[feature], labels)
+                
+                # Check for degenerate contingency table
+                if contingency_table.empty or min(contingency_table.shape) <= 1:
+                    warnings.warn(f"Skipping feature {feature}: degenerate contingency table (shape: {contingency_table.shape})")
+                    results[feature] = {
+                        'chi2_statistic': None,
+                        'p_value': 1.0,
+                        'cramers_v': 0.0,
+                        'mutual_information': 0.0,
+                        'error': f'Degenerate contingency table (shape: {contingency_table.shape})',
+                        'test_type': 'skipped'
+                    }
+                    continue
                 
                 if contingency_table.min().min() < 5:
                     if contingency_table.shape == (2, 2):
@@ -484,8 +483,11 @@ class StatisticalValidator:
             min_dim: Minimum dimension minus 1.
 
         Returns:
-            Cramér's V value.
+            Cramér's V value, or 0.0 if calculation is invalid.
         """
+        if min_dim == 0 or n == 0 or np.isnan(chi2):
+            warnings.warn(f"Cannot calculate Cramér's V: chi2={chi2}, n={n}, min_dim={min_dim}")
+            return 0.0
         return float(np.sqrt(chi2 / (n * min_dim)))
     
     def _calculate_cramers_v_from_table(self, contingency_table: pd.DataFrame) -> float:

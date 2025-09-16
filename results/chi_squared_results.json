@@ -1,714 +1,912 @@
 {
-  "0": {
+  "101361": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.1": {
+  "366141": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "1": {
+  "384032": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.2": {
+  "497957": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
-    "test_type": "skipped"
+    "mutual_information": 0.0356307692888162,
+    "contingency_table": {
+      "N": {
+        "0": 6,
+        "1": 0
+      },
+      "P": {
+        "0": 8,
+        "1": 1
+      }
+    },
+    "test_type": "fisher_exact"
   },
-  "1.1": {
+  "522385": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.3": {
+  "618552": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "1.2": {
+  "652975": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.4": {
+  "679712": {
     "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
-    "test_type": "skipped"
+    "p_value": 0.0001998001998001998,
+    "cramers_v": 0.8611111111111112,
+    "mutual_information": 0.6730116670092563,
+    "contingency_table": {
+      "N": {
+        "0": 0,
+        "1": 6
+      },
+      "P": {
+        "0": 9,
+        "1": 0
+      }
+    },
+    "test_type": "fisher_exact"
   },
-  "0.5": {
+  "698985": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.6": {
+  "771128": {
     "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
-    "test_type": "skipped"
+    "p_value": 0.006993006993006994,
+    "cramers_v": 0.627376434428478,
+    "mutual_information": 0.3730995898792253,
+    "contingency_table": {
+      "N": {
+        "0": 0,
+        "1": 6
+      },
+      "P": {
+        "0": 7,
+        "1": 2
+      }
+    },
+    "test_type": "fisher_exact"
   },
-  "0.7": {
+  "798590": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "1.3": {
+  "912181": {
     "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
-    "test_type": "skipped"
+    "p_value": 0.4,
+    "cramers_v": 0.05455447255899806,
+    "mutual_information": 0.06470554324811373,
+    "contingency_table": {
+      "N": {
+        "0": 1,
+        "1": 5
+      },
+      "P": {
+        "0": 0,
+        "1": 9
+      }
+    },
+    "test_type": "fisher_exact"
   },
-  "1.4": {
+  "953226": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "1.5": {
+  "1004403": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.8": {
+  "1101240": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.9": {
+  "1101401": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "1.6": {
+  "1119694": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "1.7": {
+  "1277826": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.10": {
+  "1290472": {
     "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
-    "test_type": "skipped"
+    "p_value": 0.4857142857142857,
+    "cramers_v": 0.12009611535381536,
+    "mutual_information": 0.07485074779295942,
+    "contingency_table": {
+      "N": {
+        "0": 0,
+        "1": 6
+      },
+      "P": {
+        "0": 2,
+        "1": 7
+      }
+    },
+    "test_type": "fisher_exact"
   },
-  "1.8": {
+  "1314520": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.11": {
+  "1392623": {
     "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
-    "test_type": "skipped"
+    "p_value": 0.0001998001998001998,
+    "cramers_v": 0.8611111111111112,
+    "mutual_information": 0.6730116670092563,
+    "contingency_table": {
+      "N": {
+        "0": 0,
+        "1": 6
+      },
+      "P": {
+        "0": 9,
+        "1": 0
+      }
+    },
+    "test_type": "fisher_exact"
   },
-  "0.12": {
+  "1470751": {
     "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
-    "test_type": "skipped"
+    "p_value": 0.010989010989010988,
+    "cramers_v": 0.5846845821518305,
+    "mutual_information": 0.3253095041001758,
+    "contingency_table": {
+      "N": {
+        "0": 2,
+        "1": 4
+      },
+      "P": {
+        "0": 9,
+        "1": 0
+      }
+    },
+    "test_type": "fisher_exact"
   },
-  "0.13": {
+  "1551618": {
     "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
-    "test_type": "skipped"
+    "p_value": 0.4857142857142857,
+    "cramers_v": 0.12009611535381536,
+    "mutual_information": 0.07485074779295942,
+    "contingency_table": {
+      "N": {
+        "0": 0,
+        "1": 6
+      },
+      "P": {
+        "0": 2,
+        "1": 7
+      }
+    },
+    "test_type": "fisher_exact"
   },
-  "0.14": {
+  "1572071": {
     "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
-    "test_type": "skipped"
+    "p_value": 0.0001998001998001998,
+    "cramers_v": 0.8611111111111112,
+    "mutual_information": 0.6730116670092563,
+    "contingency_table": {
+      "N": {
+        "0": 0,
+        "1": 6
+      },
+      "P": {
+        "0": 9,
+        "1": 0
+      }
+    },
+    "test_type": "fisher_exact"
   },
-  "0.15": {
+  "1678339": {
     "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
-    "test_type": "skipped"
+    "p_value": 0.010989010989010992,
+    "cramers_v": 0.5833333333333333,
+    "mutual_information": 0.2834879259569151,
+    "contingency_table": {
+      "N": {
+        "0": 5,
+        "1": 1
+      },
+      "P": {
+        "0": 1,
+        "1": 8
+      }
+    },
+    "test_type": "fisher_exact"
   },
-  "0.16": {
+  "1790648": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.17": {
+  "1901101": {
     "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
-    "test_type": "skipped"
+    "p_value": 0.4,
+    "cramers_v": 0.05455447255899806,
+    "mutual_information": 0.06470554324811373,
+    "contingency_table": {
+      "N": {
+        "0": 1,
+        "1": 5
+      },
+      "P": {
+        "0": 0,
+        "1": 9
+      }
+    },
+    "test_type": "fisher_exact"
   },
-  "1.9": {
+  "1907508": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.18": {
+  "1973797": {
     "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
-    "test_type": "skipped"
+    "p_value": 0.4857142857142857,
+    "cramers_v": 0.12009611535381536,
+    "mutual_information": 0.07485074779295942,
+    "contingency_table": {
+      "N": {
+        "0": 0,
+        "1": 6
+      },
+      "P": {
+        "0": 2,
+        "1": 7
+      }
+    },
+    "test_type": "fisher_exact"
   },
-  "0.19": {
+  "2243520": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.20": {
+  "2274995": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "1.10": {
+  "2306236": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.21": {
+  "2378301": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "1.11": {
+  "2510433": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "1.12": {
+  "2616573": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.22": {
+  "2640767": {
     "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
-    "test_type": "skipped"
+    "p_value": 0.6223776223776224,
+    "cramers_v": 0.02777777777777778,
+    "mutual_information": 0.013844293808390418,
+    "contingency_table": {
+      "N": {
+        "0": 3,
+        "1": 3
+      },
+      "P": {
+        "0": 6,
+        "1": 3
+      }
+    },
+    "test_type": "fisher_exact"
   },
-  "1.13": {
+  "2652085": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.23": {
+  "2699973": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.24": {
+  "2705023": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.25": {
+  "2708566": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "1.14": {
+  "2860050": {
     "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
-    "test_type": "skipped"
+    "p_value": 0.23516483516483516,
+    "cramers_v": 0.27695585470349865,
+    "mutual_information": 0.09335704168830361,
+    "contingency_table": {
+      "N": {
+        "0": 3,
+        "1": 3
+      },
+      "P": {
+        "0": 8,
+        "1": 1
+      }
+    },
+    "test_type": "fisher_exact"
   },
-  "0.26": {
+  "2909481": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
-    "test_type": "skipped"
+    "mutual_information": 0.0014874911314458616,
+    "contingency_table": {
+      "N": {
+        "0": 3,
+        "1": 3
+      },
+      "P": {
+        "0": 5,
+        "1": 4
+      }
+    },
+    "test_type": "fisher_exact"
   },
-  "0.27": {
+  "2994700": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.28": {
+  "3089432": {
     "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
-    "test_type": "skipped"
+    "p_value": 0.4857142857142857,
+    "cramers_v": 0.12009611535381536,
+    "mutual_information": 0.07485074779295942,
+    "contingency_table": {
+      "N": {
+        "0": 0,
+        "1": 6
+      },
+      "P": {
+        "0": 2,
+        "1": 7
+      }
+    },
+    "test_type": "fisher_exact"
   },
-  "1.15": {
+  "3112585": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.29": {
+  "3136337": {
     "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
-    "test_type": "skipped"
+    "p_value": 0.48571428571428577,
+    "cramers_v": 0.12009611535381536,
+    "mutual_information": 0.07485074779295942,
+    "contingency_table": {
+      "N": {
+        "0": 6,
+        "1": 0
+      },
+      "P": {
+        "0": 7,
+        "1": 2
+      }
+    },
+    "test_type": "fisher_exact"
   },
-  "1.16": {
+  "3187483": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.30": {
+  "3219764": {
     "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
-    "test_type": "skipped"
+    "p_value": 0.0001998001998001998,
+    "cramers_v": 0.8611111111111112,
+    "mutual_information": 0.6730116670092563,
+    "contingency_table": {
+      "N": {
+        "0": 0,
+        "1": 6
+      },
+      "P": {
+        "0": 9,
+        "1": 0
+      }
+    },
+    "test_type": "fisher_exact"
   },
-  "1.17": {
+  "3349839": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
-    "test_type": "skipped"
+    "mutual_information": 0.007485784665583084,
+    "contingency_table": {
+      "N": {
+        "0": 2,
+        "1": 4
+      },
+      "P": {
+        "0": 2,
+        "1": 7
+      }
+    },
+    "test_type": "fisher_exact"
   },
-  "0.31": {
+  "3356372": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "1.18": {
+  "3367275": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.32": {
+  "3371639": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
-    "test_type": "skipped"
+    "mutual_information": 0.002354220557073128,
+    "contingency_table": {
+      "N": {
+        "0": 1,
+        "1": 5
+      },
+      "P": {
+        "0": 2,
+        "1": 7
+      }
+    },
+    "test_type": "fisher_exact"
   },
-  "0.33": {
+  "3375761": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
-    "test_type": "skipped"
+    "mutual_information": 0.002354220557073128,
+    "contingency_table": {
+      "N": {
+        "0": 1,
+        "1": 5
+      },
+      "P": {
+        "0": 2,
+        "1": 7
+      }
+    },
+    "test_type": "fisher_exact"
   },
-  "0.34": {
+  "3397479": {
     "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
-    "test_type": "skipped"
+    "p_value": 0.4857142857142857,
+    "cramers_v": 0.12009611535381536,
+    "mutual_information": 0.07485074779295942,
+    "contingency_table": {
+      "N": {
+        "0": 0,
+        "1": 6
+      },
+      "P": {
+        "0": 2,
+        "1": 7
+      }
+    },
+    "test_type": "fisher_exact"
   },
-  "1.19": {
+  "3496104": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.35": {
+  "3747199": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "1.20": {
+  "3840018": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.36": {
+  "3897227": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.37": {
+  "3901380": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "1.21": {
+  "3911271": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "1.22": {
+  "3936928": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "1.23": {
+  "3940073": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.38": {
+  "3982211": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.39": {
+  "4042229": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.40": {
+  "4103892": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.41": {
+  "4107781": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.42": {
+  "4108062": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.43": {
+  "4111919": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.44": {
+  "4112007": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.45": {
+  "4253774": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.46": {
+  "4253838": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.47": {
+  "4253898": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.48": {
+  "4254022": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.49": {
+  "4406999": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.50": {
+  "4494727": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "1.24": {
+  "4510303": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.51": {
+  "4510867": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.52": {
+  "4511023": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.53": {
+  "4511314": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.54": {
+  "4511449": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.55": {
+  "4512216": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.56": {
+  "4512634": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.57": {
+  "4513075": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.58": {
+  "4513161": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "1.25": {
+  "4515519": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.59": {
+  "4515802": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.60": {
+  "4517407": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "0.61": {
+  "4517751": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   },
-  "1.26": {
+  "4717031": {
     "chi2_statistic": null,
     "p_value": 1.0,
     "cramers_v": 0.0,
     "mutual_information": 0.0,
-    "error": "Sparse contingency table; test skipped",
+    "error": "Degenerate contingency table (shape: (1, 2))",
     "test_type": "skipped"
   }
 }

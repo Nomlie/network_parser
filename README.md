@@ -154,34 +154,30 @@ Summary Reports:
 ## Example Console Summary
 
 ```bash
-python -m network_parser.cli --genomic data/matrix.csv --meta data/labels.csv --label label --output-dir results/
-2025-09-09 15:13:37,354 - INFO - Attempting to import run_networkparser_analysis and NetworkParserConfig
-2025-09-09 15:13:38,148 - INFO - NumExpr defaulting to 8 threads.
-2025-09-09 15:13:40,279 - INFO - Successfully imported run_networkparser_analysis and NetworkParserConfig
-2025-09-09 15:13:40,279 - INFO - Running cli.py from: /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/network_parser/cli.py
-2025-09-09 15:13:40,280 - INFO - Starting NetworkParser pipeline
-2025-09-09 15:13:40,280 - INFO - Genomic data: data/matrix.csv
-2025-09-09 15:13:40,280 - INFO - Metadata: data/labels.csv
-2025-09-09 15:13:40,280 - INFO - Label column: label
-2025-09-09 15:13:40,280 - INFO - Output directory: results/
-2025-09-09 15:13:40,281 - INFO - Running network_parser.py from: /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/network_parser/network_parser.py
+cd /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parseroject/Code/MatrixSelector/input/example.csv --label Group --output-dir results/
+2025-09-16 15:46:28,251 - INFO - Attempting to import run_networkparser_analysis and NetworkParserConfig                                                      
+2025-09-16 15:46:29,103 - INFO - NumExpr defaulting to 8 threads.
+2025-09-16 15:46:31,280 - INFO - Successfully imported run_networkparser_analysis and NetworkParserConfig                                                     
+2025-09-16 15:46:31,281 - INFO - Running cli.py from: /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/network_parser/cli.py                 
+2025-09-16 15:46:31,282 - INFO - Starting NetworkParser pipeline
+2025-09-16 15:46:31,282 - INFO - Genomic data: /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/MatrixSelector/input/example.csv                            
+2025-09-16 15:46:31,282 - INFO - Label column: Group
+2025-09-16 15:46:31,282 - INFO - Output directory: results/
+2025-09-16 15:46:31,282 - INFO - Running network_parser.py from: /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/network_parser/network_parser.py                                                                         
 Initialized StatisticalValidator with provided configuration.
-2025-09-09 15:13:40,281 - INFO - Initialized NetworkParser with provided configuration.
-2025-09-09 15:13:40,281 - INFO - Loading genomic data...
-2025-09-09 15:13:40,281 - INFO - Loading genomic matrix from: data/matrix.csv
-2025-09-09 15:13:40,346 - INFO - Saved deduplicated genomic matrix to: results/deduplicated_genomic_matrix.csv
-2025-09-09 15:13:40,346 - INFO - Loading metadata...
-2025-09-09 15:13:40,346 - INFO - Loading metadata from: data/labels.csv
-2025-09-09 15:13:40,350 - WARNING - Duplicate sample IDs found in metadata: ['31_YP37_SZ']. Keeping first occurrence.
-2025-09-09 15:13:40,352 - INFO - Saved deduplicated metadata to: results/deduplicated_metadata.csv
-2025-09-09 15:13:40,352 - INFO - Aligning data...
-2025-09-09 15:13:40,352 - INFO - Aligning genomic data and metadata...
-2025-09-09 15:13:40,356 - INFO - Saved aligned genomic matrix to: results/aligned_genomic_matrix.csv
-2025-09-09 15:13:40,359 - INFO - Saved aligned metadata to: results/aligned_metadata.csv
-2025-09-09 15:13:40,359 - INFO - Aligned data: 23 samples retained.
-2025-09-09 15:13:40,359 - INFO - Starting feature discovery on 23 samples with 89 features...
-🔍 Starting feature discovery on 23 samples with 89 features...
-📊 Found 11 distinct labels: ['IP2666pIB1', 'MANG', 'MKUM', 'NP', 'PAK', 'PB', 'PrU', 'SZ', 'TLH', 'UST', 'VU']
+2025-09-16 15:46:31,282 - INFO - Initialized NetworkParser with provided configuration.                                                                       
+2025-09-16 15:46:31,282 - INFO - Loading genomic data...
+2025-09-16 15:46:31,282 - INFO - Loading genomic matrix from: /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/MatrixSelector/input/example.csv             
+2025-09-16 15:46:31,311 - INFO - Saved deduplicated genomic matrix to: results/deduplicated_genomic_matrix.csv                                                
+2025-09-16 15:46:31,311 - INFO - Aligning data...
+2025-09-16 15:46:31,311 - INFO - Aligning genomic data and metadata...
+2025-09-16 15:46:31,314 - INFO - Removed 9 samples with missing labels
+2025-09-16 15:46:31,315 - INFO - Saved aligned genomic matrix to: results/aligned_genomic_matrix.csv                                                          
+2025-09-16 15:46:31,315 - INFO - Saved aligned labels to: results/aligned_metadata.csv                                                                        
+2025-09-16 15:46:31,315 - INFO - Aligned data: 15 samples retained.
+2025-09-16 15:46:31,315 - INFO - Starting feature discovery on 15 samples with 89 features...                                                                 
+🔍 Starting feature discovery on 15 samples with 89 features...
+📊 Found 2 distinct labels: ['N', 'P']
 Initialized StatisticalValidator with provided configuration.
 🔄 Running bootstrap validation with 1000 samples...
    Bootstrap sample 1/1000
@@ -206,22 +202,20 @@ Saved epistatic interactions to: results/epistatic_interactions.json
 ============================================================
 🎯 FEATURE DISCOVERY SUMMARY
 ============================================================
-📈 Tree Accuracy: 0.783
-🏷️  Label Classes: |--- 0.10 <= 0.50
+📈 Tree Accuracy: 1.000
+🏷️  Label Classes: |--- 3219764 <= 0.50
 
-🌳 ROOT FEATURES (Global Discriminators): 7
-  1. 0.30 (confidence: 0.337)
-  2. 0.10 (confidence: 0.363)
-  3. 0.15 (confidence: 0.262)
-  4. 0.32 (confidence: 0.390)
-  5. 0.17 (confidence: 0.469)
+🌳 ROOT FEATURES (Global Discriminators): 1
+  1. 3219764 (confidence: 0.437)
 
-🔗 EPISTATIC INTERACTIONS: 2
-  0.30 → 0.6 (strength: 0.811)
-  0.10 → 0.30 (strength: 0.414)
+🔗 EPISTATIC INTERACTIONS: 0
 
 ✅ STATISTICAL VALIDATION:
-  Significant features after correction: 0
+  Significant features after correction: 4
+   - 679712: corrected p=4.446e-03
+   - 1392623: corrected p=4.446e-03
+   - 1572071: corrected p=4.446e-03
+   - 3219764: corrected p=4.446e-03
 ============================================================
 
 🔄 Running bootstrap validation with 1000 samples...
@@ -240,9 +234,9 @@ Saved bootstrap results to: results/bootstrap_results.json
 Saved chi-squared results to: results/chi_squared_results.json
 🔧 Applying multiple testing correction using fdr_bh...
 Saved multiple testing results to: results/multiple_testing_results.json
-2025-09-09 15:13:45,582 - INFO - Saved decision tree features to: results/decision_tree_features.json
-2025-09-09 15:13:45,666 - INFO - Saved final results to: results/networkparser_results_20250909_151345.json
-2025-09-09 15:13:45,667 - INFO - NetworkParser pipeline completed successfully
+2025-09-16 15:46:36,377 - INFO - Saved decision tree features to: results/decision_tree_features.json                                                         
+2025-09-16 15:46:36,459 - INFO - Saved final results to: results/networkparser_results_20250916_154636.json                                                   
+2025-09-16 15:46:36,461 - INFO - NetworkParser pipeline completed successfully
 
 ```
 ---

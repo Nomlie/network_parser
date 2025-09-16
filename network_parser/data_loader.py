@@ -131,7 +131,7 @@ class DataLoader:
                    label_column: str,
                    output_dir: Optional[str] = None) -> Tuple[pd.DataFrame, pd.Series]:
         """
-        Align genomic data and metadata by sample IDs, extracting labels.
+        Align genomic data and metadata by sample IDs, extracting labels and removing NaN labels.
 
         Args:
             genomic_data: Genomic data DataFrame with samples as index.
@@ -164,6 +164,20 @@ class DataLoader:
             else:
                 logger.error(f"Label column '{label_column}' not found in metadata or genomic data.")
                 raise ValueError(f"Label column '{label_column}' not found.")
+            
+            # Remove rows with NaN in labels
+            initial_samples = len(common_samples)
+            non_na_mask = ~labels.isna()
+            aligned_genomic = aligned_genomic.loc[non_na_mask].copy()
+            labels = labels[non_na_mask].copy()
+            samples_removed = initial_samples - len(labels)
+            
+            if samples_removed > 0:
+                logger.info(f"Removed {samples_removed} samples with missing labels")
+            
+            if len(labels) == 0:
+                logger.error("No valid data remaining after removing samples with missing labels")
+                raise ValueError("No valid data after removing missing labels")
         else:
             # No metadata provided; labels must be in genomic_data
             if label_column not in genomic_data.columns:
@@ -171,7 +185,20 @@ class DataLoader:
                 raise ValueError(f"Label column '{label_column}' not found.")
             aligned_genomic = genomic_data.drop(columns=[label_column]).copy()
             labels = genomic_data[label_column]
-            common_samples = genomic_data.index
+            
+            # Remove rows with NaN in labels
+            initial_samples = len(genomic_data)
+            non_na_mask = ~labels.isna()
+            aligned_genomic = aligned_genomic.loc[non_na_mask].copy()
+            labels = labels[non_na_mask].copy()
+            samples_removed = initial_samples - len(labels)
+            
+            if samples_removed > 0:
+                logger.info(f"Removed {samples_removed} samples with missing labels")
+            
+            if len(labels) == 0:
+                logger.error("No valid data remaining after removing samples with missing labels")
+                raise ValueError("No valid data after removing missing labels")
         
         # Save aligned data if output_dir is provided
         if output_dir:
@@ -182,7 +209,7 @@ class DataLoader:
             logger.info(f"Saved aligned genomic matrix to: {output_dir / 'aligned_genomic_matrix.csv'}")
             
             labels.to_csv(output_dir / "aligned_metadata.csv")
-            logger.info(f"Saved aligned metadata to: {output_dir / 'aligned_metadata.csv'}")
+            logger.info(f"Saved aligned labels to: {output_dir / 'aligned_metadata.csv'}")
         
-        logger.info(f"Aligned data: {len(common_samples)} samples retained.")
+        logger.info(f"Aligned data: {len(labels)} samples retained.")
         return aligned_genomic, labels
