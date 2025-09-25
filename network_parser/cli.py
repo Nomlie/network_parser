@@ -1,176 +1,119 @@
+# network_parser/cli.py
 import argparse
-import json
-import logging
 import sys
+import logging
 from pathlib import Path
 from typing import Optional
+import time
+import numpy as np
 
-# Configure logging
+# Configure detailed logging with timestamps
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('pipeline.log')
+    ]
 )
 logger = logging.getLogger(__name__)
 
-# Debug import attempt
-logger.info("Attempting to import run_networkparser_analysis and NetworkParserConfig")
 try:
-    from network_parser.network_parser import run_networkparser_analysis
     from network_parser.config import NetworkParserConfig
-    logger.info("Successfully imported run_networkparser_analysis and NetworkParserConfig")
+    from network_parser import run_networkparser_analysis
 except ImportError as e:
-    logger.error(f"ImportError: {e}. Ensure 'network_parser' is in PYTHONPATH and network_parser.py exists at /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/network_parser/network_parser.py")
+    logger.error(f"Import error: {e}")
     sys.exit(1)
 
-def validate_file_path(file_path: str, file_type: str) -> Path:
-    """Validate if file exists and has correct extension."""
-    path = Path(file_path)
-    if not path.is_file():
-        logger.error(f"{file_type} file does not exist: {file_path}")
+def validate_file_path(file_path: str, file_type: str) -> None:
+    """Validate if a file exists."""
+    if not Path(file_path).is_file():
+        logger.error(f"{file_type} file not found: {file_path}")
         sys.exit(1)
-    
-    valid_extensions = {
-        'genomic': ('.csv', '.tsv', '.fasta', '.vcf'),
-        'meta': ('.csv', '.tsv'),
-        'known_markers': ('.txt', '.csv', '.tsv'),
-        'config': ('.json',)
-    }
-    
-    if file_type in valid_extensions and not path.suffix.lower() in valid_extensions[file_type]:
-        logger.error(f"Invalid {file_type} file format: {file_path}. Expected extensions: {valid_extensions[file_type]}")
-        sys.exit(1)
-    
-    return path
 
-def setup_argument_parser() -> argparse.ArgumentParser:
-    """Set up the argument parser with organized argument groups."""
+def load_config(config_path: Optional[str], default_config: NetworkParserConfig) -> NetworkParserConfig:
+    """Load configuration from file or use default."""
+    if config_path:
+        logger.info(f"Loading config from: {config_path}")
+        # Implement JSON/YAML loading here if needed
+        import json
+        with open(config_path, 'r') as f:
+            config_data = json.load(f)
+            for key, value in config_data.items():
+                setattr(default_config, key, value)
+    return default_config
+
+def setup_parser() -> argparse.ArgumentParser:
+    """Setup CLI parser with groups."""
     parser = argparse.ArgumentParser(
-        prog="network_parser.cli",
-        description=(
-            "NetworkParser: Interpretable framework for genomic feature discovery.\n"
-            "Integrates decision tree-based feature discovery, statistical validation, "
-            "and interaction detection into a single reproducible pipeline."
-        ),
+        prog="network_parser",
+        description="NetworkParser: Interpretable genomic feature discovery pipeline.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-        epilog="Example: python -m network_parser.cli --genomic data/matrix.csv --meta data/labels.csv --label label --output-dir results/"
+        epilog="Example: network_parser --genomic data.csv --label phenotype"
     )
-
-    # Input File Arguments
-    input_group = parser.add_argument_group('Required Input Files')
-    input_group.add_argument(
-        "--genomic", required=True, type=str,
-        help="Path to genomic matrix file (CSV, TSV, FASTA, or VCF supported)."
-    )
-    input_group.add_argument(
-        "--label", required=True, type=str,
-        help="Column in genomic data or metadata to use as labels (phenotype or class)."
-    )
-
-    # Optional Arguments
-    optional_group = parser.add_argument_group('Optional Parameters')
-    optional_group.add_argument(
-        "--meta", type=str, default=None,
-        help="Optional path to metadata file (CSV/TSV with sample annotations)."
-    )
-    optional_group.add_argument(
-        "--known-markers", type=str, default=None,
-        help="Optional file containing a list of known genetic markers for benchmarking."
-    )
-    optional_group.add_argument(
-        "--output-dir", type=str, default=None,
-        help="Directory to save results and intermediate files."
-    )
-    optional_group.add_argument(
-        "--export-format", type=str, choices=["json", "pickle"], default="json",
-        help="Format for saving results."
-    )
-    optional_group.add_argument(
-        "--validate-statistics", action="store_true",
-        help="Enable statistical validation of features (bootstrap, chi-squared, multiple testing)."
-    )
-    optional_group.add_argument(
-        "--validate-interactions", action="store_true",
-        help="Enable validation of epistatic interactions with permutation tests."
-    )
-
-    # Configuration Arguments
-    config_group = parser.add_argument_group('Configuration')
-    config_group.add_argument(
-        "--config", type=str, default=None,
-        help="Optional JSON config file with advanced parameters."
-    )
-    config_group.add_argument(
-        "--version", action="version", version="NetworkParser 0.1.0",
-        help="Show program's version number and exit."
-    )
-
+    input_group = parser.add_argument_group('Input Files')
+    input_group.add_argument("--genomic", required=True, type=str,
+                             help="Genomic matrix (CSV/TSV/FASTA/VCF) containing features and optionally labels.")
+    input_group.add_argument("--meta", type=str, default=None,
+                             help="Metadata (CSV/TSV) with annotations including labels (optional if labels are in genomic).")
+    input_group.add_argument("--label", required=True, type=str,
+                             help="Label column name, must exist in meta or genomic file.")
+    input_group.add_argument("--known-markers", type=str, default=None,
+                             help="Known markers file (TXT/CSV/TSV)")
+    
+    opt_group = parser.add_argument_group('Options')
+    opt_group.add_argument("--output-dir", type=str, default="results/",
+                           help="Output directory")
+    opt_group.add_argument("--config", type=str, default=None,
+                           help="JSON/YAML config file")
+    opt_group.add_argument("--validate-statistics", action="store_true", default=True,
+                           help="Run statistical validation")
+    opt_group.add_argument("--validate-interactions", action="store_true", default=True,
+                           help="Validate epistatic interactions")
+    opt_group.add_argument("--export-format", choices=["json", "pickle"], default="json",
+                           help="Export format")
+    opt_group.add_argument("--version", action="version", version="NetworkParser 1.0.0")
+    
     return parser
 
-def load_config(config_path: Optional[str]) -> NetworkParserConfig:
-    """Load and validate configuration from JSON file."""
-    config = NetworkParserConfig()
-    if config_path:
-        try:
-            config_path = validate_file_path(config_path, 'config')
-            with config_path.open('r') as f:
-                user_cfg = json.load(f)
-            for key, value in user_cfg.items():
-                if hasattr(config, key):
-                    setattr(config, key, value)
-                else:
-                    logger.warning(f"Unknown configuration parameter: {key}")
-        except json.JSONDecodeError as e:
-            logger.error(f"Invalid JSON in config file: {e}")
-            sys.exit(1)
-        except Exception as e:
-            logger.error(f"Error loading config file: {e}")
-            sys.exit(1)
-    return config
-
 def main():
-    """Main function to orchestrate the NetworkParser pipeline."""
+    """CLI entrypoint."""
+    parser = setup_parser()
+    args = parser.parse_args()
+    
+    # Validate inputs
+    validate_file_path(args.genomic, 'genomic')
+    if args.meta:
+        validate_file_path(args.meta, 'meta')
+    if args.known_markers:
+        validate_file_path(args.known_markers, 'known_markers')
+    
+    # Config
+    config = load_config(args.config, NetworkParserConfig())
+    
+    logger.info("Attempting to import run_networkparser_analysis and NetworkParserConfig")
+    logger.info(f"Running cli.py from: {Path(__file__).resolve()}")
+    logger.info("Starting NetworkParser pipeline")
+    logger.info(f"Genomic data: {Path(args.genomic).resolve()}")
+    logger.info(f"Label column: {args.label}")
+    logger.info(f"Output directory: {Path(args.output_dir).resolve()}")
+    
     try:
-        logger.info(f"Running cli.py from: {Path(__file__).resolve()}")
-        parser = setup_argument_parser()
-        args = parser.parse_args()
-
-        genomic_path = validate_file_path(args.genomic, 'genomic')
-        meta_path = validate_file_path(args.meta, 'meta') if args.meta else None
-        known_markers = validate_file_path(args.known_markers, 'known_markers') if args.known_markers else None
-        output_dir = args.output_dir
-
-        logger.info("Starting NetworkParser pipeline")
-        logger.info(f"Genomic data: {genomic_path}")
-        if meta_path:
-            logger.info(f"Metadata: {meta_path}")
-        logger.info(f"Label column: {args.label}")
-        if known_markers:
-            logger.info(f"Known markers: {known_markers}")
-        if output_dir:
-            logger.info(f"Output directory: {output_dir}")
-
-        config = load_config(args.config)
-
+        start_time = time.time()
         run_networkparser_analysis(
-            genomic_data_path=str(genomic_path),
-            metadata_path=str(meta_path) if meta_path else None,
+            genomic_path=args.genomic,  # Changed from genomic_data_path to genomic_path
+            meta_path=args.meta,        # Changed from metadata_path to meta_path
             label_column=args.label,
-            known_markers_path=str(known_markers) if known_markers else None,
-            output_dir=output_dir,
+            known_markers_path=args.known_markers,
+            output_dir=args.output_dir,
             config=config,
             validate_statistics=args.validate_statistics,
-            validate_interactions=args.validate_interactions,
-            export_format=args.export_format
+            validate_interactions=args.validate_interactions
         )
-
-        logger.info("NetworkParser pipeline completed successfully")
-
-    except KeyboardInterrupt:
-        logger.error("Pipeline interrupted by user")
-        sys.exit(1)
+        elapsed_time = time.time() - start_time
+        logger.info(f"NetworkParser pipeline completed successfully in {elapsed_time:.2f} seconds")
     except Exception as e:
-        logger.error(f"Pipeline failed: {str(e)}")
+        logger.error(f"Pipeline failed: {e}")
         sys.exit(1)
 
 if __name__ == "__main__":

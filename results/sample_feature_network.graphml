@@ -1,0 +1,57 @@
+<?xml version='1.0' encoding='utf-8'?>
+<graphml xmlns="http://graphml.graphdrawing.org/xmlns" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://graphml.graphdrawing.org/xmlns http://graphml.graphdrawing.org/xmlns/1.0/graphml.xsd"><key id="d0" for="node" attr.name="type" attr.type="string"/>
+<graph edgedefault="undirected"><node id="66_YP38_PB">
+  <data key="d0">sample</data>
+</node>
+<node id="12_YP48_MANG">
+  <data key="d0">sample</data>
+</node>
+<node id="12_YP47_MANG">
+  <data key="d0">sample</data>
+</node>
+<node id="12_YP_45_MANG">
+  <data key="d0">sample</data>
+</node>
+<node id="12_YP_50_MANG">
+  <data key="d0">sample</data>
+</node>
+<node id="R2_32_YP_93">
+  <data key="d0">sample</data>
+</node>
+<node id="3_YP_78_ATYR">
+  <data key="d0">sample</data>
+</node>
+<node id="48_YP14_PAK">
+  <data key="d0">sample</data>
+</node>
+<node id="3_YP_08_ATYR">
+  <data key="d0">sample</data>
+</node>
+<node id="15_YP27_VUP_">
+  <data key="d0">sample</data>
+</node>
+<node id="5_YP48_MKUM">
+  <data key="d0">sample</data>
+</node>
+<node id="3_YP_14_ARAL">
+  <data key="d0">sample</data>
+</node>
+<node id="3_YP_79_ATYR">
+  <data key="d0">sample</data>
+</node>
+<node id="28_YP48_NP">
+  <data key="d0">sample</data>
+</node>
+<node id="8_YP55_NP">
+  <data key="d0">sample</data>
+</node>
+<node id="3219764">
+  <data key="d0">feature</data>
+</node>
+<edge source="66_YP38_PB" target="3219764"/>
+<edge source="48_YP14_PAK" target="3219764"/>
+<edge source="5_YP48_MKUM" target="3219764"/>
+<edge source="3_YP_14_ARAL" target="3219764"/>
+<edge source="28_YP48_NP" target="3219764"/>
+<edge source="8_YP55_NP" target="3219764"/>
+</graph></graphml>

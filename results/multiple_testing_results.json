@@ -1,900 +1,442 @@
 {
-  "101361": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "366141": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "384032": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
   "497957": {
-    "original_p_value": 1.0,
     "corrected_p_value": 1.0,
     "significant": false,
+    "statistic": null,
+    "p_value": 1.0,
+    "dof": null,
     "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0356307692888162,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "522385": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "618552": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "652975": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
+    "mutual_info": 0.0356307692888162,
+    "effect_size_class": "negligible",
+    "contingency_table": {
+      "N": {
+        "0": 6,
+        "1": 0
+      },
+      "P": {
+        "0": 8,
+        "1": 1
+      }
+    }
   },
   "679712": {
-    "original_p_value": 0.0001998001998001998,
-    "corrected_p_value": 0.004445554445554446,
+    "corrected_p_value": 0.001098901098901099,
     "significant": true,
+    "statistic": null,
+    "p_value": 0.0001998001998001998,
+    "dof": null,
     "cramers_v": 0.8611111111111112,
-    "effect_size": "large",
-    "mutual_information": 0.6730116670092563,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "698985": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
+    "mutual_info": 0.6730116670092563,
+    "effect_size_class": "large",
+    "contingency_table": {
+      "N": {
+        "0": 0,
+        "1": 6
+      },
+      "P": {
+        "0": 9,
+        "1": 0
+      }
+    }
   },
   "771128": {
-    "original_p_value": 0.006993006993006994,
-    "corrected_p_value": 0.1244755244755245,
-    "significant": false,
+    "corrected_p_value": 0.030769230769230774,
+    "significant": true,
+    "statistic": null,
+    "p_value": 0.006993006993006994,
+    "dof": null,
     "cramers_v": 0.627376434428478,
-    "effect_size": "large",
-    "mutual_information": 0.3730995898792253,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "798590": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
+    "mutual_info": 0.3730995898792253,
+    "effect_size_class": "large",
+    "contingency_table": {
+      "N": {
+        "0": 0,
+        "1": 6
+      },
+      "P": {
+        "0": 7,
+        "1": 2
+      }
+    }
   },
   "912181": {
-    "original_p_value": 0.4,
-    "corrected_p_value": 1.0,
+    "corrected_p_value": 0.6678571428571429,
     "significant": false,
+    "statistic": null,
+    "p_value": 0.4,
+    "dof": null,
     "cramers_v": 0.05455447255899806,
-    "effect_size": "negligible",
-    "mutual_information": 0.06470554324811373,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "953226": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "1004403": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "1101240": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "1101401": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "1119694": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "1277826": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
+    "mutual_info": 0.06470554324811373,
+    "effect_size_class": "negligible",
+    "contingency_table": {
+      "N": {
+        "0": 1,
+        "1": 5
+      },
+      "P": {
+        "0": 0,
+        "1": 9
+      }
+    }
   },
   "1290472": {
-    "original_p_value": 0.4857142857142857,
-    "corrected_p_value": 1.0,
+    "corrected_p_value": 0.6678571428571429,
     "significant": false,
+    "statistic": null,
+    "p_value": 0.4857142857142857,
+    "dof": null,
     "cramers_v": 0.12009611535381536,
-    "effect_size": "small",
-    "mutual_information": 0.07485074779295942,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "1314520": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
+    "mutual_info": 0.07485074779295942,
+    "effect_size_class": "small",
+    "contingency_table": {
+      "N": {
+        "0": 0,
+        "1": 6
+      },
+      "P": {
+        "0": 2,
+        "1": 7
+      }
+    }
   },
   "1392623": {
-    "original_p_value": 0.0001998001998001998,
-    "corrected_p_value": 0.004445554445554446,
+    "corrected_p_value": 0.001098901098901099,
     "significant": true,
+    "statistic": null,
+    "p_value": 0.0001998001998001998,
+    "dof": null,
     "cramers_v": 0.8611111111111112,
-    "effect_size": "large",
-    "mutual_information": 0.6730116670092563,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
+    "mutual_info": 0.6730116670092563,
+    "effect_size_class": "large",
+    "contingency_table": {
+      "N": {
+        "0": 0,
+        "1": 6
+      },
+      "P": {
+        "0": 9,
+        "1": 0
+      }
+    }
   },
   "1470751": {
-    "original_p_value": 0.010989010989010988,
-    "corrected_p_value": 0.13971742543171117,
-    "significant": false,
+    "corrected_p_value": 0.034536891679748834,
+    "significant": true,
+    "statistic": null,
+    "p_value": 0.010989010989010988,
+    "dof": null,
     "cramers_v": 0.5846845821518305,
-    "effect_size": "large",
-    "mutual_information": 0.3253095041001758,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
+    "mutual_info": 0.3253095041001758,
+    "effect_size_class": "large",
+    "contingency_table": {
+      "N": {
+        "0": 2,
+        "1": 4
+      },
+      "P": {
+        "0": 9,
+        "1": 0
+      }
+    }
   },
   "1551618": {
-    "original_p_value": 0.4857142857142857,
-    "corrected_p_value": 1.0,
+    "corrected_p_value": 0.6678571428571429,
     "significant": false,
+    "statistic": null,
+    "p_value": 0.4857142857142857,
+    "dof": null,
     "cramers_v": 0.12009611535381536,
-    "effect_size": "small",
-    "mutual_information": 0.07485074779295942,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
+    "mutual_info": 0.07485074779295942,
+    "effect_size_class": "small",
+    "contingency_table": {
+      "N": {
+        "0": 0,
+        "1": 6
+      },
+      "P": {
+        "0": 2,
+        "1": 7
+      }
+    }
   },
   "1572071": {
-    "original_p_value": 0.0001998001998001998,
-    "corrected_p_value": 0.004445554445554446,
+    "corrected_p_value": 0.001098901098901099,
     "significant": true,
+    "statistic": null,
+    "p_value": 0.0001998001998001998,
+    "dof": null,
     "cramers_v": 0.8611111111111112,
-    "effect_size": "large",
-    "mutual_information": 0.6730116670092563,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
+    "mutual_info": 0.6730116670092563,
+    "effect_size_class": "large",
+    "contingency_table": {
+      "N": {
+        "0": 0,
+        "1": 6
+      },
+      "P": {
+        "0": 9,
+        "1": 0
+      }
+    }
   },
   "1678339": {
-    "original_p_value": 0.010989010989010992,
-    "corrected_p_value": 0.13971742543171117,
-    "significant": false,
+    "corrected_p_value": 0.034536891679748834,
+    "significant": true,
+    "statistic": null,
+    "p_value": 0.010989010989010992,
+    "dof": null,
     "cramers_v": 0.5833333333333333,
-    "effect_size": "large",
-    "mutual_information": 0.2834879259569151,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "1790648": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
+    "mutual_info": 0.2834879259569151,
+    "effect_size_class": "large",
+    "contingency_table": {
+      "N": {
+        "0": 5,
+        "1": 1
+      },
+      "P": {
+        "0": 1,
+        "1": 8
+      }
+    }
   },
   "1901101": {
-    "original_p_value": 0.4,
-    "corrected_p_value": 1.0,
+    "corrected_p_value": 0.6678571428571429,
     "significant": false,
+    "statistic": null,
+    "p_value": 0.4,
+    "dof": null,
     "cramers_v": 0.05455447255899806,
-    "effect_size": "negligible",
-    "mutual_information": 0.06470554324811373,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "1907508": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
+    "mutual_info": 0.06470554324811373,
+    "effect_size_class": "negligible",
+    "contingency_table": {
+      "N": {
+        "0": 1,
+        "1": 5
+      },
+      "P": {
+        "0": 0,
+        "1": 9
+      }
+    }
   },
   "1973797": {
-    "original_p_value": 0.4857142857142857,
-    "corrected_p_value": 1.0,
+    "corrected_p_value": 0.6678571428571429,
     "significant": false,
+    "statistic": null,
+    "p_value": 0.4857142857142857,
+    "dof": null,
     "cramers_v": 0.12009611535381536,
-    "effect_size": "small",
-    "mutual_information": 0.07485074779295942,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "2243520": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "2274995": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "2306236": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "2378301": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "2510433": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "2616573": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
+    "mutual_info": 0.07485074779295942,
+    "effect_size_class": "small",
+    "contingency_table": {
+      "N": {
+        "0": 0,
+        "1": 6
+      },
+      "P": {
+        "0": 2,
+        "1": 7
+      }
+    }
   },
   "2640767": {
-    "original_p_value": 0.6223776223776224,
-    "corrected_p_value": 1.0,
+    "corrected_p_value": 0.8054298642533937,
     "significant": false,
+    "statistic": null,
+    "p_value": 0.6223776223776224,
+    "dof": null,
     "cramers_v": 0.02777777777777778,
-    "effect_size": "negligible",
-    "mutual_information": 0.013844293808390418,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "2652085": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "2699973": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "2705023": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "2708566": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
+    "mutual_info": 0.013844293808390418,
+    "effect_size_class": "negligible",
+    "contingency_table": {
+      "N": {
+        "0": 3,
+        "1": 3
+      },
+      "P": {
+        "0": 6,
+        "1": 3
+      }
+    }
   },
   "2860050": {
-    "original_p_value": 0.23516483516483516,
-    "corrected_p_value": 1.0,
+    "corrected_p_value": 0.6467032967032966,
     "significant": false,
+    "statistic": null,
+    "p_value": 0.23516483516483516,
+    "dof": null,
     "cramers_v": 0.27695585470349865,
-    "effect_size": "small",
-    "mutual_information": 0.09335704168830361,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
+    "mutual_info": 0.09335704168830361,
+    "effect_size_class": "small",
+    "contingency_table": {
+      "N": {
+        "0": 3,
+        "1": 3
+      },
+      "P": {
+        "0": 8,
+        "1": 1
+      }
+    }
   },
   "2909481": {
-    "original_p_value": 1.0,
     "corrected_p_value": 1.0,
     "significant": false,
+    "statistic": null,
+    "p_value": 1.0,
+    "dof": null,
     "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0014874911314458616,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "2994700": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
+    "mutual_info": 0.0014874911314458616,
+    "effect_size_class": "negligible",
+    "contingency_table": {
+      "N": {
+        "0": 3,
+        "1": 3
+      },
+      "P": {
+        "0": 5,
+        "1": 4
+      }
+    }
   },
   "3089432": {
-    "original_p_value": 0.4857142857142857,
-    "corrected_p_value": 1.0,
+    "corrected_p_value": 0.6678571428571429,
     "significant": false,
+    "statistic": null,
+    "p_value": 0.4857142857142857,
+    "dof": null,
     "cramers_v": 0.12009611535381536,
-    "effect_size": "small",
-    "mutual_information": 0.07485074779295942,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "3112585": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
+    "mutual_info": 0.07485074779295942,
+    "effect_size_class": "small",
+    "contingency_table": {
+      "N": {
+        "0": 0,
+        "1": 6
+      },
+      "P": {
+        "0": 2,
+        "1": 7
+      }
+    }
   },
   "3136337": {
-    "original_p_value": 0.48571428571428577,
-    "corrected_p_value": 1.0,
+    "corrected_p_value": 0.6678571428571429,
     "significant": false,
+    "statistic": null,
+    "p_value": 0.48571428571428577,
+    "dof": null,
     "cramers_v": 0.12009611535381536,
-    "effect_size": "small",
-    "mutual_information": 0.07485074779295942,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "3187483": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
+    "mutual_info": 0.07485074779295942,
+    "effect_size_class": "small",
+    "contingency_table": {
+      "N": {
+        "0": 6,
+        "1": 0
+      },
+      "P": {
+        "0": 7,
+        "1": 2
+      }
+    }
   },
   "3219764": {
-    "original_p_value": 0.0001998001998001998,
-    "corrected_p_value": 0.004445554445554446,
+    "corrected_p_value": 0.001098901098901099,
     "significant": true,
+    "statistic": null,
+    "p_value": 0.0001998001998001998,
+    "dof": null,
     "cramers_v": 0.8611111111111112,
-    "effect_size": "large",
-    "mutual_information": 0.6730116670092563,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
+    "mutual_info": 0.6730116670092563,
+    "effect_size_class": "large",
+    "contingency_table": {
+      "N": {
+        "0": 0,
+        "1": 6
+      },
+      "P": {
+        "0": 9,
+        "1": 0
+      }
+    }
   },
   "3349839": {
-    "original_p_value": 1.0,
     "corrected_p_value": 1.0,
     "significant": false,
+    "statistic": null,
+    "p_value": 1.0,
+    "dof": null,
     "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.007485784665583084,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "3356372": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "3367275": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
+    "mutual_info": 0.007485784665583084,
+    "effect_size_class": "negligible",
+    "contingency_table": {
+      "N": {
+        "0": 2,
+        "1": 4
+      },
+      "P": {
+        "0": 2,
+        "1": 7
+      }
+    }
   },
   "3371639": {
-    "original_p_value": 1.0,
     "corrected_p_value": 1.0,
     "significant": false,
+    "statistic": null,
+    "p_value": 1.0,
+    "dof": null,
     "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.002354220557073128,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
+    "mutual_info": 0.002354220557073128,
+    "effect_size_class": "negligible",
+    "contingency_table": {
+      "N": {
+        "0": 1,
+        "1": 5
+      },
+      "P": {
+        "0": 2,
+        "1": 7
+      }
+    }
   },
   "3375761": {
-    "original_p_value": 1.0,
     "corrected_p_value": 1.0,
     "significant": false,
+    "statistic": null,
+    "p_value": 1.0,
+    "dof": null,
     "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.002354220557073128,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
+    "mutual_info": 0.002354220557073128,
+    "effect_size_class": "negligible",
+    "contingency_table": {
+      "N": {
+        "0": 1,
+        "1": 5
+      },
+      "P": {
+        "0": 2,
+        "1": 7
+      }
+    }
   },
   "3397479": {
-    "original_p_value": 0.4857142857142857,
-    "corrected_p_value": 1.0,
+    "corrected_p_value": 0.6678571428571429,
     "significant": false,
+    "statistic": null,
+    "p_value": 0.4857142857142857,
+    "dof": null,
     "cramers_v": 0.12009611535381536,
-    "effect_size": "small",
-    "mutual_information": 0.07485074779295942,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "3496104": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "3747199": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "3840018": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "3897227": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "3901380": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "3911271": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "3936928": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "3940073": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "3982211": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "4042229": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "4103892": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "4107781": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "4108062": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "4111919": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "4112007": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "4253774": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "4253838": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "4253898": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "4254022": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "4406999": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "4494727": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "4510303": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "4510867": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "4511023": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "4511314": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "4511449": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "4512216": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "4512634": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "4513075": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "4513161": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "4515519": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "4515802": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "4517407": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "4517751": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "4717031": {
-    "original_p_value": 1.0,
-    "corrected_p_value": 1.0,
-    "significant": false,
-    "cramers_v": 0.0,
-    "effect_size": "negligible",
-    "mutual_information": 0.0,
-    "chi2_statistic": null,
-    "correction_method": "fdr_bh"
-  },
-  "_summary": {
-    "n_features_tested": 89,
-    "n_significant_original": 7,
-    "n_significant_corrected": 4,
-    "alpha_level": 0.05,
-    "correction_method": "fdr_bh",
-    "family_wise_error_rate": null
+    "mutual_info": 0.07485074779295942,
+    "effect_size_class": "small",
+    "contingency_table": {
+      "N": {
+        "0": 0,
+        "1": 6
+      },
+      "P": {
+        "0": 2,
+        "1": 7
+      }
+    }
   }
 }
