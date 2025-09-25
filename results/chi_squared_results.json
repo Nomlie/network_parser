@@ -1,33 +1,11 @@
 {
-  "101361": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "366141": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "384032": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
   "497957": {
-    "chi2_statistic": null,
+    "statistic": null,
     "p_value": 1.0,
+    "dof": null,
     "cramers_v": 0.0,
-    "mutual_information": 0.0356307692888162,
+    "mutual_info": 0.0356307692888162,
+    "effect_size_class": "negligible",
     "contingency_table": {
       "N": {
         "0": 6,
@@ -37,38 +15,15 @@
         "0": 8,
         "1": 1
       }
-    },
-    "test_type": "fisher_exact"
-  },
-  "522385": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "618552": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "652975": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
+    }
   },
   "679712": {
-    "chi2_statistic": null,
+    "statistic": null,
     "p_value": 0.0001998001998001998,
+    "dof": null,
     "cramers_v": 0.8611111111111112,
-    "mutual_information": 0.6730116670092563,
+    "mutual_info": 0.6730116670092563,
+    "effect_size_class": "large",
     "contingency_table": {
       "N": {
         "0": 0,
@@ -78,22 +33,15 @@
         "0": 9,
         "1": 0
       }
-    },
-    "test_type": "fisher_exact"
-  },
-  "698985": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
+    }
   },
   "771128": {
-    "chi2_statistic": null,
+    "statistic": null,
     "p_value": 0.006993006993006994,
+    "dof": null,
     "cramers_v": 0.627376434428478,
-    "mutual_information": 0.3730995898792253,
+    "mutual_info": 0.3730995898792253,
+    "effect_size_class": "large",
     "contingency_table": {
       "N": {
         "0": 0,
@@ -103,22 +51,15 @@
         "0": 7,
         "1": 2
       }
-    },
-    "test_type": "fisher_exact"
-  },
-  "798590": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
+    }
   },
   "912181": {
-    "chi2_statistic": null,
+    "statistic": null,
     "p_value": 0.4,
+    "dof": null,
     "cramers_v": 0.05455447255899806,
-    "mutual_information": 0.06470554324811373,
+    "mutual_info": 0.06470554324811373,
+    "effect_size_class": "negligible",
     "contingency_table": {
       "N": {
         "0": 1,
@@ -128,62 +69,15 @@
         "0": 0,
         "1": 9
       }
-    },
-    "test_type": "fisher_exact"
-  },
-  "953226": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "1004403": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "1101240": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "1101401": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "1119694": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "1277826": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
+    }
   },
   "1290472": {
-    "chi2_statistic": null,
+    "statistic": null,
     "p_value": 0.4857142857142857,
+    "dof": null,
     "cramers_v": 0.12009611535381536,
-    "mutual_information": 0.07485074779295942,
+    "mutual_info": 0.07485074779295942,
+    "effect_size_class": "small",
     "contingency_table": {
       "N": {
         "0": 0,
@@ -193,22 +87,15 @@
         "0": 2,
         "1": 7
       }
-    },
-    "test_type": "fisher_exact"
-  },
-  "1314520": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
+    }
   },
   "1392623": {
-    "chi2_statistic": null,
+    "statistic": null,
     "p_value": 0.0001998001998001998,
+    "dof": null,
     "cramers_v": 0.8611111111111112,
-    "mutual_information": 0.6730116670092563,
+    "mutual_info": 0.6730116670092563,
+    "effect_size_class": "large",
     "contingency_table": {
       "N": {
         "0": 0,
@@ -218,14 +105,15 @@
         "0": 9,
         "1": 0
       }
-    },
-    "test_type": "fisher_exact"
+    }
   },
   "1470751": {
-    "chi2_statistic": null,
+    "statistic": null,
     "p_value": 0.010989010989010988,
+    "dof": null,
     "cramers_v": 0.5846845821518305,
-    "mutual_information": 0.3253095041001758,
+    "mutual_info": 0.3253095041001758,
+    "effect_size_class": "large",
     "contingency_table": {
       "N": {
         "0": 2,
@@ -235,14 +123,15 @@
         "0": 9,
         "1": 0
       }
-    },
-    "test_type": "fisher_exact"
+    }
   },
   "1551618": {
-    "chi2_statistic": null,
+    "statistic": null,
     "p_value": 0.4857142857142857,
+    "dof": null,
     "cramers_v": 0.12009611535381536,
-    "mutual_information": 0.07485074779295942,
+    "mutual_info": 0.07485074779295942,
+    "effect_size_class": "small",
     "contingency_table": {
       "N": {
         "0": 0,
@@ -252,14 +141,15 @@
         "0": 2,
         "1": 7
       }
-    },
-    "test_type": "fisher_exact"
+    }
   },
   "1572071": {
-    "chi2_statistic": null,
+    "statistic": null,
     "p_value": 0.0001998001998001998,
+    "dof": null,
     "cramers_v": 0.8611111111111112,
-    "mutual_information": 0.6730116670092563,
+    "mutual_info": 0.6730116670092563,
+    "effect_size_class": "large",
     "contingency_table": {
       "N": {
         "0": 0,
@@ -269,14 +159,15 @@
         "0": 9,
         "1": 0
       }
-    },
-    "test_type": "fisher_exact"
+    }
   },
   "1678339": {
-    "chi2_statistic": null,
+    "statistic": null,
     "p_value": 0.010989010989010992,
+    "dof": null,
     "cramers_v": 0.5833333333333333,
-    "mutual_information": 0.2834879259569151,
+    "mutual_info": 0.2834879259569151,
+    "effect_size_class": "large",
     "contingency_table": {
       "N": {
         "0": 5,
@@ -286,22 +177,15 @@
         "0": 1,
         "1": 8
       }
-    },
-    "test_type": "fisher_exact"
-  },
-  "1790648": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
+    }
   },
   "1901101": {
-    "chi2_statistic": null,
+    "statistic": null,
     "p_value": 0.4,
+    "dof": null,
     "cramers_v": 0.05455447255899806,
-    "mutual_information": 0.06470554324811373,
+    "mutual_info": 0.06470554324811373,
+    "effect_size_class": "negligible",
     "contingency_table": {
       "N": {
         "0": 1,
@@ -311,22 +195,15 @@
         "0": 0,
         "1": 9
       }
-    },
-    "test_type": "fisher_exact"
-  },
-  "1907508": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
+    }
   },
   "1973797": {
-    "chi2_statistic": null,
+    "statistic": null,
     "p_value": 0.4857142857142857,
+    "dof": null,
     "cramers_v": 0.12009611535381536,
-    "mutual_information": 0.07485074779295942,
+    "mutual_info": 0.07485074779295942,
+    "effect_size_class": "small",
     "contingency_table": {
       "N": {
         "0": 0,
@@ -336,62 +213,15 @@
         "0": 2,
         "1": 7
       }
-    },
-    "test_type": "fisher_exact"
-  },
-  "2243520": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "2274995": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "2306236": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "2378301": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "2510433": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "2616573": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
+    }
   },
   "2640767": {
-    "chi2_statistic": null,
+    "statistic": null,
     "p_value": 0.6223776223776224,
+    "dof": null,
     "cramers_v": 0.02777777777777778,
-    "mutual_information": 0.013844293808390418,
+    "mutual_info": 0.013844293808390418,
+    "effect_size_class": "negligible",
     "contingency_table": {
       "N": {
         "0": 3,
@@ -401,46 +231,15 @@
         "0": 6,
         "1": 3
       }
-    },
-    "test_type": "fisher_exact"
-  },
-  "2652085": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "2699973": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "2705023": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "2708566": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
+    }
   },
   "2860050": {
-    "chi2_statistic": null,
+    "statistic": null,
     "p_value": 0.23516483516483516,
+    "dof": null,
     "cramers_v": 0.27695585470349865,
-    "mutual_information": 0.09335704168830361,
+    "mutual_info": 0.09335704168830361,
+    "effect_size_class": "small",
     "contingency_table": {
       "N": {
         "0": 3,
@@ -450,14 +249,15 @@
         "0": 8,
         "1": 1
       }
-    },
-    "test_type": "fisher_exact"
+    }
   },
   "2909481": {
-    "chi2_statistic": null,
+    "statistic": null,
     "p_value": 1.0,
+    "dof": null,
     "cramers_v": 0.0,
-    "mutual_information": 0.0014874911314458616,
+    "mutual_info": 0.0014874911314458616,
+    "effect_size_class": "negligible",
     "contingency_table": {
       "N": {
         "0": 3,
@@ -467,22 +267,15 @@
         "0": 5,
         "1": 4
       }
-    },
-    "test_type": "fisher_exact"
-  },
-  "2994700": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
+    }
   },
   "3089432": {
-    "chi2_statistic": null,
+    "statistic": null,
     "p_value": 0.4857142857142857,
+    "dof": null,
     "cramers_v": 0.12009611535381536,
-    "mutual_information": 0.07485074779295942,
+    "mutual_info": 0.07485074779295942,
+    "effect_size_class": "small",
     "contingency_table": {
       "N": {
         "0": 0,
@@ -492,22 +285,15 @@
         "0": 2,
         "1": 7
       }
-    },
-    "test_type": "fisher_exact"
-  },
-  "3112585": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
+    }
   },
   "3136337": {
-    "chi2_statistic": null,
+    "statistic": null,
     "p_value": 0.48571428571428577,
+    "dof": null,
     "cramers_v": 0.12009611535381536,
-    "mutual_information": 0.07485074779295942,
+    "mutual_info": 0.07485074779295942,
+    "effect_size_class": "small",
     "contingency_table": {
       "N": {
         "0": 6,
@@ -517,22 +303,15 @@
         "0": 7,
         "1": 2
       }
-    },
-    "test_type": "fisher_exact"
-  },
-  "3187483": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
+    }
   },
   "3219764": {
-    "chi2_statistic": null,
+    "statistic": null,
     "p_value": 0.0001998001998001998,
+    "dof": null,
     "cramers_v": 0.8611111111111112,
-    "mutual_information": 0.6730116670092563,
+    "mutual_info": 0.6730116670092563,
+    "effect_size_class": "large",
     "contingency_table": {
       "N": {
         "0": 0,
@@ -542,14 +321,15 @@
         "0": 9,
         "1": 0
       }
-    },
-    "test_type": "fisher_exact"
+    }
   },
   "3349839": {
-    "chi2_statistic": null,
+    "statistic": null,
     "p_value": 1.0,
+    "dof": null,
     "cramers_v": 0.0,
-    "mutual_information": 0.007485784665583084,
+    "mutual_info": 0.007485784665583084,
+    "effect_size_class": "negligible",
     "contingency_table": {
       "N": {
         "0": 2,
@@ -559,30 +339,15 @@
         "0": 2,
         "1": 7
       }
-    },
-    "test_type": "fisher_exact"
-  },
-  "3356372": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "3367275": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
+    }
   },
   "3371639": {
-    "chi2_statistic": null,
+    "statistic": null,
     "p_value": 1.0,
+    "dof": null,
     "cramers_v": 0.0,
-    "mutual_information": 0.002354220557073128,
+    "mutual_info": 0.002354220557073128,
+    "effect_size_class": "negligible",
     "contingency_table": {
       "N": {
         "0": 1,
@@ -592,14 +357,15 @@
         "0": 2,
         "1": 7
       }
-    },
-    "test_type": "fisher_exact"
+    }
   },
   "3375761": {
-    "chi2_statistic": null,
+    "statistic": null,
     "p_value": 1.0,
+    "dof": null,
     "cramers_v": 0.0,
-    "mutual_information": 0.002354220557073128,
+    "mutual_info": 0.002354220557073128,
+    "effect_size_class": "negligible",
     "contingency_table": {
       "N": {
         "0": 1,
@@ -609,14 +375,15 @@
         "0": 2,
         "1": 7
       }
-    },
-    "test_type": "fisher_exact"
+    }
   },
   "3397479": {
-    "chi2_statistic": null,
+    "statistic": null,
     "p_value": 0.4857142857142857,
+    "dof": null,
     "cramers_v": 0.12009611535381536,
-    "mutual_information": 0.07485074779295942,
+    "mutual_info": 0.07485074779295942,
+    "effect_size_class": "small",
     "contingency_table": {
       "N": {
         "0": 0,
@@ -626,287 +393,6 @@
         "0": 2,
         "1": 7
       }
-    },
-    "test_type": "fisher_exact"
-  },
-  "3496104": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "3747199": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "3840018": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "3897227": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "3901380": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "3911271": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "3936928": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "3940073": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "3982211": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "4042229": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "4103892": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "4107781": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "4108062": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "4111919": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "4112007": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "4253774": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "4253838": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "4253898": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "4254022": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "4406999": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "4494727": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "4510303": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "4510867": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "4511023": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "4511314": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "4511449": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "4512216": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "4512634": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "4513075": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "4513161": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "4515519": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "4515802": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "4517407": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "4517751": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
-  },
-  "4717031": {
-    "chi2_statistic": null,
-    "p_value": 1.0,
-    "cramers_v": 0.0,
-    "mutual_information": 0.0,
-    "error": "Degenerate contingency table (shape: (1, 2))",
-    "test_type": "skipped"
+    }
   }
 }

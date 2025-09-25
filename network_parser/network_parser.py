@@ -1,266 +1,161 @@
-"""
-NetworkParser main module for genomic feature discovery.
-
-This module orchestrates the pipeline:
-1. Data loading and preprocessing
-2. Decision tree-based feature discovery
-3. Statistical validation
-4. Interaction detection
-5. Result export
-
-Supports intermediate file saving to output_dir.
-"""
-
+# network_parser.py
 import logging
 import pandas as pd
 import numpy as np
 from datetime import datetime
 from pathlib import Path
 import json
-import pickle
+import networkx as nx  # For graph creation
 from typing import Optional, Dict, List, Tuple
+from .config import NetworkParserConfig
+from .data_loader import DataLoader
+from .statistical_validation import StatisticalValidator
+from .decision_tree_builder import EnhancedDecisionTreeBuilder
 
-# Use absolute imports to avoid circular imports
-try:
-    from network_parser.config import NetworkParserConfig
-    from network_parser.data_loader import DataLoader
-    from network_parser.decision_tree_builder import EnhancedDecisionTreeBuilder
-    from network_parser.statistical_validation import StatisticalValidator
-except ImportError as e:
-    print(f"ImportError: {e}. Ensure 'network_parser' is in PYTHONPATH and all modules are correctly placed.")
-    import sys
-    sys.exit(1)
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler()]
-)
 logger = logging.getLogger(__name__)
 
 class NetworkParser:
     """
-    Main class for the NetworkParser pipeline.
+    Orchestrates the NetworkParser pipeline.
     """
-    def __init__(self, config: NetworkParserConfig):
-        """
-        Initialize NetworkParser with configuration.
 
-        Args:
-            config: Configuration object for pipeline parameters.
-        """
+    def __init__(self, config: NetworkParserConfig):
+        logger.info(f"Initializing NetworkParser with config: {vars(config)}")
         self.config = config
         self.loader = DataLoader()
-        self.tree_builder = EnhancedDecisionTreeBuilder(config)
         self.validator = StatisticalValidator(config)
-        logger.info("Initialized NetworkParser with provided configuration.")
+        self.tree_builder = EnhancedDecisionTreeBuilder(config)
 
-    def load_data(self,
-                  genomic_data_path: str,
-                  metadata_path: Optional[str],
-                  label_column: str,
-                  known_markers_path: Optional[str],
-                  output_dir: Optional[str]) -> Tuple[pd.DataFrame, pd.Series, Optional[List[str]]]:
+    def run_pipeline(self, genomic_path: str, meta_path: Optional[str] = None, label_column: str = None,
+                     known_markers_path: Optional[str] = None, output_dir: str = "results/",
+                     validate_statistics: bool = True, validate_interactions: bool = True) -> Dict:
         """
-        Load and preprocess genomic and metadata.
+        Execute the full pipeline: load data, discover features, validate, and integrate results.
 
         Args:
-            genomic_data_path: Path to genomic data file.
-            metadata_path: Path to metadata file (optional).
-            label_column: Column name for labels.
-            known_markers_path: Path to known markers file (optional).
-            output_dir: Directory to save intermediate files (optional).
+            genomic_path (str): Path to the genomic data file.
+            meta_path (Optional[str]): Path to the metadata file. Defaults to None.
+            label_column (str): Name of the column containing labels.
+            known_markers_path (Optional[str]): Path to known markers file. Defaults to None.
+            output_dir (str, optional): Output directory. Defaults to "results/".
+            validate_statistics (bool, optional): Whether to run statistical validation. Defaults to True.
+            validate_interactions (bool, optional): Whether to validate interactions. Defaults to True.
 
         Returns:
-            Tuple of (aligned genomic DataFrame, labels Series, known markers list).
+            dict: Pipeline results.
         """
-        logger.info("Loading genomic data...")
-        genomic_data = self.loader.load_genomic_matrix(genomic_data_path, output_dir=output_dir)
-
-        metadata = None
-        if metadata_path:
-            logger.info("Loading metadata...")
-            metadata = self.loader.load_metadata(metadata_path, output_dir=output_dir)
-
-        known_markers = None
-        if known_markers_path:
-            logger.info("Loading known markers...")
-            known_markers = self.loader.load_known_markers(known_markers_path, output_dir=output_dir)
-
-        logger.info("Aligning data...")
-        aligned_data, aligned_labels = self.loader.align_data(
-            genomic_data, metadata, label_column, output_dir=output_dir
+        logger.info("📥 Stage 1: Input Processing")
+        data, labels, known_markers = self._load_and_preprocess(
+            genomic_path, meta_path, label_column, known_markers_path, output_dir
         )
 
-        return aligned_data, aligned_labels, known_markers
+        logger.info("🌳 Stage 2: Feature Discovery")
+        chi2_results = self.validator.chi_squared_test(data, labels, output_dir)
+        corrected = self.validator.multiple_testing_correction(chi2_results, output_dir=output_dir)
+        significant_features = [f for f, res in corrected.items() if res['significant']]
+        logger.info(f"Filtered {len(significant_features)} significant features.")
+        discovery_results = self.tree_builder.discover_features(data, labels, significant_features, output_dir)
 
-    def run_feature_discovery(self,
-                             data: pd.DataFrame,
-                             labels: pd.Series,
-                             output_dir: Optional[str] = None) -> Dict:
-        """
-        Run feature discovery and validation pipeline.
+        logger.info("✅ Stage 3: Statistical Validation")
+        if validate_statistics:
+            bootstrap = self.validator.bootstrap_validation(data, labels, significant_features, output_dir)
+            discovery_results['bootstrap'] = bootstrap
 
-        Args:
-            data: Genomic data DataFrame.
-            labels: Labels Series.
-            output_dir: Directory to save intermediate files (optional).
+        if validate_interactions and discovery_results.get('epistatic_interactions'):
+            logger.info("🔄 Stage 3b: Interaction Validation")
+            interactions = [(i['parent'], i['child']) for i in discovery_results['epistatic_interactions']]
+            interaction_results = self.validator.permutation_test_interactions(data, labels, interactions, output_dir)
+            discovery_results['interaction_validation'] = interaction_results
 
-        Returns:
-            Dictionary with discovered features, trees, and validation results.
-        """
-        logger.info(f"Starting feature discovery on {len(data)} samples with {len(data.columns)} features...")
-        all_features = list(data.columns)
+        logger.info("🔗 Stage 4: Integration")
+        integrated = self._integrate_features(discovery_results, data, labels, output_dir)
 
-        # Feature discovery with decision trees
-        feature_results = self.tree_builder.discover_features(data, labels, all_features, output_dir=output_dir)
+        logger.info("📤 Stage 5: Output Generation")
+        results = {**discovery_results, **integrated}
+        if known_markers:
+            results['known_comparison'] = self._compare_known_markers(data, labels, significant_features, known_markers)
 
-        # Statistical validation
-        bootstrap_results = self.validator.bootstrap_validation(data, labels, all_features, output_dir=output_dir)
-        chi2_results = self.validator.chi_squared_test(data[all_features], labels, output_dir=output_dir)
-        corrected_results = self.validator.multiple_testing_correction(chi2_results, output_dir=output_dir)
-
-        # Compile results
-        results = {
-            'discovered_features': feature_results['discovered_features'],
-            'decision_trees': feature_results['decision_trees'],
-            'feature_confidence': feature_results['feature_confidence'],
-            'epistatic_interactions': feature_results['epistatic_interactions'],
-            'bootstrap_validation': bootstrap_results,
-            'chi_squared_tests': chi2_results,
-            'corrected_p_values': corrected_results
-        }
-
-        # Save intermediate results
         if output_dir:
-            output_dir = Path(output_dir)
-            output_dir.mkdir(parents=True, exist_ok=True)
-            with open(output_dir / "decision_tree_features.json", 'w') as f:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_path = Path(output_dir)
+            output_path.mkdir(parents=True, exist_ok=True)
+            with open(output_path / f"networkparser_results_{timestamp}.json", 'w') as f:
                 json.dump(results, f, indent=2)
-            logger.info(f"Saved decision tree features to: {output_dir / 'decision_tree_features.json'}")
+            logger.info(f"Saved final results to: {output_path / f'networkparser_results_{timestamp}.json'}")
 
+        logger.info("✅ Pipeline completed successfully")
         return results
 
-    def validate_interactions(self,
-                             data: pd.DataFrame,
-                             labels: pd.Series,
-                             interactions: List[Tuple[str, str]],
-                             output_dir: Optional[str] = None) -> Dict:
-        """
-        Validate epistatic interactions with permutation tests.
+    def _load_and_preprocess(self, genomic_path: str, meta_path: Optional[str],
+                             label_column: str, known_markers_path: Optional[str],
+                             out_dir: str) -> Tuple[pd.DataFrame, pd.Series, Optional[List[str]]]:
+        """Stage 1: Load/align data (as per diagram)."""
+        logger.info(f"Loading genomic data from: {genomic_path}")
+        genomic = self.loader.load_genomic_matrix(genomic_path, out_dir)
+        meta = self.loader.load_metadata(meta_path, out_dir) if meta_path else None
+        markers = self.loader.load_known_markers(known_markers_path, out_dir) if known_markers_path else None
+        logger.info("Aligning data...")
+        aligned_data, aligned_labels = self.loader.align_data(genomic, meta, label_column, out_dir)
+        logger.info(f"Aligned data: {len(aligned_labels)} samples, {aligned_data.shape[1]} features retained.")
+        return aligned_data, aligned_labels, markers
 
-        Args:
-            data: Genomic data DataFrame.
-            labels: Labels Series.
-            interactions: List of feature pairs to validate.
-            output_dir: Directory to save intermediate files (optional).
+    def _integrate_features(self, results: Dict, data: pd.DataFrame, labels: pd.Series, output_dir: Optional[str]) -> Dict:
+        """Stage 4: Integrate features into networks and rankings."""
+        ranked = sorted(results['feature_confidence'].items(), key=lambda x: x[1]['confidence'], reverse=True)
+        logger.info(f"Ranked {len(ranked)} features by confidence.")
 
-        Returns:
-            Dictionary with interaction validation results.
-        """
-        logger.info("Validating epistatic interactions...")
-        interaction_results = self.validator.permutation_test_interactions(
-            data, labels, interactions, output_dir=output_dir
-        )
+        # Sample-Feature Network (bipartite)
+        sample_feature_graph = nx.Graph()
+        for sample in data.index:
+            sample_feature_graph.add_node(sample, type='sample')
+        for feature in results['discovered_features']:
+            sample_feature_graph.add_node(feature, type='feature')
+            for sample in data.index[data[feature] == 1]:
+                sample_feature_graph.add_edge(sample, feature)
+
+        # Interaction Graph
+        interaction_graph = nx.Graph()
+        for i in results.get('epistatic_interactions', []):
+            interaction_graph.add_edge(i['parent'], i['child'], weight=i.get('strength', 1.0))
 
         if output_dir:
-            output_dir = Path(output_dir)
-            output_dir.mkdir(parents=True, exist_ok=True)
-            with open(output_dir / "interaction_validation.json", 'w') as f:
-                json.dump(interaction_results, f, indent=2)
-            logger.info(f"Saved interaction validation results to: {output_dir / 'interaction_validation.json'}")
+            output_path = Path(output_dir)
+            nx.write_graphml(sample_feature_graph, output_path / "sample_feature_network.graphml")
+            nx.write_graphml(interaction_graph, output_path / "interaction_graph.graphml")
+            logger.info("Saved network graphs to GraphML files.")
+            # iGNN matrices: adjacency
+            np.savez(output_path / "ignn_matrices.npz",
+                     sample_feature_adj=nx.to_numpy_array(sample_feature_graph),
+                     interaction_adj=nx.to_numpy_array(interaction_graph))
+            logger.info("Saved iGNN adjacency matrices.")
 
-        return interaction_results
+        return {
+            'ranked_features': ranked,
+            'sample_feature_network': {'nodes': list(sample_feature_graph.nodes()), 'edges': list(sample_feature_graph.edges())},
+            'interaction_graph': {'nodes': list(interaction_graph.nodes()), 'edges': list(interaction_graph.edges())}
+        }
 
-def run_networkparser_analysis(
-    genomic_data_path: str,
-    metadata_path: Optional[str] = None,
-    label_column: str = "label",
-    known_markers_path: Optional[str] = None,
-    output_dir: Optional[str] = None,
-    config: Optional[NetworkParserConfig] = None,
-    validate_statistics: bool = False,
-    validate_interactions: bool = False,
-    export_format: str = "json"
-) -> None:
+    def _compare_known_markers(self, data: pd.DataFrame, labels: pd.Series, discovered: List[str], known: List[str]) -> Dict:
+        """Compare discovered features with known markers."""
+        overlap = set(discovered) & set(known)
+        logger.info(f"Found {len(overlap)} overlapping markers with known set.")
+        return {'overlap': list(overlap), 'overlap_ratio': len(overlap) / len(known) if known else 0}
+
+def run_networkparser_analysis(**kwargs):
     """
-    Run the full NetworkParser pipeline.
-
-    Args:
-        genomic_data_path: Path to genomic data file.
-        metadata_path: Path to metadata file (optional).
-        label_column: Column name for labels.
-        known_markers_path: Path to known markers file (optional).
-        output_dir: Directory to save results and intermediate files (optional).
-        config: Configuration object (optional).
-        validate_statistics: Whether to run statistical validation.
-        validate_interactions: Whether to validate epistatic interactions.
-        export_format: Format for saving results ('json' or 'pickle').
-
-    Returns:
-        None. Saves results to output_dir.
+    Entry-point function for pipeline execution.
     """
-    try:
-        logger.info(f"Running network_parser.py from: {Path(__file__).resolve()}")
-        config = config or NetworkParserConfig()
-        parser = NetworkParser(config)
-
-        # Load data
-        data, labels, known_markers = parser.load_data(
-            genomic_data_path, metadata_path, label_column, known_markers_path, output_dir
-        )
-
-        # Run feature discovery
-        results = parser.run_feature_discovery(data, labels, output_dir=output_dir)
-
-        # Validate interactions if requested
-        if validate_interactions:
-            interactions = results.get('epistatic_interactions', [])
-            if interactions:
-                interaction_results = parser.validate_interactions(data, labels, interactions, output_dir=output_dir)
-                results['interaction_validation'] = interaction_results
-
-        # Compare with known markers if provided
-        if known_markers:
-            logger.info("Comparing with known markers...")
-            known_results = parser.validator.validate_feature_set(
-                data, labels, results['discovered_features'], baseline_features=known_markers, output_dir=output_dir
-            )
-            results['known_marker_comparison'] = known_results
-
-        # Save final results
-        if output_dir:
-            output_dir = Path(output_dir)
-            output_dir.mkdir(parents=True, exist_ok=True)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_file = output_dir / f"networkparser_results_{timestamp}.{export_format}"
-
-            if export_format == "json":
-                with open(output_file, 'w') as f:
-                    json.dump(results, f, indent=2)
-            elif export_format == "pickle":
-                with open(output_file, 'wb') as f:
-                    pickle.dump(results, f)
-
-            logger.info(f"Saved final results to: {output_file}")
-
-    except Exception as e:
-        logger.error(f"NetworkParser pipeline failed: {str(e)}")
-        raise
+    logger.info("Initializing NetworkParser with provided configuration.")
+    config = kwargs.pop('config', NetworkParserConfig())
+    parser = NetworkParser(config)
+    logger.info("Starting pipeline execution...")
+    return parser.run_pipeline(**kwargs)
 
 if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser(description="NetworkParser direct execution (use cli.py for full functionality).")
-    parser.add_argument("--genomic", required=True, type=str, help="Path to genomic matrix file.")
-    parser.add_argument("--label", required=True, type=str, help="Column in genomic data or metadata with labels.")
-    parser.add_argument("--meta", type=str, default=None, help="Optional path to metadata file.")
-    parser.add_argument("--output-dir", type=str, default=None, help="Directory to save results.")
-    args = parser.parse_args()
-
-    run_networkparser_analysis(
-        genomic_data_path=args.genomic,
-        metadata_path=args.meta,
-        label_column=args.label,
-        output_dir=args.output_dir
-    )
+    import sys
+    if len(sys.argv) < 2:
+        print("Usage: python network_parser.py --genomic data.csv --label phenotype")
+        sys.exit(1)
+    # Simple arg parse for direct run
+    results = run_networkparser_analysis(genomic_path=sys.argv[1], label_column='label')
+    print(json.dumps(results, indent=2))
