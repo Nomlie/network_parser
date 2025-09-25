@@ -1,91 +1,143 @@
 digraph NetworkParser {
-    rankdir=LR;
-    bgcolor="#F9FAFB";
-    node [shape=rect, style="rounded,filled", fillcolor="#FFFFFF", fontname="Arial", fontsize=11, penwidth=2, color="#E0E0E0"];
-    edge [color="#6B7280", penwidth=1.5, fontname="Arial", fontsize=10, arrowsize=0.8];
+    // A4 portrait layout
+    size="8.27,11.69";
+    ratio="fill";
+    margin=0.2;
+    nodesep=0.35;
+    ranksep=0.6;
+    rankdir=TB;
+    bgcolor="#F9FAFB"; // Softer neutral background
 
+    // Global node style
+    node [
+        shape=rect,
+        style="rounded,filled",
+        fillcolor="#FFFFFF",
+        fontname="Noto Sans",
+        fontsize=11,
+        width=1.7,
+        height=0.8,
+        penwidth=1.6,
+        color="#CBD5E1",
+        margin=0.12
+    ];
+
+    // Global edge style
+    edge [
+        color="#6B7280",
+        penwidth=1.4,
+        fontname="Noto Sans",
+        fontsize=9,
+        arrowsize=0.9,
+        arrowhead="vee",
+        style="solid"
+    ];
+
+    // ===== 1. Input Processing =====
     subgraph cluster_input {
         label="1. Input Processing";
-        color="#3B82F6";
+        color="#1E40AF";
         style=filled;
-        fillcolor="#EFF6FF";
-        labelfontname="Arial Bold";
-        labelfontsize=12;
-        labelfontcolor="#3B82F6";
-        n1 [label="Genomic Data\n(CSV, VCF, FASTA)", fillcolor="#BFDBFE", fontcolor="#1E40AF"];
-        n2 [label="Metadata\n(Phenotypes, Hierarchies)", fillcolor="#BFDBFE", fontcolor="#1E40AF"];
-        n3 [label="Known Markers\n(Optional)", fillcolor="#BFDBFE", fontcolor="#1E40AF"];
+        fillcolor="#DBEAFE";
+        labelfontname="Noto Sans Bold";
+        labelfontsize=18;
+        labelfontcolor="#1E40AF";
+
+        n1 [label="Genomic Data\n(CSV, VCF)", fillcolor="#BFDBFE", fontcolor="#1E3A8A"];
+        n2 [label="Metadata\n(Phenotypes)", fillcolor="#BFDBFE", fontcolor="#1E3A8A"];
+        n3 [label="Known Markers\n(Optional)", fillcolor="#BFDBFE", fontcolor="#1E3A8A"];
+        n4 [label="Preprocess\n(Align data, Remove duplicates/NaNs/invariants)", fillcolor="#93C5FD", fontcolor="#1E3A8A"];
     }
 
+    // ===== 2. Pattern Discovery =====
     subgraph cluster_pattern {
         label="2. Pattern Discovery";
-        color="#22C55E";
+        color="#15803D";
         style=filled;
-        fillcolor="#F0FDF4";
-        labelfontname="Arial Bold";
-        labelfontsize=12;
-        labelfontcolor="#22C55E";
-        n4 [label="Label-Aware\nDecision Tree Construction", fillcolor="#BBF7D0", fontcolor="#166534"];
-        n5 [label="Epistatic Interaction\nDetection", fillcolor="#BBF7D0", fontcolor="#166534"];
+        fillcolor="#DCFCE7";
+        labelfontname="Noto Sans Bold";
+        labelfontsize=18;
+        labelfontcolor="#15803D";
+
+        n5 [label="Chi-squared Test", fillcolor="#BBF7D0", fontcolor="#14532D"];
+        n6 [label="Fisher’s Exact Test", fillcolor="#BBF7D0", fontcolor="#14532D"];
+        n7 [label="FDR Correction", fillcolor="#BBF7D0", fontcolor="#14532D"];
+        n8 [label="Filter Features", fillcolor="#BBF7D0", fontcolor="#14532D"];
+        n9 [label="Decision Tree\nConstruction", fillcolor="#86EFAC", fontcolor="#14532D"];
+        n10 [label="Epistatic Interactions\nPermutation tests", fillcolor="#BBF7D0", fontcolor="#14532D"];
     }
 
+    // ===== 3. Statistical Validation =====
     subgraph cluster_validation {
         label="3. Statistical Validation";
-        color="#F59E0B";
+        color="#B45309";
         style=filled;
-        fillcolor="#FFF7ED";
-        labelfontname="Arial Bold";
-        labelfontsize=12;
-        labelfontcolor="#F59E0B";
-        n6 [label="Bootstrap Resampling", fillcolor="#FED7AA", fontcolor="#9A3412"];
-        n7 [label="Null Model Comparison", fillcolor="#FED7AA", fontcolor="#9A3412"];
-        n8 [label="Multiple Testing Correction", fillcolor="#FED7AA", fontcolor="#9A3412"];
+        fillcolor="#FEF3C7";
+        labelfontname="Noto Sans Bold";
+        labelfontsize=18;
+        labelfontcolor="#B45309";
+
+        n11 [label="Bootstrap Resampling", fillcolor="#FED7AA", fontcolor="#92400E"];
+        n12 [label="Temporary Trees", fillcolor="#FED7AA", fontcolor="#92400E"];
+        n13 [label="Stability Assessment", fillcolor="#FED7AA", fontcolor="#92400E"];
+        n14 [label="Confidence Scores", fillcolor="#FDBA74", fontcolor="#92400E"];
     }
 
+    // ===== 4. Feature Integration =====
     subgraph cluster_integration {
         label="4. Feature Integration";
-        color="#8B5CF6";
+        color="#6D28D9";
         style=filled;
-        fillcolor="#F5F3FF";
-        labelfontname="Arial Bold";
-        labelfontsize=12;
-        labelfontcolor="#8B5CF6";
-        n9 [label="Ranked Feature Lists\n(Effect Sizes & CIs)", fillcolor="#DDD6FE", fontcolor="#5B21B6"];
-        n10 [label="Sample-Feature Networks", fillcolor="#DDD6FE", fontcolor="#5B21B6"];
-        n11 [label="Feature Interaction Graphs", fillcolor="#DDD6FE", fontcolor="#5B21B6"];
+        fillcolor="#EDE9FE";
+        labelfontname="Noto Sans Bold";
+        labelfontsize=18;
+        labelfontcolor="#6D28D9";
+
+        n15 [label="Ranked Features", fillcolor="#DDD6FE", fontcolor="#5B21B6"];
+        n16 [label="Sample-Feature Networks", fillcolor="#DDD6FE", fontcolor="#5B21B6"];
+        n17 [label="Interaction Graphs", fillcolor="#DDD6FE", fontcolor="#5B21B6"];
+        n21 [label="Integrated Outputs", fillcolor="#C4B5FD", fontcolor="#5B21B6"];
     }
 
+    // ===== 5. Output Generation =====
     subgraph cluster_output {
         label="5. Output Generation";
-        color="#6B7280";
+        color="#374151";
         style=filled;
-        fillcolor="#F3F4F6";
-        labelfontname="Arial Bold";
-        labelfontsize=12;
-        labelfontcolor="#6B7280";
-        n12 [label="Text Report\n(Summary & Insights)", fillcolor="#D1D5DB", fontcolor="#1F2937"];
-        n13 [label="JSON / XML\n(Structured Data)", fillcolor="#D1D5DB", fontcolor="#1F2937"];
-        n14 [label="GNN/Transformer-Ready\nMatrices", fillcolor="#D1D5DB", fontcolor="#1F2937"];
+        fillcolor="#E5E7EB";
+        labelfontname="Noto Sans Bold";
+        labelfontsize=18;
+        labelfontcolor="#374151";
+
+        n18 [label="Text Report", fillcolor="#D1D5DB", fontcolor="#1F2937"];
+        n19 [label="JSON Output", fillcolor="#D1D5DB", fontcolor="#1F2937"];
+        n20 [label="GNN Matrices", fillcolor="#D1D5DB", fontcolor="#1F2937"];
     }
 
-    // Enhanced Flow with Styled Edges and Arrows
-    n1 -> n4 [label="Data Input", color="#3B82F6", arrowhead=normal, style=dashed];
-    n2 -> n4 [label="Metadata Integration", color="#3B82F6", arrowhead=normal];
-    n3 -> n4 [label="Optional Markers", color="#3B82F6", arrowhead=normal, style=dotted];
-    n4 -> n5 [label="Tree Structure Output", color="#22C55E", arrowhead=normal];
-    n5 -> n6 [label="Detected Interactions", color="#22C55E", arrowhead=normal];
-    n6 -> n7 [label="Resampled Datasets", color="#F59E0B", arrowhead=normal];
-    n7 -> n8 [label="Null Model Results", color="#F59E0B", arrowhead=normal];
-    n8 -> n9 [label="Validated Features", color="#8B5CF6", arrowhead=normal];
-    n8 -> n10 [label="Network Structures", color="#8B5CF6", arrowhead=normal];
-    n8 -> n11 [label="Interaction Graphs", color="#8B5CF6", arrowhead=normal];
-    n9 -> n12 [label="Feature Summaries", color="#6B7280", arrowhead=normal];
-    n10 -> n12 [label="Network Visualizations", color="#6B7280", arrowhead=normal];
-    n11 -> n12 [label="Graph Insights", color="#6B7280", arrowhead=normal];
-    n9 -> n13 [label="Structured Features", color="#6B7280", arrowhead=normal];
-    n10 -> n13 [label="Network Data Export", color="#6B7280", arrowhead=normal];
-    n11 -> n13 [label="Graph Export", color="#6B7280", arrowhead=normal];
-    n9 -> n14 [label="Feature Matrices", color="#6B7280", arrowhead=normal];
-    n10 -> n14 [label="Network Matrices", color="#6B7280", arrowhead=normal];
-    n11 -> n14 [label="Graph Matrices", color="#6B7280", arrowhead=normal];
+    // ===== Flow Edges =====
+    n1 -> n4 [label="Data", color="#1E40AF", style=dashed];
+    n2 -> n4 [label="Labels", color="#1E40AF"];
+    n3 -> n4 [label="Markers", color="#1E40AF", style=dotted];
+    n4 -> {n5 n6} [label="Matrix", color="#1E40AF"];
+
+    n5 -> n7 [label="p-values", color="#15803D"];
+    n6 -> n7 [label="p-values", color="#15803D"];
+    n7 -> n8 [label="q-values", color="#15803D"];
+    n8 -> n9 [label="Features", color="#15803D"];
+    n9 -> n10 [label="Tree", color="#15803D"];
+
+    n9 -> n11 [label="Tree", color="#B45309"];
+    n10 -> n11 [label="Interactions", color="#B45309"];
+    n11 -> n12 [label="Subsets", color="#B45309"];
+    n12 -> n13 [label="Trees", color="#B45309"];
+    n13 -> n14 [label="Metrics", color="#B45309"];
+
+    n14 -> {n15 n16 n17} [color="#6D28D9"];
+    n15 -> n21 [label="Features", color="#6D28D9"];
+    n16 -> n21 [label="Networks", color="#6D28D9"];
+    n17 -> n21 [label="Graphs", color="#6D28D9"];
+
+    n21 -> n18 [label="Report Data", color="#374151"];
+    n21 -> n19 [label="Structured Data", color="#374151"];
+    n21 -> n20 [label="Matrices", color="#374151"];
 }
