@@ -1,0 +1,167 @@
+{
+  "discovered_features": [
+    "3219764"
+  ],
+  "root_features": [
+    "3219764"
+  ],
+  "branch_features": [],
+  "decision_trees": {
+    "accuracy": 1.0,
+    "rules": "|--- 3219764 <= 0.50\n|   |--- class: 1\n|--- 3219764 >  0.50\n|   |--- class: 0\n",
+    "n_classes": 2
+  },
+  "feature_confidence": {
+    "3219764": {
+      "type": "root",
+      "mutual_info": 0.6730116670092563,
+      "stability": 1.0,
+      "cramers_v": 0.8611111111111112,
+      "confidence": 0.8414268890259249
+    }
+  },
+  "epistatic_interactions": [],
+  "prefiltered_features": [
+    "679712",
+    "771128",
+    "1392623",
+    "1470751",
+    "1572071",
+    "1678339",
+    "3219764"
+  ],
+  "bootstrap": {
+    "679712": {
+      "stability_score": 1.0,
+      "mean_importance": 0.23023023023023023,
+      "ci": [
+        0.0,
+        1.0
+      ],
+      "p_value": 1.0323087813865676e-58,
+      "significant": true
+    },
+    "771128": {
+      "stability_score": 1.0,
+      "mean_importance": 0.022022022022022022,
+      "ci": [
+        0.0,
+        0.0
+      ],
+      "p_value": 2.4408211862015997e-06,
+      "significant": true
+    },
+    "1392623": {
+      "stability_score": 0.4944944944944945,
+      "mean_importance": 0.24224224224224225,
+      "ci": [
+        0.0,
+        1.0
+      ],
+      "p_value": 3.930594385922264e-62,
+      "significant": true
+    },
+    "1470751": {
+      "stability_score": 0.018018018018018018,
+      "mean_importance": 0.018018018018018018,
+      "ci": [
+        0.0,
+        0.0
+      ],
+      "p_value": 2.0558101973187885e-05,
+      "significant": true
+    },
+    "1572071": {
+      "stability_score": 0.23323323323323322,
+      "mean_importance": 0.23323323323323322,
+      "ci": [
+        0.0,
+        1.0
+      ],
+      "p_value": 1.458585730682509e-59,
+      "significant": true
+    },
+    "1678339": {
+      "stability_score": 0.01901901901901902,
+      "mean_importance": 0.01901901901901902,
+      "ci": [
+        0.0,
+        0.0
+      ],
+      "p_value": 1.2057068958010729e-05,
+      "significant": true
+    },
+    "3219764": {
+      "stability_score": 0.23523523523523523,
+      "mean_importance": 0.23523523523523523,
+      "ci": [
+        0.0,
+        1.0
+      ],
+      "p_value": 3.9402290397911615e-60,
+      "significant": true
+    }
+  },
+  "ranked_features": [
+    [
+      "3219764",
+      {
+        "type": "root",
+        "mutual_info": 0.6730116670092563,
+        "stability": 1.0,
+        "cramers_v": 0.8611111111111112,
+        "confidence": 0.8414268890259249
+      }
+    ]
+  ],
+  "sample_feature_network": {
+    "nodes": [
+      "66_YP38_PB",
+      "12_YP48_MANG",
+      "12_YP47_MANG",
+      "12_YP_45_MANG",
+      "12_YP_50_MANG",
+      "R2_32_YP_93",
+      "3_YP_78_ATYR",
+      "48_YP14_PAK",
+      "3_YP_08_ATYR",
+      "15_YP27_VUP_",
+      "5_YP48_MKUM",
+      "3_YP_14_ARAL",
+      "3_YP_79_ATYR",
+      "28_YP48_NP",
+      "8_YP55_NP",
+      "3219764"
+    ],
+    "edges": [
+      [
+        "66_YP38_PB",
+        "3219764"
+      ],
+      [
+        "48_YP14_PAK",
+        "3219764"
+      ],
+      [
+        "5_YP48_MKUM",
+        "3219764"
+      ],
+      [
+        "3_YP_14_ARAL",
+        "3219764"
+      ],
+      [
+        "28_YP48_NP",
+        "3219764"
+      ],
+      [
+        "8_YP55_NP",
+        "3219764"
+      ]
+    ]
+  },
+  "interaction_graph": {
+    "nodes": [],
+    "edges": []
+  }
+}

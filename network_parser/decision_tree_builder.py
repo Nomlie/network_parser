@@ -54,7 +54,7 @@ class EnhancedDecisionTreeBuilder:
             Dict: Comprehensive results with features, trees, interactions.
         """
         logger.info(f"🔍 Feature discovery: {len(data)} samples, {len(all_features)} features")
-        logger.info(f"Data columns: {data.columns.tolist()}")
+        #logger.info(f"Data columns: {data.columns.tolist()}")
         logger.info(f"Input features: {all_features}")
         
         # Validate input features
@@ -318,7 +318,7 @@ class EnhancedDecisionTreeBuilder:
     def _print_enhanced_summary(self, results: Dict) -> None:
         """Print workflow-aligned summary."""
         print("\n" + "="*70)
-        print("🎯 FEATURE DISCOVERY SUMMARY (Workflow Stage 2)")
+        print("\033[1m 🎯 FEATURE DISCOVERY SUMMARY (Workflow Stage 2)\033[0m")
         print("="*70)
         tree = results['decision_trees']
         print(f"📈 Tree Accuracy: {tree['accuracy']:.3f} | Classes: {tree['n_classes']}")

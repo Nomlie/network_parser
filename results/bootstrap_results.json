@@ -1,72 +1,52 @@
 {
-  "679712": {
+  "101361": {
     "stability_score": 1.0,
-    "mean_importance": 0.23623623623623624,
+    "mean_importance": 0.19,
     "ci": [
       0.0,
       1.0
     ],
-    "p_value": 2.0453404470096636e-60,
+    "p_value": 1.1197173183722697e-47,
     "significant": true
   },
-  "771128": {
-    "stability_score": 1.0,
-    "mean_importance": 0.02002002002002002,
-    "ci": [
-      0.0,
-      0.0
-    ],
-    "p_value": 7.0759336393070164e-06,
-    "significant": true
-  },
-  "1392623": {
-    "stability_score": 0.4944944944944945,
-    "mean_importance": 0.23823823823823823,
+  "366141": {
+    "stability_score": 0.364,
+    "mean_importance": 0.174,
     "ci": [
       0.0,
       1.0
     ],
-    "p_value": 5.497277054142486e-61,
+    "p_value": 2.047726106620598e-43,
     "significant": true
   },
-  "1470751": {
-    "stability_score": 0.016016016016016016,
-    "mean_importance": 0.016016016016016016,
-    "ci": [
-      0.0,
-      0.0
-    ],
-    "p_value": 5.9915891344947956e-05,
-    "significant": true
-  },
-  "1572071": {
-    "stability_score": 0.23123123123123124,
-    "mean_importance": 0.23123123123123124,
+  "384032": {
+    "stability_score": 0.206,
+    "mean_importance": 0.206,
     "ci": [
       0.0,
       1.0
     ],
-    "p_value": 5.38122087207689e-59,
+    "p_value": 5.055911831285309e-52,
     "significant": true
   },
-  "1678339": {
-    "stability_score": 0.01901901901901902,
-    "mean_importance": 0.01901901901901902,
-    "ci": [
-      0.0,
-      0.0
-    ],
-    "p_value": 1.2057068958010729e-05,
-    "significant": true
-  },
-  "3219764": {
-    "stability_score": 0.23923923923923923,
-    "mean_importance": 0.23923923923923923,
+  "497957": {
+    "stability_score": 0.208,
+    "mean_importance": 0.208,
     "ci": [
       0.0,
       1.0
     ],
-    "p_value": 2.8463184095479167e-61,
+    "p_value": 1.4276066134818517e-52,
+    "significant": true
+  },
+  "522385": {
+    "stability_score": 0.222,
+    "mean_importance": 0.222,
+    "ci": [
+      0.0,
+      1.0
+    ],
+    "p_value": 1.869276004129311e-56,
     "significant": true
   }
 }

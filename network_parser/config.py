@@ -41,6 +41,7 @@ class NetworkParserConfig:
     max_depth: Optional[int] = None
     min_group_size: int = 5
     significance_level: float = 0.05
+    
     n_bootstrap_samples: int = 1000
     n_permutation_tests: int = 500
     multiple_testing_method: str = 'fdr_bh'
