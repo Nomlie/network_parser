@@ -44,33 +44,33 @@ class NetworkParser:
         Returns:
             dict: Pipeline results.
         """
-        logger.info("📥 Stage 1: Input Processing")
+        logger.info("\033[1m 📥 Stage 1: Input Processing\033[0m")
         data, labels, known_markers = self._load_and_preprocess(
             genomic_path, meta_path, label_column, known_markers_path, output_dir
         )
 
-        logger.info("🌳 Stage 2: Feature Discovery")
+        logger.info("\033[1m  🌳Stage 2: Feature Discovery\033[0m")
         chi2_results = self.validator.chi_squared_test(data, labels, output_dir)
         corrected = self.validator.multiple_testing_correction(chi2_results, output_dir=output_dir)
         significant_features = [f for f, res in corrected.items() if res['significant']]
         logger.info(f"Filtered {len(significant_features)} significant features.")
         discovery_results = self.tree_builder.discover_features(data, labels, significant_features, output_dir)
 
-        logger.info("✅ Stage 3: Statistical Validation")
+        logger.info("\033[1m Stage 3: Statistical Validation\033[0m")
         if validate_statistics:
             bootstrap = self.validator.bootstrap_validation(data, labels, significant_features, output_dir)
             discovery_results['bootstrap'] = bootstrap
 
         if validate_interactions and discovery_results.get('epistatic_interactions'):
-            logger.info("🔄 Stage 3b: Interaction Validation")
+            logger.info("\033[1m 🔄 Stage 3b: Interaction Validation\033[0m")
             interactions = [(i['parent'], i['child']) for i in discovery_results['epistatic_interactions']]
             interaction_results = self.validator.permutation_test_interactions(data, labels, interactions, output_dir)
             discovery_results['interaction_validation'] = interaction_results
 
-        logger.info("🔗 Stage 4: Integration")
+        logger.info("\033[1m 🔗 Stage 4: Integration\033[0m")
         integrated = self._integrate_features(discovery_results, data, labels, output_dir)
 
-        logger.info("📤 Stage 5: Output Generation")
+        logger.info("\033[1m 📤 Stage 5: Output Generation\033[0m")
         results = {**discovery_results, **integrated}
         if known_markers:
             results['known_comparison'] = self._compare_known_markers(data, labels, significant_features, known_markers)

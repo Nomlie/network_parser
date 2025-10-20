@@ -1,54 +1,53 @@
-2025-09-25 11:58:54,742 - INFO - Attempting to import run_networkparser_analysis and NetworkParserConfig
-2025-09-25 11:58:54,743 - INFO - Running cli.py from: /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/network_parser/cli.py
-2025-09-25 11:58:54,743 - INFO - Starting NetworkParser pipeline
-2025-09-25 11:58:54,743 - INFO - Genomic data: /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/MatrixSelector/input/example.csv
-2025-09-25 11:58:54,743 - INFO - Label column: Group
-2025-09-25 11:58:54,743 - INFO - Output directory: /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/results
-2025-09-25 11:58:54,743 - INFO - Initializing NetworkParser with provided configuration.
-2025-09-25 11:58:54,743 - INFO - Initializing NetworkParser with config: {'max_depth': None, 'min_group_size': 5, 'significance_level': 0.05, 'n_bootstrap_samples': 1000, 'n_permutation_tests': 500, 'multiple_testing_method': 'fdr_bh', 'min_information_gain': 0.001, 'n_jobs': -1, 'random_state': 42}
-2025-09-25 11:58:54,743 - INFO - Initialized StatisticalValidator.
-2025-09-25 11:58:54,743 - INFO - Starting pipeline execution...
-2025-09-25 11:58:54,743 - INFO - 📥 Stage 1: Input Processing
-2025-09-25 11:58:54,743 - INFO - Loading genomic data from: /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/MatrixSelector/input/example.csv
-2025-09-25 11:58:54,743 - INFO - Loading genomic matrix from: /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/MatrixSelector/input/example.csv
-2025-09-25 11:58:54,778 - INFO - Saved deduplicated genomic matrix to: results/deduplicated_genomic_matrix.csv
-2025-09-25 11:58:54,779 - INFO - Aligning data...
-2025-09-25 11:58:54,779 - INFO - Aligning genomic data and metadata...
-2025-09-25 11:58:54,790 - INFO - Removing 67 invariant features.
-2025-09-25 11:58:54,795 - INFO - Saved aligned data to: results
-2025-09-25 11:58:54,795 - INFO - Aligned data: 15 samples, 22 features retained.
-2025-09-25 11:58:54,795 - INFO - Aligned data: 15 samples, 22 features retained.
-2025-09-25 11:58:54,795 - INFO - 🌳 Stage 2: Feature Discovery
-2025-09-25 11:58:54,795 - INFO - Running association tests for 22 features.
-2025-09-25 11:59:04,558 - INFO - Saved chi-squared results to: results/
-2025-09-25 11:59:04,558 - INFO - Applying multiple testing correction using fdr_bh.
-2025-09-25 11:59:04,562 - INFO - Saved multiple testing results to: results/
-2025-09-25 11:59:04,562 - INFO - Filtered 7 significant features.
-2025-09-25 11:59:04,562 - INFO - 🔍 Feature discovery: 15 samples, 7 features
-2025-09-25 11:59:04,563 - INFO - Data columns: ['497957', '679712', '771128', '912181', '1290472', '1392623', '1470751', '1551618', '1572071', '1678339', '1901101', '1973797', '2640767', '2860050', '2909481', '3089432', '3136337', '3219764', '3349839', '3371639', '3375761', '3397479']
-2025-09-25 11:59:04,563 - INFO - Input features: ['679712', '771128', '1392623', '1470751', '1572071', '1678339', '3219764']
-2025-09-25 11:59:04,637 - INFO - Prefiltered 7/7 features via FDR
-2025-09-25 11:59:04,637 - INFO - Prefiltered features: ['679712', '771128', '1392623', '1470751', '1572071', '1678339', '3219764']
-2025-09-25 11:59:04,638 - INFO - 📊 2 classes: ['N', 'P']
-2025-09-25 11:59:04,654 - INFO - Built decision tree with depth 1 and 2 leaves.
-2025-09-25 11:59:04,736 - INFO - ✅ Stage 3: Statistical Validation
-2025-09-25 11:59:04,736 - INFO - Running bootstrap validation with 1000 samples.
-2025-09-25 11:59:05,952 - INFO - Saved bootstrap results to: results/
-2025-09-25 11:59:05,953 - INFO - 🔗 Stage 4: Integration
-2025-09-25 11:59:05,953 - INFO - Ranked 1 features by confidence.
-2025-09-25 11:59:06,622 - INFO - Saved network graphs to GraphML files.
-2025-09-25 11:59:06,623 - INFO - Saved iGNN adjacency matrices.
-2025-09-25 11:59:06,623 - INFO - 📤 Stage 5: Output Generation
-2025-09-25 11:59:06,624 - INFO - Saved final results to: results/networkparser_results_20250925_115906.json
-2025-09-25 11:59:06,624 - INFO - ✅ Pipeline completed successfully
-2025-09-25 11:59:06,624 - INFO - NetworkParser pipeline completed successfully in 11.88 seconds
+2025-10-20 23:55:16,305 - INFO - Attempting to import run_networkparser_analysis and NetworkParserConfig
+2025-10-20 23:55:16,305 - INFO - Running cli.py from: /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/network_parser/cli.py
+2025-10-20 23:55:16,305 - INFO - Starting NetworkParser pipeline
+2025-10-20 23:55:16,305 - INFO - Genomic data: /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/data/polymorphic_genetic_loci2.csv
+2025-10-20 23:55:16,305 - INFO - Label column: Group
+2025-10-20 23:55:16,305 - INFO - Output directory: /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/results
+2025-10-20 23:55:16,305 - INFO - Initializing NetworkParser with provided configuration.
+2025-10-20 23:55:16,305 - INFO - Initializing NetworkParser with config: {'max_depth': None, 'min_group_size': 5, 'significance_level': 0.05, 'n_bootstrap_samples': 1000, 'n_permutation_tests': 500, 'multiple_testing_method': 'fdr_bh', 'min_information_gain': 0.001, 'n_jobs': -1, 'random_state': 42}
+2025-10-20 23:55:16,306 - INFO - Initialized StatisticalValidator.
+2025-10-20 23:55:16,306 - INFO - Starting pipeline execution...
+2025-10-20 23:55:16,306 - INFO - [1m 📥 Stage 1: Input Processing[0m
+2025-10-20 23:55:16,306 - INFO - Loading genomic data from: /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/data/polymorphic_genetic_loci2.csv
+2025-10-20 23:55:16,306 - INFO - Loading genomic matrix from: /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/data/polymorphic_genetic_loci2.csv
+2025-10-20 23:55:16,324 - INFO - Saved deduplicated genomic matrix to: results/deduplicated_genomic_matrix.csv
+2025-10-20 23:55:16,324 - INFO - Aligning data...
+2025-10-20 23:55:16,324 - INFO - Aligning genomic data and metadata...
+2025-10-20 23:55:16,329 - INFO - Removing 6 invariant features.
+2025-10-20 23:55:16,331 - INFO - Saved aligned data to: results
+2025-10-20 23:55:16,331 - INFO - Aligned data: 86 samples, 83 features retained.
+2025-10-20 23:55:16,332 - INFO - Aligned data: 86 samples, 83 features retained.
+2025-10-20 23:55:16,332 - INFO - [1m  🌳Stage 2: Feature Discovery[0m
+2025-10-20 23:55:16,332 - INFO - Running association tests for 83 features.
+2025-10-20 23:55:23,305 - INFO - Saved chi-squared results to: results/
+2025-10-20 23:55:23,306 - INFO - Applying multiple testing correction using fdr_bh.
+2025-10-20 23:55:23,312 - INFO - Saved multiple testing results to: results/
+2025-10-20 23:55:23,312 - INFO - Filtered 5 significant features.
+2025-10-20 23:55:23,312 - INFO - 🔍 Feature discovery: 86 samples, 5 features
+2025-10-20 23:55:23,313 - INFO - Input features: ['101361', '366141', '384032', '497957', '522385']
+2025-10-20 23:55:23,374 - INFO - Prefiltered 5/5 features via FDR
+2025-10-20 23:55:23,374 - INFO - Prefiltered features: ['101361', '366141', '384032', '497957', '522385']
+2025-10-20 23:55:23,376 - INFO - 📊 2 classes: ['R', 'S']
+2025-10-20 23:55:23,380 - INFO - Built decision tree with depth 1 and 2 leaves.
+2025-10-20 23:55:23,400 - INFO - [1m Stage 3: Statistical Validation[0m
+2025-10-20 23:55:23,400 - INFO - Running bootstrap validation with 1000 samples.
+2025-10-20 23:55:24,076 - INFO - Saved bootstrap results to: results/
+2025-10-20 23:55:24,076 - INFO - [1m 🔗 Stage 4: Integration[0m
+2025-10-20 23:55:24,076 - INFO - Ranked 1 features by confidence.
+2025-10-20 23:55:24,156 - INFO - Saved network graphs to GraphML files.
+2025-10-20 23:55:24,157 - INFO - Saved iGNN adjacency matrices.
+2025-10-20 23:55:24,157 - INFO - [1m 📤 Stage 5: Output Generation[0m
+2025-10-20 23:55:24,158 - INFO - Saved final results to: results/networkparser_results_20251020_235524.json
+2025-10-20 23:55:24,158 - INFO - ✅ Pipeline completed successfully
+2025-10-20 23:55:24,158 - INFO - NetworkParser pipeline completed successfully in 7.85 seconds
 
 ======================================================================
-🎯 FEATURE DISCOVERY SUMMARY (Workflow Stage 2)
+[1m 🎯 FEATURE DISCOVERY SUMMARY (Workflow Stage 2)[0m
 ======================================================================
 📈 Tree Accuracy: 1.000 | Classes: 2
 🌳 Root Features: 1 | Branch: 0
-  1. 3219764 (conf: 0.841)
+  1. 497957 (conf: 0.865)
 🔗 Epistatic Interactions: 0
 ======================================================================
 
