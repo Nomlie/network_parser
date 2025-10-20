@@ -86,7 +86,7 @@ Details:
 - Handles hierarchical or phenotypic labels.
 - Ensures robust data alignment for downstream analysis.
 
-**2. Feature Discovery**
+**2. Pattern Discovery**
 
 Purpose: Identifies discriminative features using decision trees and detects epistatic interactions.
 
