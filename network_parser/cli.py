@@ -60,7 +60,8 @@ def setup_parser() -> argparse.ArgumentParser:
                              help="Label column name, must exist in meta or genomic file.")
     input_group.add_argument("--known-markers", type=str, default=None,
                              help="Known markers file (TXT/CSV/TSV)")
-    
+    input_group.add_argument("--ref-fasta", type=str, default=None,
+                             help="Reference genome FASTA file (e.g., H37Rv.fa). Required for consensus FASTA output from VCF.")
     opt_group = parser.add_argument_group('Options')
     opt_group.add_argument("--output-dir", type=str, default="results/",
                            help="Output directory")
@@ -108,7 +109,8 @@ def main():
             output_dir=args.output_dir,
             config=config,
             validate_statistics=args.validate_statistics,
-            validate_interactions=args.validate_interactions
+            validate_interactions=args.validate_interactions,
+            ref_fasta=args.ref_fasta
         )
         elapsed_time = time.time() - start_time
         logger.info(f"NetworkParser pipeline completed successfully in {elapsed_time:.2f} seconds")
