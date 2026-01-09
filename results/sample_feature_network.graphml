@@ -1,299 +1,57 @@
 <?xml version='1.0' encoding='utf-8'?>
 <graphml xmlns="http://graphml.graphdrawing.org/xmlns" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://graphml.graphdrawing.org/xmlns http://graphml.graphdrawing.org/xmlns/1.0/graphml.xsd"><key id="d0" for="node" attr.name="type" attr.type="string"/>
-<graph edgedefault="undirected"><node id="1_YP62_ADT">
+<graph edgedefault="undirected"><node id="66_YP38_PB">
   <data key="d0">sample</data>
 </node>
-<node id="2_YP67_ADT">
+<node id="12_YP48_MANG">
   <data key="d0">sample</data>
 </node>
-<node id="3_YP58_ADT">
+<node id="12_YP47_MANG">
   <data key="d0">sample</data>
 </node>
-<node id="4_YP65_PKK">
+<node id="12_YP_45_MANG">
   <data key="d0">sample</data>
 </node>
-<node id="5_YP57_PKK">
+<node id="12_YP_50_MANG">
   <data key="d0">sample</data>
 </node>
-<node id="6_YP52_KK">
+<node id="R2_32_YP_93">
   <data key="d0">sample</data>
 </node>
-<node id="7_YP60_IM">
-  <data key="d0">sample</data>
-</node>
-<node id="8_YP55_NP">
-  <data key="d0">sample</data>
-</node>
-<node id="9_YP68_IM">
-  <data key="d0">sample</data>
-</node>
-<node id="10_YP59_IM">
-  <data key="d0">sample</data>
-</node>
-<node id="11_YP51_IM">
-  <data key="d0">sample</data>
-</node>
-<node id="12_YP54_IM">
-  <data key="d0">sample</data>
-</node>
-<node id="13_YP56_IM">
-  <data key="d0">sample</data>
-</node>
-<node id="14_YP75_IM">
-  <data key="d0">sample</data>
-</node>
-<node id="15_YP61_IM">
-  <data key="d0">sample</data>
-</node>
-<node id="16_YP53_IM">
-  <data key="d0">sample</data>
-</node>
-<node id="17_YP69_IM">
-  <data key="d0">sample</data>
-</node>
-<node id="18_YP64_IM">
-  <data key="d0">sample</data>
-</node>
-<node id="19_YP74_IM">
-  <data key="d0">sample</data>
-</node>
-<node id="20_YP71_IM">
-  <data key="d0">sample</data>
-</node>
-<node id="21_YP63_IM">
-  <data key="d0">sample</data>
-</node>
-<node id="22_YP66_IM">
-  <data key="d0">sample</data>
-</node>
-<node id="23_YP72_IM">
-  <data key="d0">sample</data>
-</node>
-<node id="24_YP70_IM">
-  <data key="d0">sample</data>
-</node>
-<node id="25_YP73_IM">
-  <data key="d0">sample</data>
-</node>
-<node id="29_YP8_KK">
-  <data key="d0">sample</data>
-</node>
-<node id="30_YP17_PB">
-  <data key="d0">sample</data>
-</node>
-<node id="31_YP22_SZ9">
-  <data key="d0">sample</data>
-</node>
-<node id="32_YP32_MOK">
-  <data key="d0">sample</data>
-</node>
-<node id="33_YP16_UE">
-  <data key="d0">sample</data>
-</node>
-<node id="74_YP19_KK">
-  <data key="d0">sample</data>
-</node>
-<node id="40_YP4_PB">
-  <data key="d0">sample</data>
-</node>
-<node id="41_YP26_PAK">
-  <data key="d0">sample</data>
-</node>
-<node id="42_YP10_UE">
-  <data key="d0">sample</data>
-</node>
-<node id="43_YP6_UE">
-  <data key="d0">sample</data>
-</node>
-<node id="44_YP7_NP">
-  <data key="d0">sample</data>
-</node>
-<node id="46_YP29_PAK">
-  <data key="d0">sample</data>
-</node>
-<node id="47_YP36_PAK">
+<node id="3_YP_78_ATYR">
   <data key="d0">sample</data>
 </node>
 <node id="48_YP14_PAK">
   <data key="d0">sample</data>
 </node>
-<node id="49_YP5_PAK">
+<node id="3_YP_08_ATYR">
   <data key="d0">sample</data>
 </node>
-<node id="50_YP23_PB">
+<node id="15_YP27_VUP_">
   <data key="d0">sample</data>
 </node>
-<node id="51_YP1_PAK">
+<node id="5_YP48_MKUM">
   <data key="d0">sample</data>
 </node>
-<node id="52_YP18_PAK">
+<node id="3_YP_14_ARAL">
   <data key="d0">sample</data>
 </node>
-<node id="54_YP2_IM20">
+<node id="3_YP_79_ATYR">
   <data key="d0">sample</data>
 </node>
-<node id="55_YP20_MOK">
+<node id="28_YP48_NP">
   <data key="d0">sample</data>
 </node>
-<node id="56_YP12_TK">
+<node id="8_YP55_NP">
   <data key="d0">sample</data>
 </node>
-<node id="57_YP22_IM">
-  <data key="d0">sample</data>
-</node>
-<node id="58_YP9_TK">
-  <data key="d0">sample</data>
-</node>
-<node id="59_YP21_IM">
-  <data key="d0">sample</data>
-</node>
-<node id="60_YP24_IM">
-  <data key="d0">sample</data>
-</node>
-<node id="61_YP3_PB">
-  <data key="d0">sample</data>
-</node>
-<node id="62_YP33_PB">
-  <data key="d0">sample</data>
-</node>
-<node id="63_YP2_PB">
-  <data key="d0">sample</data>
-</node>
-<node id="64_YP37_KK">
-  <data key="d0">sample</data>
-</node>
-<node id="65_YP4_KK">
-  <data key="d0">sample</data>
-</node>
-<node id="66_YP38_PB">
-  <data key="d0">sample</data>
-</node>
-<node id="67_YP34_PB">
-  <data key="d0">sample</data>
-</node>
-<node id="68_YP15_PB">
-  <data key="d0">sample</data>
-</node>
-<node id="69_YP30_ADT">
-  <data key="d0">sample</data>
-</node>
-<node id="70_YP27_IM24">
-  <data key="d0">sample</data>
-</node>
-<node id="71_YP7_IM25">
-  <data key="d0">sample</data>
-</node>
-<node id="72_YP5_PKK">
-  <data key="d0">sample</data>
-</node>
-<node id="73_YP21_KK">
-  <data key="d0">sample</data>
-</node>
-<node id="75_YP26_PB">
-  <data key="d0">sample</data>
-</node>
-<node id="76_YP20_MOK">
-  <data key="d0">sample</data>
-</node>
-<node id="77_YP25_IM26">
-  <data key="d0">sample</data>
-</node>
-<node id="78_YP23_IM27">
-  <data key="d0">sample</data>
-</node>
-<node id="79_YP9_MOK">
-  <data key="d0">sample</data>
-</node>
-<node id="80_YP4_IM28">
-  <data key="d0">sample</data>
-</node>
-<node id="81_YP39_IM29">
-  <data key="d0">sample</data>
-</node>
-<node id="82_YP1_IM30">
-  <data key="d0">sample</data>
-</node>
-<node id="83_YP13_ADT">
-  <data key="d0">sample</data>
-</node>
-<node id="84_YP17_ADT">
-  <data key="d0">sample</data>
-</node>
-<node id="85_YP3_ADT">
-  <data key="d0">sample</data>
-</node>
-<node id="86_YP12_ADT">
-  <data key="d0">sample</data>
-</node>
-<node id="87_YP18_PKK">
-  <data key="d0">sample</data>
-</node>
-<node id="88_YP10_ADT">
-  <data key="d0">sample</data>
-</node>
-<node id="89_YP5_ADT">
-  <data key="d0">sample</data>
-</node>
-<node id="90_YP32_ADT">
-  <data key="d0">sample</data>
-</node>
-<node id="91_YP6_ADT">
-  <data key="d0">sample</data>
-</node>
-<node id="92_YP31_KK">
-  <data key="d0">sample</data>
-</node>
-<node id="93_YP24_KK">
-  <data key="d0">sample</data>
-</node>
-<node id="94_YP6_KK">
-  <data key="d0">sample</data>
-</node>
-<node id="95_YP11_KK">
-  <data key="d0">sample</data>
-</node>
-<node id="96_YP2_KK">
-  <data key="d0">sample</data>
-</node>
-<node id="97_YP1_KK">
-  <data key="d0">sample</data>
-</node>
-<node id="497957">
+<node id="3219764">
   <data key="d0">feature</data>
 </node>
-<edge source="1_YP62_ADT" target="497957"/>
-<edge source="4_YP65_PKK" target="497957"/>
-<edge source="5_YP57_PKK" target="497957"/>
-<edge source="8_YP55_NP" target="497957"/>
-<edge source="11_YP51_IM" target="497957"/>
-<edge source="13_YP56_IM" target="497957"/>
-<edge source="14_YP75_IM" target="497957"/>
-<edge source="15_YP61_IM" target="497957"/>
-<edge source="16_YP53_IM" target="497957"/>
-<edge source="18_YP64_IM" target="497957"/>
-<edge source="20_YP71_IM" target="497957"/>
-<edge source="29_YP8_KK" target="497957"/>
-<edge source="30_YP17_PB" target="497957"/>
-<edge source="31_YP22_SZ9" target="497957"/>
-<edge source="32_YP32_MOK" target="497957"/>
-<edge source="74_YP19_KK" target="497957"/>
-<edge source="41_YP26_PAK" target="497957"/>
-<edge source="44_YP7_NP" target="497957"/>
-<edge source="52_YP18_PAK" target="497957"/>
-<edge source="54_YP2_IM20" target="497957"/>
-<edge source="56_YP12_TK" target="497957"/>
-<edge source="60_YP24_IM" target="497957"/>
-<edge source="61_YP3_PB" target="497957"/>
-<edge source="69_YP30_ADT" target="497957"/>
-<edge source="70_YP27_IM24" target="497957"/>
-<edge source="72_YP5_PKK" target="497957"/>
-<edge source="73_YP21_KK" target="497957"/>
-<edge source="77_YP25_IM26" target="497957"/>
-<edge source="79_YP9_MOK" target="497957"/>
-<edge source="81_YP39_IM29" target="497957"/>
-<edge source="83_YP13_ADT" target="497957"/>
-<edge source="90_YP32_ADT" target="497957"/>
-<edge source="92_YP31_KK" target="497957"/>
-<edge source="95_YP11_KK" target="497957"/>
-<edge source="97_YP1_KK" target="497957"/>
+<edge source="66_YP38_PB" target="3219764"/>
+<edge source="48_YP14_PAK" target="3219764"/>
+<edge source="5_YP48_MKUM" target="3219764"/>
+<edge source="3_YP_14_ARAL" target="3219764"/>
+<edge source="28_YP48_NP" target="3219764"/>
+<edge source="8_YP55_NP" target="3219764"/>
 </graph></graphml>

@@ -1,17 +1,39 @@
-name: network_parser
+name: networkparser
 channels:
+  - bioconda
   - conda-forge
   - defaults
 dependencies:
-  - python=3.9
-  - pandas>=1.5.0
-  - numpy>=1.23.0
-  - scipy>=1.9.0
-  - scikit-learn>=1.1.0
-  - statsmodels>=0.13.0
-  - ete3>=3.1.0
-  - pyyaml>=6.0
-  - biopython>=1.79
+  - python=3.10
   - pip
+
+  # Core scientific stack
+  - pandas
+  - numpy
+  - scipy
+  - scikit-learn
+  - statsmodels
+  - networkx
+
+  # Bioinformatics tools (essential for VCF & FASTA processing)
+  - bcftools>=1.19
+  - vcftools
+  - tabix
+  - snp-sites  # Optional but useful for SNP-only alignments
+
+  # Graph & visualisation
+  - matplotlib
+  - seaborn  # Optional, nice for future plots
+
+  # Biopython (for FASTA handling fallback)
+  - biopython
+
+  # Parallel processing & utilities
+  - joblib
+
+  # Development & packaging tools (optional but recommended)
   - pip:
-      - threadpoolctl>=3.1.0
+      - pyyaml  # If you add YAML config support later
+      - tqdm    # Progress bars (nice for large runs)
+
+prefix: /path/to/your/anaconda3/envs/networkparser

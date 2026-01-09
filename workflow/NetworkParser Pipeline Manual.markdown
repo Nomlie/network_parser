@@ -1,19 +1,59 @@
 # NetworkParser Pipeline Manual
 
 ## Overview
-The `network_parser` pipeline is a Python-based tool designed for analyzing genomic data to identify significant features (e.g., SNPs) associated with a specified label (e.g., phenotype groups) and to construct interaction networks. It processes genomic matrices, performs statistical validation, builds decision trees, and generates network graphs. The pipeline is executed via a command-line interface (CLI) and consists of four main stages: Input Processing, Feature Discovery, Statistical Validation, and Integration. This manual describes the key scripts involved, their functionalities, inputs, outputs, and roles in the pipeline.
 
-The pipeline is invoked using:
-```bash
-python -m network_parser.cli --genomic <path_to_csv> --label <label_column> --output-dir <output_directory>
-```
+**NetworkParser** is a scalable, modular, and interpretable bioinformatics pipeline designed for microbial genomic analysis. It identifies statistically validated genomic markers and epistatic interactions driving phenotypic segregation (e.g., antimicrobial resistance, lineage diversification) while simultaneously producing phylogenetic-ready outputs.
+
+The pipeline processes variant call format (VCF) files and phenotypic metadata to generate clean binary matrices, decision tree-based feature rankings, statistically robust validation, interaction networks, and consensus pseudogenomes suitable for phylogenetic reconstruction.
+
+### Key Features 
+
+- Native support for VCF(.gz) input with high-quality biallelic SNP/indel filtering (using bcftools)
+- Generation of consensus pseudogenome FASTA files (`bcftools consensus`)
+- Clean binary SNP matrix optimized for machine learning and epistasis analysis
+- Interpretable decision tree-based feature discovery distinguishing root vs. branch markers
+- Rigorous statistical validation including bootstrap resampling and permutation testing
+- Rich network outputs: sample-feature bipartite graphs + epistatic interaction graphs (GraphML format + GNN-ready matrices)
+- End-to-end reproducibility through conda-based environment
 
 ### Pipeline Stages
-1. **Input Processing**: Loads and preprocesses genomic data, aligning features and labels, removing invariant features.
-2. **Feature Discovery**: Identifies significant features using statistical tests and builds a decision tree.
-3. **Statistical Validation**: Validates discovered features using bootstrap and permutation tests.
-4. **Integration**: Ranks features and generates network graphs (e.g., in GraphML format).
 
+1. **Input Processing**  
+   Loading, quality filtering, variant normalization, binary matrix creation, and consensus sequence generation
+
+2. **Feature Discovery**  
+   Statistical association testing + decision tree construction for marker discovery and epistasis detection
+
+3. **Statistical Validation**  
+   Bootstrap-based stability assessment + permutation testing for interaction significance
+
+4. **Integration & Network Construction**  
+   Feature ranking, bipartite sample-feature networks, and epistatic interaction graphs
+
+5. **Output Generation**  
+   Structured reports, GraphML networks, GNN-compatible matrices, and phylogenetic-ready FASTA files
+## Quick Start Example — Mycobacterium tuberculosis Lineage Analysis
+
+```bash
+# Recommended: activate dedicated conda environment first
+conda activate networkparser-env
+
+python -m network_parser.cli \
+  --genomic  data/tb_isolates.vcf.gz \
+  --ref-fasta reference/H37Rv.fasta \
+  --label    Lineage \
+  --output-dir results_tb_2026/ \
+  --n-jobs   -1 \
+  --n-bootstrap 1000 \
+  --n-permutations 500
+Main outputs produced in results_tb_2026/:
+File pattern / DirectoryDescriptiongenomic_matrix.csvClean binary SNP matrix (ML / epistasis ready)filtered_snps.final.vcf.gzHigh-quality filtered variant callsconsensus_fastas/*.fasta or all_samples_consensus.fastaIndividual or concatenated consensus pseudogenomessample_feature_network.graphmlBipartite sample–feature network (visualise in Cytoscape)interaction_graph.graphmlGraph of significant epistatic interactionsignn_matrices.npzGNN-ready adjacency/feature/label matricesnetworkparser_results_*.jsonComplete feature discovery + validation + ranking reportpipeline.logDetailed timestamped execution log
+Follow-up phylogenetic analysis example:
+Bashiqtree2 -s results_tb_2026/consensus_fastas/all_samples_consensus.fasta \
+        -m GTR \
+        -bb 1000 \
+        -nt AUTO \
+        --prefix tb_lineage_iqtree   
 ## Scripts and Their Functions
 
 ### 1. `cli.py`
@@ -42,7 +82,6 @@ python -m network_parser.cli --genomic <path_to_csv> --label <label_column> --ou
 - `argparse`, `logging`, `pathlib`, `network_parser.config`, `network_parser.network_parser`.
 
 ---
-
 ### 2. `config.py`
 **Purpose**: Defines the configuration class for the pipeline.
 
@@ -67,32 +106,36 @@ python -m network_parser.cli --genomic <path_to_csv> --label <label_column> --ou
 ---
 
 ### 3. `data_loader.py`
-**Purpose**: Handles data loading, preprocessing, and alignment (Stage 1: Input Processing).
+
+**Purpose**: Handles all input processing tasks including modern microbial genomics formats (Stage 1: Input Processing).
 
 **Functionality**:
-- Loads the genomic CSV file (e.g., `example.csv`) containing sample IDs, feature columns (e.g., SNPs), and a label column (e.g., `Group`).
-- Deduplicates data to remove redundant entries.
-- Aligns genomic data and metadata, ensuring consistent indices between features and labels.
-- Removes invariant features (e.g., SNPs with no variation across samples).
-- Saves preprocessed data to files like `deduplicated_genomic_matrix.csv`, `aligned_genomic_matrix.csv`, and `aligned_metadata.csv`.
+- Supports native loading of compressed VCF(.gz) files
+- Performs high-quality variant filtering (biallelic SNPs/indels, quality thresholds, missingness filtering)
+- Generates clean binary SNP matrix (0/1/NA or similar encoding)
+- Creates consensus pseudogenome FASTA files using `bcftools consensus` against a provided reference
+- Optionally concatenates all samples into a single multiple-sequence FASTA suitable for phylogenetic reconstruction
+- Deduplicates samples, aligns features and labels, removes invariant sites
+- Saves key intermediate files for traceability and downstream analysis
 
 **Inputs**:
-- Path to the genomic CSV file.
-- Label column name.
-- Output directory for saving preprocessed files.
+- VCF(.gz) file containing variant calls
+- Reference FASTA (required for consensus sequence generation)
+- Label column name
+- Output directory
 
 **Outputs**:
-- `deduplicated_genomic_matrix.csv`: Deduplicated genomic data.
-- `aligned_genomic_matrix.csv`: Aligned feature matrix.
-- `aligned_metadata.csv`: Aligned label data.
-- Log messages, e.g., `2025-09-23 15:13:12,972 - INFO - Aligned data: 15 samples, 22 features retained`.
+- `genomic_matrix.csv` — clean binary variant matrix
+- `filtered_snps.final.vcf.gz` — quality-filtered variant calls
+- `consensus_fastas/*.fasta` or `all_samples_consensus.fasta` — pseudogenome(s) for phylogeny
+- `deduplicated_genomic_matrix.csv`, `aligned_genomic_matrix.csv`, `aligned_metadata.csv`
+- Log messages documenting filtering statistics and retained variants
 
 **Role in Pipeline**:
-- Prepares clean, aligned data for subsequent analysis, reducing the initial 89 features to 22 by removing 67 invariants.
-- Example log: `2025-09-23 15:13:12,971 - INFO - Removing 67 invariant features`.
+Serves as the critical modern genomics-aware entry point, transforming raw variant calls into analysis-ready matrices and phylogenetic inputs while maintaining full reproducibility.
 
 **Dependencies**:
-- `pandas`, `numpy`, `logging`, `pathlib`, `network_parser.config`.
+- `pandas`, `numpy`, `bcftools` (via subprocess), `pathlib`, `logging`, `network_parser.config`
 
 ---
 
