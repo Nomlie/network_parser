@@ -84,28 +84,25 @@ Ranks features by combined effect size + stability, constructs sample-feature an
 ## Installation
 
 ```bash
-# Recommended: use conda for reproducibility (includes bcftools)
 conda env create -f environment.yml
 conda activate networkparser
 ````
-
-# Or install directly from PyPI (when published)
-pip install networkparser
 See environment.yml for exact dependency versions (pandas, numpy, scikit-learn, networkx, joblib, bcftools, etc.).
 
-Quick Start – Mycobacterium tuberculosis Lineage Analysis
-```bashpython -m network_parser.cli \
+## Quick Start – Mycobacterium tuberculosis Lineage Analysis
+```bash 
+python -m network_parser.cli \
   --genomic  data/tb_isolates.vcf.gz \
   --ref-fasta reference/H37Rv.fasta \
   --label    Lineage \
   --output-dir results_tb_2026/ \
-  --n-jobs   -1 \
+  --n-jobs   -4 \
   --n-bootstrap 1000 \
   --n-permutations 500
 ````
 
-Main outputs (in results_tb_2026/):
-
+## Main outputs (in results_tb_2026/):
+```bash
 genomic_matrix.csv — Clean binary SNP matrix (ML/epistasis ready)
 filtered_snps.final.vcf.gz — High-quality filtered variants
 consensus_fastas/*.fasta or all_samples_consensus.fasta — Pseudogenomes for phylogeny
@@ -114,8 +111,9 @@ interaction_graph.graphml — Epistatic interaction graph
 ignn_matrices.npz — GNN-ready adjacency/feature/label matrices
 networkparser_results_*.json — Complete discovery + validation report
 pipeline.log — Detailed execution log
+````
 
-Follow-up phylogeny:
+### Follow-up phylogeny:
 ```bash
 iqtree2 -s results_tb_2026/consensus_fastas/all_samples_consensus.fasta \
         -m GTR \
@@ -124,83 +122,26 @@ iqtree2 -s results_tb_2026/consensus_fastas/all_samples_consensus.fasta \
         --prefix tb_lineage_iqtree
 ````
 
-Input Data Formats
+### Input Data Formats
 
 Primary input — Multi-sample VCF(.gz) (biallelic SNPs/indels preferred)
 Reference FASTA — Required for consensus sequence generation
 Label file — CSV/TSV with sample IDs and phenotypic/lineage labels (or specified column in metadata)
 
 
-Command Line Options
-Run python -m network_parser.cli --help for the full list. Key flags:
+### Command Line Options
+```bash
+Run python -m network_parser.cli --help```` for the full list.
 
+### Key flags:
+```bash
 --genomic — Path to VCF(.gz)
 --ref-fasta — Reference genome FASTA
 --label — Phenotype/lineage column name
 --output-dir — Output directory
 --n-bootstrap / --n-permutations — Validation iterations
 --min-quality / --max-missing — VCF filtering parameters
-
-
-Output Files
-See the Quick Start section above for a summary table of the most important files.
-Detailed reports include:
-
-Feature confidence and stability (feature_confidence.json, bootstrap_results.json)
-Interaction significance (epistatic_interactions.json, interaction_permutation_results.json)
-Decision tree rules (decision_tree_rules.txt)
-
-
-Project Structure
-textnetwork_parser/
-├── cli.py
-├── config.py
-├── data_loader.py        # VCF parsing, filtering, binary matrix & consensus FASTA
-├── decision_tree_builder.py
-├── statistical_validator.py
-├── network_parser.py     # Orchestration + network construction
-├── environment.yml
-└── README.md
-
-Example Analysis
-See the examples/ directory for TB lineage, AMR, and pan-genome use cases.
-
-Advanced Configuration
-Customize significance thresholds, tree depth, minimum group size, and multiple-testing method via command-line flags or a future config file.
-
-Methods
-
-Variant filtering — bcftools-based quality and biallelic checks
-Consensus sequences — bcftools consensus applied to filtered VCF
-Feature selection — DecisionTreeClassifier with pre-filtering (chi-squared/Fisher + FDR)
-Validation — Bootstrap stability + permutation testing for interactions
-Networks — NetworkX for bipartite and interaction graphs
-
-
-Comparison to Existing Tools
-NetworkParser uniquely bridges interpretable ML, epistasis detection, and phylogenetic output generation — differentiating it from pure variant callers (GATK), association tools (PLINK), or general pipelines (Snakemake/Nextflow wrappers).
-
-Benchmarks and Performance
-Tested on datasets up to 500 samples × 100k variants; scales well with parallelization (--n-jobs).
-
-Troubleshooting
-
-Ensure bcftools is in PATH
-VCF must be indexed (bgzip + tabix)
-Check pipeline.log for detailed errors
-
-
-Citation
-(Placeholder – update with publication details when available)
-
-Contributing
-Contributions are welcome! Please submit pull requests with clear descriptions.
-
-License
-MIT License – see LICENSE
-
-Support
-Open an issue on GitHub or contact the maintainers.
+````
 
 ---
 
@@ -298,59 +239,27 @@ network_parser/
 ```
 ---
 
-## Installation
-### Option 1: Conda Environment (recommended)
-```bash
-git clone https://github.com/Nomlie/network_parser.git
-cd network_parser
-conda env create -f environment.yml
-conda activate network_parser
-```
+### Advanced Configuration
+Customize significance thresholds, tree depth, minimum group size, and multiple-testing method via command-line flags or a future config file.
 
-### Option 2: Pip Installation
 
-```bash
-git clone https://github.com/Nomlie/network_parser.git
-cd network_parser
-python -m venv venv
-source venv/bin/activate   # (Linux/Mac)
-venv\Scripts\activate      # (Windows)
-pip install -r requirements.txt
-```
-Set PYTHONPATH
-```bash
-export PYTHONPATH=$PYTHONPATH:$(pwd)
-```
-Add this line to your shell configuration (~/.bashrc or ~/.zshrc) if you want it permanent.
+### Benchmarks and Performance
 
-```bash
-python -m network_parser -h
-```
+### Troubleshooting
 
-Example run:
+Ensure bcftools is in PATH
+VCF must be indexed (bgzip + tabix)
+Check pipeline.log for detailed errors
 
-```bash
-python -m network_parser.cli  \
-  --genomic data/matrix.csv \
-  --meta data/labels.csv \
-  --label phenotype \
-  --output results/
-```
 
-## Command-Line Options:
-```bash
---genomic: Path to genomic matrix (e.g., data/matrix.csv).
---meta: Path to metadata (e.g., data/labels.csv).
---label: Label column name (e.g., label).
---output-dir: Output directory (e.g., results/).
-```
+### Citation
+(Placeholder – update with publication details when available)
 
-- Config File: Supports YAML/JSON for reproducibility (defined in config.py).
-- Scalability: Multi-threaded execution for large datasets.
+### Contributing
+Contributions are welcome! Please submit pull requests with clear descriptions.
 
-Outputs will be saved in the results/ directory.
+### License
+MIT License – see LICENSE
 
----
-**Analysis Modes**
-- Hierarchical Mode: Analyzes phylogenetic or lineage-based contexts.
-- Phenotype Mode: Focuses on metadata-driven comparisons (e.g., disease vs. healthy).
+### Support
+Open an issue on GitHub or contact the maintainers.
