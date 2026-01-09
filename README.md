@@ -124,14 +124,15 @@ iqtree2 -s results_tb_2026/consensus_fastas/all_samples_consensus.fasta \
 
 ### Input Data Formats
 
-Primary input — Multi-sample VCF(.gz) (biallelic SNPs/indels preferred)
-Reference FASTA — Required for consensus sequence generation
-Label file — CSV/TSV with sample IDs and phenotypic/lineage labels (or specified column in metadata)
+- Primary input — Multi-sample VCF(.gz) (biallelic SNPs/indels preferred)
+- Reference FASTA — Required for consensus sequence generation
+- Label file — CSV/TSV with sample IDs and phenotypic/lineage labels (or specified column in metadata)
 
 
 ### Command Line Options
 ```bash
-Run python -m network_parser.cli --help```` for the full list.
+Run python -m network_parser.cli --help
+```` for the full list.
 
 ### Key flags:
 ```bash
