@@ -87,13 +87,14 @@ Ranks features by combined effect size + stability, constructs sample-feature an
 # Recommended: use conda for reproducibility (includes bcftools)
 conda env create -f environment.yml
 conda activate networkparser
+````
 
 # Or install directly from PyPI (when published)
 pip install networkparser
 See environment.yml for exact dependency versions (pandas, numpy, scikit-learn, networkx, joblib, bcftools, etc.).
 
 Quick Start – Mycobacterium tuberculosis Lineage Analysis
-Bashpython -m network_parser.cli \
+```bashpython -m network_parser.cli \
   --genomic  data/tb_isolates.vcf.gz \
   --ref-fasta reference/H37Rv.fasta \
   --label    Lineage \
@@ -101,6 +102,8 @@ Bashpython -m network_parser.cli \
   --n-jobs   -1 \
   --n-bootstrap 1000 \
   --n-permutations 500
+````
+
 Main outputs (in results_tb_2026/):
 
 genomic_matrix.csv — Clean binary SNP matrix (ML/epistasis ready)
@@ -113,11 +116,13 @@ networkparser_results_*.json — Complete discovery + validation report
 pipeline.log — Detailed execution log
 
 Follow-up phylogeny:
-Bashiqtree2 -s results_tb_2026/consensus_fastas/all_samples_consensus.fasta \
+```bash
+iqtree2 -s results_tb_2026/consensus_fastas/all_samples_consensus.fasta \
         -m GTR \
         -bb 1000 \
         -nt AUTO \
         --prefix tb_lineage_iqtree
+````
 
 Input Data Formats
 

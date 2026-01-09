@@ -63,7 +63,6 @@ pipeline.log	Detailed timestamped execution log
 
 ## Follow-up phylogenetic analysis example
 ```bash
-Copy code
 iqtree2 \
   -s results_tb_2026/consensus_fastas/all_samples_consensus.fasta \
   -m GTR \
@@ -119,11 +118,11 @@ Coordinates all output files written to output-dir
 
 Log file: pipeline_run.log
 
-Role in Pipeline
+### Role in Pipeline
 
 Entry point that validates inputs and dispatches execution
 
-## Dependencies
+### Dependencies
 
 argparse, logging, pathlib
 
@@ -132,10 +131,10 @@ network_parser.config
 network_parser.network_parser
 
 **2. config.py**
-Purpose
+### Purpose
 Defines the configuration object used across the pipeline.
 
-Functionality
+### Functionality
 
 Implements the NetworkParserConfig class
 
@@ -169,20 +168,20 @@ Outputs
 
 A NetworkParserConfig instance
 
-Role in Pipeline
+### Role in Pipeline
 
 Centralizes and standardizes configuration
 
-Dependencies
+### Dependencies
 
 Standard Python libraries (dataclasses, typing)
 
 **3. data_loader.py**
-Purpose
+### Purpose
 Handles modern microbial genomics input processing
 (Stage 1: Input Processing)
 
-Functionality
+### Functionality
 
 Native loading of compressed VCF (.vcf.gz)
 
@@ -230,11 +229,11 @@ aligned_genomic_matrix.csv
 
 aligned_metadata.csv
 
-Role in Pipeline
+### Role in Pipeline
 
 Converts raw variant calls into analysis-ready matrices and phylogenetic inputs with full reproducibility
 
-Dependencies
+### Dependencies
 
 pandas, numpy
 
@@ -245,11 +244,11 @@ pathlib, logging
 network_parser.config
 
 **4. decision_tree_builder.py**
-Purpose
+### Purpose
 Feature discovery and rule induction
 (Stage 2: Feature Discovery)
 
-Functionality
+### Functionality
 
 Performs association testing (chi-squared / Fisher’s exact)
 
@@ -285,11 +284,11 @@ feature_confidence.json
 
 epistatic_interactions.json
 
-Role in Pipeline
+### Role in Pipeline
 
 Identifies discriminative variants and models their hierarchical structure
 
-Dependencies
+### Dependencies
 
 sklearn.tree
 
@@ -300,11 +299,11 @@ logging, pathlib
 network_parser.statistical_validator
 
 **5. statistical_validator.py**
-Purpose
+### Purpose
 Rigorous statistical validation
 (Stage 3: Statistical Validation)
 
-Functionality
+### Functionality
 
 Association testing with effect sizes and information metrics
 
@@ -334,11 +333,11 @@ bootstrap_results.json
 
 interaction_permutation_results.json
 
-Role in Pipeline
+### Role in Pipeline
 
 Quantifies robustness, stability, and statistical support
 
-Dependencies
+### Dependencies
 
 scipy.stats
 
@@ -353,11 +352,11 @@ pandas, numpy
 json, logging
 
 **6. network_parser.py**
-Purpose
+### Purpose
 Pipeline orchestration and integration
 (Stage 4: Integration)
 
-Functionality
+### Functionality
 
 Coordinates Stages 1–3
 
@@ -385,11 +384,11 @@ network_graph.graphml
 
 networkparser_results_*.json
 
-Role in Pipeline
+### Role in Pipeline
 
 Final synthesis layer producing interpretable, network-aware results
 
-Dependencies
+### Dependencies
 
 networkx
 
@@ -449,9 +448,9 @@ Parallelization is enabled by default for computational efficiency
 **Troubleshooting**
 Ensure dependencies are installed:
 
-bash
-Copy code
+```bash
 conda install scipy statsmodels scikit-learn pandas numpy joblib networkx
+````
 Verify input formats and label consistency
 
 Inspect pipeline_run.log for detailed diagnostics
