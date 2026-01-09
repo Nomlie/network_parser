@@ -102,16 +102,16 @@ python -m network_parser.cli \
 ````
 
 ## Main outputs (in results_tb_2026/):
-```bash
-genomic_matrix.csv — Clean binary SNP matrix (ML/epistasis ready)
-filtered_snps.final.vcf.gz — High-quality filtered variants
-consensus_fastas/*.fasta or all_samples_consensus.fasta — Pseudogenomes for phylogeny
-sample_feature_network.graphml — Bipartite sample–feature network (visualize in Cytoscape)
-interaction_graph.graphml — Epistatic interaction graph
-ignn_matrices.npz — GNN-ready adjacency/feature/label matrices
-networkparser_results_*.json — Complete discovery + validation report
-pipeline.log — Detailed execution log
-````
+
+- genomic_matrix.csv — Clean binary SNP matrix (ML/epistasis ready)
+- filtered_snps.final.vcf.gz — High-quality filtered variants
+- consensus_fastas/*.fasta or all_samples_consensus.fasta — Pseudogenomes for phylogeny
+- sample_feature_network.graphml — Bipartite sample–feature network (visualize in Cytoscape)
+- interaction_graph.graphml — Epistatic interaction graph
+- ignn_matrices.npz — GNN-ready adjacency/feature/label matrices
+- networkparser_results_*.json — Complete discovery + validation report
+- pipeline.log — Detailed execution log
+
 
 ### Follow-up phylogeny:
 ```bash
@@ -132,7 +132,8 @@ iqtree2 -s results_tb_2026/consensus_fastas/all_samples_consensus.fasta \
 ### Command Line Options
 ```bash
 Run python -m network_parser.cli --help
-```` for the full list.
+```` 
+to see the full list.
 
 ### Key flags:
 ```bash
@@ -254,7 +255,6 @@ Check pipeline.log for detailed errors
 
 
 ### Citation
-(Placeholder – update with publication details when available)
 
 ### Contributing
 Contributions are welcome! Please submit pull requests with clear descriptions.
