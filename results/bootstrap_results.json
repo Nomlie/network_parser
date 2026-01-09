@@ -1,45 +1,45 @@
 {
-  "101361": {
+  "679712": {
     "stability_score": 1.0,
-    "mean_importance": 0.19,
+    "mean_importance": 0.215,
     "ci": [
       0.0,
       1.0
     ],
-    "p_value": 1.1197173183722697e-47,
+    "p_value": 1.6659156666148257e-54,
     "significant": true
   },
-  "366141": {
-    "stability_score": 0.364,
-    "mean_importance": 0.174,
+  "771128": {
+    "stability_score": 1.0,
+    "mean_importance": 0.039,
     "ci": [
       0.0,
       1.0
     ],
-    "p_value": 2.047726106620598e-43,
+    "p_value": 2.9291802764096487e-10,
     "significant": true
   },
-  "384032": {
-    "stability_score": 0.206,
-    "mean_importance": 0.206,
+  "1392623": {
+    "stability_score": 0.484,
+    "mean_importance": 0.23,
     "ci": [
       0.0,
       1.0
     ],
-    "p_value": 5.055911831285309e-52,
+    "p_value": 1.0516261380350027e-58,
     "significant": true
   },
-  "497957": {
-    "stability_score": 0.208,
-    "mean_importance": 0.208,
+  "1470751": {
+    "stability_score": 0.024,
+    "mean_importance": 0.024,
     "ci": [
       0.0,
-      1.0
+      0.0
     ],
-    "p_value": 1.4276066134818517e-52,
+    "p_value": 8.433162014916112e-07,
     "significant": true
   },
-  "522385": {
+  "1572071": {
     "stability_score": 0.222,
     "mean_importance": 0.222,
     "ci": [
@@ -47,6 +47,26 @@
       1.0
     ],
     "p_value": 1.869276004129311e-56,
+    "significant": true
+  },
+  "1678339": {
+    "stability_score": 0.04,
+    "mean_importance": 0.04,
+    "ci": [
+      0.0,
+      1.0
+    ],
+    "p_value": 1.720467689370121e-10,
+    "significant": true
+  },
+  "3219764": {
+    "stability_score": 0.23,
+    "mean_importance": 0.23,
+    "ci": [
+      0.0,
+      1.0
+    ],
+    "p_value": 1.0516261380350027e-58,
     "significant": true
   }
 }

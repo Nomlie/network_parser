@@ -22,55 +22,75 @@ class NetworkParser:
     def __init__(self, config: NetworkParserConfig):
         logger.info(f"Initializing NetworkParser with config: {vars(config)}")
         self.config = config
-        self.loader = DataLoader()
+        self.loader = DataLoader()  # Uses enhanced DataLoader with bcftools + FASTA support
         self.validator = StatisticalValidator(config)
         self.tree_builder = EnhancedDecisionTreeBuilder(config)
 
     def run_pipeline(self, genomic_path: str, meta_path: Optional[str] = None, label_column: str = None,
                      known_markers_path: Optional[str] = None, output_dir: str = "results/",
-                     validate_statistics: bool = True, validate_interactions: bool = True) -> Dict:
+                     validate_statistics: bool = True, validate_interactions: bool = True,
+                     ref_fasta: Optional[str] = None) -> Dict:
         """
         Execute the full pipeline: load data, discover features, validate, and integrate results.
 
         Args:
-            genomic_path (str): Path to the genomic data file.
+            genomic_path (str): Path to the genomic data file (CSV/TSV/VCF/FASTA).
             meta_path (Optional[str]): Path to the metadata file. Defaults to None.
-            label_column (str): Name of the column containing labels.
+            label_column (str): Name of the column containing labels (required).
             known_markers_path (Optional[str]): Path to known markers file. Defaults to None.
-            output_dir (str, optional): Output directory. Defaults to "results/".
-            validate_statistics (bool, optional): Whether to run statistical validation. Defaults to True.
-            validate_interactions (bool, optional): Whether to validate interactions. Defaults to True.
+            output_dir (str): Output directory. Defaults to "results/".
+            validate_statistics (bool): Run statistical validation. Defaults to True.
+            validate_interactions (bool): Validate epistatic interactions. Defaults to True.
+            ref_fasta (Optional[str]): Reference genome FASTA (used for VCF → consensus FASTA generation).
 
         Returns:
-            dict: Pipeline results.
+            dict: Pipeline results including discovered features, networks, and validation.
         """
-        logger.info("\033[1m 📥 Stage 1: Input Processing\033[0m")
-        data, labels, known_markers = self._load_and_preprocess(
-            genomic_path, meta_path, label_column, known_markers_path, output_dir
+        logger.info("\033[1m📥 Stage 1: Input Processing\033[0m")
+
+        # Load genomic data → clean binary matrix (handles VCF filtering + consensus FASTA if ref_fasta given)
+        genomic_df = self.loader.load_genomic_matrix(
+            file_path=genomic_path,
+            output_dir=output_dir,
+            ref_fasta=ref_fasta  # Triggers bcftools consensus for VCF inputs
         )
 
-        logger.info("\033[1m  🌳Stage 2: Feature Discovery\033[0m")
+        # Load optional metadata and known markers
+        meta = self.loader.load_metadata(meta_path, output_dir) if meta_path else None
+        known_markers = self.loader.load_known_markers(known_markers_path, output_dir) if known_markers_path else None
+
+        # Align data and extract labels (supports labels in matrix or metadata)
+        data, labels = self.loader.align_data(
+            genomic_data=genomic_df,
+            metadata=meta,
+            label_column=label_column,
+            output_dir=output_dir
+        )
+
+        logger.info(f"Final aligned dataset: {len(data)} samples, {data.shape[1]} features")
+
+        logger.info("\033[1m🌳 Stage 2: Feature Discovery\033[0m")
         chi2_results = self.validator.chi_squared_test(data, labels, output_dir)
         corrected = self.validator.multiple_testing_correction(chi2_results, output_dir=output_dir)
         significant_features = [f for f, res in corrected.items() if res['significant']]
         logger.info(f"Filtered {len(significant_features)} significant features.")
         discovery_results = self.tree_builder.discover_features(data, labels, significant_features, output_dir)
 
-        logger.info("\033[1m Stage 3: Statistical Validation\033[0m")
+        logger.info("\033[1m✅ Stage 3: Statistical Validation\033[0m")
         if validate_statistics:
             bootstrap = self.validator.bootstrap_validation(data, labels, significant_features, output_dir)
             discovery_results['bootstrap'] = bootstrap
 
         if validate_interactions and discovery_results.get('epistatic_interactions'):
-            logger.info("\033[1m 🔄 Stage 3b: Interaction Validation\033[0m")
+            logger.info("\033[1m🔄 Stage 3b: Interaction Validation\033[0m")
             interactions = [(i['parent'], i['child']) for i in discovery_results['epistatic_interactions']]
             interaction_results = self.validator.permutation_test_interactions(data, labels, interactions, output_dir)
             discovery_results['interaction_validation'] = interaction_results
 
-        logger.info("\033[1m 🔗 Stage 4: Integration\033[0m")
+        logger.info("\033[1m🔗 Stage 4: Integration\033[0m")
         integrated = self._integrate_features(discovery_results, data, labels, output_dir)
 
-        logger.info("\033[1m 📤 Stage 5: Output Generation\033[0m")
+        logger.info("\033[1m📤 Stage 5: Output Generation\033[0m")
         results = {**discovery_results, **integrated}
         if known_markers:
             results['known_comparison'] = self._compare_known_markers(data, labels, significant_features, known_markers)
@@ -79,25 +99,19 @@ class NetworkParser:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             output_path = Path(output_dir)
             output_path.mkdir(parents=True, exist_ok=True)
-            with open(output_path / f"networkparser_results_{timestamp}.json", 'w') as f:
+            final_json = output_path / f"networkparser_results_{timestamp}.json"
+            with open(final_json, 'w') as f:
                 json.dump(results, f, indent=2)
-            logger.info(f"Saved final results to: {output_path / f'networkparser_results_{timestamp}.json'}")
+            logger.info(f"Saved final results to: {final_json}")
+
+            # Extra note if consensus FASTAs were generated
+            if ref_fasta and Path(genomic_path).suffix.lower() in {'.vcf', '.vcf.gz'}:
+                consensus_dir = output_path / "consensus_fastas"
+                if consensus_dir.exists():
+                    logger.info(f"Consensus FASTA pseudogenomes saved in: {consensus_dir}")
 
         logger.info("✅ Pipeline completed successfully")
         return results
-
-    def _load_and_preprocess(self, genomic_path: str, meta_path: Optional[str],
-                             label_column: str, known_markers_path: Optional[str],
-                             out_dir: str) -> Tuple[pd.DataFrame, pd.Series, Optional[List[str]]]:
-        """Stage 1: Load/align data (as per diagram)."""
-        logger.info(f"Loading genomic data from: {genomic_path}")
-        genomic = self.loader.load_genomic_matrix(genomic_path, out_dir)
-        meta = self.loader.load_metadata(meta_path, out_dir) if meta_path else None
-        markers = self.loader.load_known_markers(known_markers_path, out_dir) if known_markers_path else None
-        logger.info("Aligning data...")
-        aligned_data, aligned_labels = self.loader.align_data(genomic, meta, label_column, out_dir)
-        logger.info(f"Aligned data: {len(aligned_labels)} samples, {aligned_data.shape[1]} features retained.")
-        return aligned_data, aligned_labels, markers
 
     def _integrate_features(self, results: Dict, data: pd.DataFrame, labels: pd.Series, output_dir: Optional[str]) -> Dict:
         """Stage 4: Integrate features into networks and rankings."""
@@ -123,7 +137,7 @@ class NetworkParser:
             nx.write_graphml(sample_feature_graph, output_path / "sample_feature_network.graphml")
             nx.write_graphml(interaction_graph, output_path / "interaction_graph.graphml")
             logger.info("Saved network graphs to GraphML files.")
-            # iGNN matrices: adjacency
+
             np.savez(output_path / "ignn_matrices.npz",
                      sample_feature_adj=nx.to_numpy_array(sample_feature_graph),
                      interaction_adj=nx.to_numpy_array(interaction_graph))
@@ -141,21 +155,31 @@ class NetworkParser:
         logger.info(f"Found {len(overlap)} overlapping markers with known set.")
         return {'overlap': list(overlap), 'overlap_ratio': len(overlap) / len(known) if known else 0}
 
+
 def run_networkparser_analysis(**kwargs):
     """
-    Entry-point function for pipeline execution.
+    Entry-point function for pipeline execution (used by CLI).
     """
     logger.info("Initializing NetworkParser with provided configuration.")
     config = kwargs.pop('config', NetworkParserConfig())
     parser = NetworkParser(config)
     logger.info("Starting pipeline execution...")
-    return parser.run_pipeline(**kwargs)
+    try:
+        return parser.run_pipeline(**kwargs)
+    finally:
+        # Clean up temporary files from DataLoader (e.g., intermediate VCFs)
+        if hasattr(parser.loader, 'cleanup'):
+            parser.loader.cleanup()
+
 
 if __name__ == "__main__":
     import sys
-    if len(sys.argv) < 2:
-        print("Usage: python network_parser.py --genomic data.csv --label phenotype")
+    if len(sys.argv) < 3:
+        print("Usage: python network_parser.py <genomic_file> <label_column>")
         sys.exit(1)
-    # Simple arg parse for direct run
-    results = run_networkparser_analysis(genomic_path=sys.argv[1], label_column='label')
+    # Simple direct run (for testing)
+    results = run_networkparser_analysis(
+        genomic_path=sys.argv[1],
+        label_column=sys.argv[2]
+    )
     print(json.dumps(results, indent=2))

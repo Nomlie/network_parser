@@ -1,667 +1,253 @@
 {
-  "101361": {
-    "statistic": null,
-    "p_value": 6.615708295744182e-25,
-    "dof": null,
-    "cramers_v": 0.9759103641456582,
-    "mutual_info": 0.6757392797294366,
-    "effect_size_class": "large",
-    "contingency_table": {
-      "R": {
-        "0": 0,
-        "1": 35
-      },
-      "S": {
-        "0": 51,
-        "1": 0
-      }
-    }
-  },
-  "366141": {
-    "statistic": null,
-    "p_value": 6.615708295744182e-25,
-    "dof": null,
-    "cramers_v": 0.9759103641456582,
-    "mutual_info": 0.6757392797294366,
-    "effect_size_class": "large",
-    "contingency_table": {
-      "R": {
-        "0": 0,
-        "1": 35
-      },
-      "S": {
-        "0": 51,
-        "1": 0
-      }
-    }
-  },
-  "384032": {
-    "statistic": null,
-    "p_value": 6.615708295744182e-25,
-    "dof": null,
-    "cramers_v": 0.9759103641456582,
-    "mutual_info": 0.6757392797294366,
-    "effect_size_class": "large",
-    "contingency_table": {
-      "R": {
-        "0": 0,
-        "1": 35
-      },
-      "S": {
-        "0": 51,
-        "1": 0
-      }
-    }
-  },
   "497957": {
-    "statistic": null,
-    "p_value": 6.615708295744182e-25,
-    "dof": null,
-    "cramers_v": 0.9759103641456582,
-    "mutual_info": 0.6757392797294366,
-    "effect_size_class": "large",
-    "contingency_table": {
-      "R": {
-        "0": 0,
-        "1": 35
-      },
-      "S": {
-        "0": 51,
-        "1": 0
-      }
-    }
-  },
-  "522385": {
-    "statistic": null,
-    "p_value": 6.615708295744182e-25,
-    "dof": null,
-    "cramers_v": 0.9759103641456582,
-    "mutual_info": 0.6757392797294366,
-    "effect_size_class": "large",
-    "contingency_table": {
-      "R": {
-        "0": 0,
-        "1": 35
-      },
-      "S": {
-        "0": 51,
-        "1": 0
-      }
-    }
-  },
-  "618552": {
     "statistic": null,
     "p_value": 1.0,
     "dof": null,
     "cramers_v": 0.0,
-    "mutual_info": 0.0008599441236926825,
+    "mutual_info": 0.0356307692888162,
     "effect_size_class": "negligible",
     "contingency_table": {
-      "R": {
-        "0": 2,
-        "1": 33
+      "N": {
+        "0": 6,
+        "1": 0
       },
-      "S": {
-        "0": 2,
-        "1": 49
+      "P": {
+        "0": 8,
+        "1": 1
       }
     }
   },
   "679712": {
-    "statistic": 0.11055590863796519,
-    "p_value": 0.7395121272515457,
-    "dof": 1,
-    "cramers_v": 0.03585434173669471,
-    "mutual_info": 0.001803224419012761,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 22,
-        "1": 13
-      },
-      "S": {
-        "0": 29,
-        "1": 22
-      }
-    }
-  },
-  "698985": {
     "statistic": null,
-    "p_value": 0.4069767441860464,
+    "p_value": 0.0001998001998001998,
     "dof": null,
-    "cramers_v": 0.020538154375152228,
-    "mutual_info": 0.010553329778427038,
-    "effect_size_class": "negligible",
+    "cramers_v": 0.8611111111111112,
+    "mutual_info": 0.6730116670092563,
+    "effect_size_class": "large",
     "contingency_table": {
-      "R": {
-        "0": 1,
-        "1": 34
-      },
-      "S": {
+      "N": {
         "0": 0,
-        "1": 51
+        "1": 6
+      },
+      "P": {
+        "0": 9,
+        "1": 0
       }
     }
   },
   "771128": {
     "statistic": null,
-    "p_value": 0.43547872716048547,
+    "p_value": 0.006993006993006994,
     "dof": null,
-    "cramers_v": 0.05636458985327027,
-    "mutual_info": 0.004861544669207782,
-    "effect_size_class": "negligible",
+    "cramers_v": 0.627376434428478,
+    "mutual_info": 0.3730995898792253,
+    "effect_size_class": "large",
     "contingency_table": {
-      "R": {
-        "0": 4,
-        "1": 31
+      "N": {
+        "0": 0,
+        "1": 6
       },
-      "S": {
-        "0": 3,
-        "1": 48
-      }
-    }
-  },
-  "798590": {
-    "statistic": 0.9702376375386754,
-    "p_value": 0.3246209199386795,
-    "dof": 1,
-    "cramers_v": 0.10621597334975451,
-    "mutual_info": 0.009489409200734128,
-    "effect_size_class": "small",
-    "contingency_table": {
-      "R": {
-        "0": 30,
-        "1": 5
-      },
-      "S": {
-        "0": 38,
-        "1": 13
+      "P": {
+        "0": 7,
+        "1": 2
       }
     }
   },
   "912181": {
     "statistic": null,
-    "p_value": 1.0,
+    "p_value": 0.4,
     "dof": null,
-    "cramers_v": 0.0,
-    "mutual_info": 0.0005769448841390634,
+    "cramers_v": 0.05455447255899806,
+    "mutual_info": 0.06470554324811373,
     "effect_size_class": "negligible",
     "contingency_table": {
-      "R": {
-        "0": 4,
-        "1": 31
+      "N": {
+        "0": 1,
+        "1": 5
       },
-      "S": {
-        "0": 7,
-        "1": 44
-      }
-    }
-  },
-  "1004403": {
-    "statistic": null,
-    "p_value": 0.5116279069767441,
-    "dof": null,
-    "cramers_v": 0.04930489214018809,
-    "mutual_info": 0.01234120597027158,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
+      "P": {
         "0": 0,
-        "1": 35
-      },
-      "S": {
-        "0": 2,
-        "1": 49
-      }
-    }
-  },
-  "1101240": {
-    "statistic": 0.026915206890175698,
-    "p_value": 0.8696850541748129,
-    "dof": 1,
-    "cramers_v": 0.01769088810599364,
-    "mutual_info": 0.0008607252951524091,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 15,
-        "1": 20
-      },
-      "S": {
-        "0": 24,
-        "1": 27
-      }
-    }
-  },
-  "1101401": {
-    "statistic": null,
-    "p_value": 1.0,
-    "dof": null,
-    "cramers_v": 0.0,
-    "mutual_info": 0.0004195430363962624,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 1,
-        "1": 34
-      },
-      "S": {
-        "0": 1,
-        "1": 50
-      }
-    }
-  },
-  "1119694": {
-    "statistic": null,
-    "p_value": 1.0,
-    "dof": null,
-    "cramers_v": 0.0,
-    "mutual_info": 0.006122717192923156,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 0,
-        "1": 35
-      },
-      "S": {
-        "0": 1,
-        "1": 50
-      }
-    }
-  },
-  "1277826": {
-    "statistic": 0.0,
-    "p_value": 1.0,
-    "dof": 1,
-    "cramers_v": 0.0,
-    "mutual_info": 0.00023219842945199076,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 11,
-        "1": 24
-      },
-      "S": {
-        "0": 15,
-        "1": 36
+        "1": 9
       }
     }
   },
   "1290472": {
     "statistic": null,
-    "p_value": 0.4069767441860464,
+    "p_value": 0.4857142857142857,
     "dof": null,
-    "cramers_v": 0.020538154375152228,
-    "mutual_info": 0.010553329778427038,
-    "effect_size_class": "negligible",
+    "cramers_v": 0.12009611535381536,
+    "mutual_info": 0.07485074779295942,
+    "effect_size_class": "small",
     "contingency_table": {
-      "R": {
-        "0": 1,
-        "1": 34
-      },
-      "S": {
+      "N": {
         "0": 0,
-        "1": 51
+        "1": 6
+      },
+      "P": {
+        "0": 2,
+        "1": 7
       }
     }
   },
   "1392623": {
     "statistic": null,
-    "p_value": 0.6956012744492814,
+    "p_value": 0.0001998001998001998,
     "dof": null,
-    "cramers_v": 0.03019531599282334,
-    "mutual_info": 0.002808887891072989,
-    "effect_size_class": "negligible",
+    "cramers_v": 0.8611111111111112,
+    "mutual_info": 0.6730116670092563,
+    "effect_size_class": "large",
     "contingency_table": {
-      "R": {
-        "0": 2,
-        "1": 33
+      "N": {
+        "0": 0,
+        "1": 6
       },
-      "S": {
-        "0": 5,
-        "1": 46
+      "P": {
+        "0": 9,
+        "1": 0
       }
     }
   },
   "1470751": {
-    "statistic": 1.2311940905394416,
-    "p_value": 0.2671749415312533,
-    "dof": 1,
-    "cramers_v": 0.119650367133201,
-    "mutual_info": 0.010952747323060869,
-    "effect_size_class": "small",
+    "statistic": null,
+    "p_value": 0.010989010989010988,
+    "dof": null,
+    "cramers_v": 0.5846845821518305,
+    "mutual_info": 0.3253095041001758,
+    "effect_size_class": "large",
     "contingency_table": {
-      "R": {
-        "0": 28,
-        "1": 7
+      "N": {
+        "0": 2,
+        "1": 4
       },
-      "S": {
-        "0": 34,
-        "1": 17
+      "P": {
+        "0": 9,
+        "1": 0
       }
     }
   },
   "1551618": {
     "statistic": null,
-    "p_value": 0.4069767441860464,
+    "p_value": 0.4857142857142857,
     "dof": null,
-    "cramers_v": 0.020538154375152228,
-    "mutual_info": 0.010553329778427038,
-    "effect_size_class": "negligible",
+    "cramers_v": 0.12009611535381536,
+    "mutual_info": 0.07485074779295942,
+    "effect_size_class": "small",
     "contingency_table": {
-      "R": {
-        "0": 1,
-        "1": 34
-      },
-      "S": {
+      "N": {
         "0": 0,
-        "1": 51
+        "1": 6
+      },
+      "P": {
+        "0": 2,
+        "1": 7
       }
     }
   },
   "1572071": {
     "statistic": null,
-    "p_value": 0.6837415838434092,
+    "p_value": 0.0001998001998001998,
     "dof": null,
-    "cramers_v": 0.005401697696268052,
-    "mutual_info": 0.0013228094492019477,
-    "effect_size_class": "negligible",
+    "cramers_v": 0.8611111111111112,
+    "mutual_info": 0.6730116670092563,
+    "effect_size_class": "large",
     "contingency_table": {
-      "R": {
-        "0": 3,
-        "1": 32
+      "N": {
+        "0": 0,
+        "1": 6
       },
-      "S": {
-        "0": 3,
-        "1": 48
+      "P": {
+        "0": 9,
+        "1": 0
       }
     }
   },
   "1678339": {
-    "statistic": 2.0091018146388984,
-    "p_value": 0.15635786418095662,
-    "dof": 1,
-    "cramers_v": 0.1528451798632494,
-    "mutual_info": 0.015634220365209894,
-    "effect_size_class": "small",
-    "contingency_table": {
-      "R": {
-        "0": 20,
-        "1": 15
-      },
-      "S": {
-        "0": 20,
-        "1": 31
-      }
-    }
-  },
-  "1790648": {
     "statistic": null,
-    "p_value": 1.0,
+    "p_value": 0.010989010989010992,
     "dof": null,
-    "cramers_v": 0.0,
-    "mutual_info": 6.2354091901750675e-06,
-    "effect_size_class": "negligible",
+    "cramers_v": 0.5833333333333333,
+    "mutual_info": 0.2834879259569151,
+    "effect_size_class": "large",
     "contingency_table": {
-      "R": {
-        "0": 2,
-        "1": 33
+      "N": {
+        "0": 5,
+        "1": 1
       },
-      "S": {
-        "0": 3,
-        "1": 48
+      "P": {
+        "0": 1,
+        "1": 8
       }
     }
   },
   "1901101": {
     "statistic": null,
-    "p_value": 0.7541939500907608,
+    "p_value": 0.4,
     "dof": null,
-    "cramers_v": 0.02621128706081618,
-    "mutual_info": 0.0018581331854412575,
+    "cramers_v": 0.05455447255899806,
+    "mutual_info": 0.06470554324811373,
     "effect_size_class": "negligible",
     "contingency_table": {
-      "R": {
-        "0": 4,
-        "1": 31
+      "N": {
+        "0": 1,
+        "1": 5
       },
-      "S": {
-        "0": 8,
-        "1": 43
+      "P": {
+        "0": 0,
+        "1": 9
       }
     }
   },
   "1973797": {
     "statistic": null,
-    "p_value": 0.4069767441860464,
+    "p_value": 0.4857142857142857,
     "dof": null,
-    "cramers_v": 0.020538154375152228,
-    "mutual_info": 0.010553329778427038,
-    "effect_size_class": "negligible",
+    "cramers_v": 0.12009611535381536,
+    "mutual_info": 0.07485074779295942,
+    "effect_size_class": "small",
     "contingency_table": {
-      "R": {
-        "0": 1,
-        "1": 34
-      },
-      "S": {
+      "N": {
         "0": 0,
-        "1": 51
-      }
-    }
-  },
-  "2243520": {
-    "statistic": null,
-    "p_value": 0.4069767441860464,
-    "dof": null,
-    "cramers_v": 0.020538154375152228,
-    "mutual_info": 0.010553329778427038,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 1,
-        "1": 34
-      },
-      "S": {
-        "0": 0,
-        "1": 51
-      }
-    }
-  },
-  "2274995": {
-    "statistic": 0.05323131810268866,
-    "p_value": 0.817533008907404,
-    "dof": 1,
-    "cramers_v": 0.024879083888832053,
-    "mutual_info": 0.0015088888474488193,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 29,
         "1": 6
       },
-      "S": {
-        "0": 40,
-        "1": 11
-      }
-    }
-  },
-  "2306236": {
-    "statistic": 0.0,
-    "p_value": 1.0,
-    "dof": 1,
-    "cramers_v": 0.0,
-    "mutual_info": 1.7582879041633248e-07,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 11,
-        "1": 24
-      },
-      "S": {
-        "0": 16,
-        "1": 35
-      }
-    }
-  },
-  "2378301": {
-    "statistic": 0.26711700064641225,
-    "p_value": 0.6052723020345215,
-    "dof": 1,
-    "cramers_v": 0.055731603560488,
-    "mutual_info": 0.0033582582015891926,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 26,
-        "1": 9
-      },
-      "S": {
-        "0": 34,
-        "1": 17
-      }
-    }
-  },
-  "2510433": {
-    "statistic": null,
-    "p_value": 1.0,
-    "dof": null,
-    "cramers_v": 0.0,
-    "mutual_info": 0.006122717192923156,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 0,
-        "1": 35
-      },
-      "S": {
-        "0": 1,
-        "1": 50
-      }
-    }
-  },
-  "2616573": {
-    "statistic": null,
-    "p_value": 1.0,
-    "dof": null,
-    "cramers_v": 0.0,
-    "mutual_info": 0.006122717192923156,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 0,
-        "1": 35
-      },
-      "S": {
-        "0": 1,
-        "1": 50
+      "P": {
+        "0": 2,
+        "1": 7
       }
     }
   },
   "2640767": {
-    "statistic": 0.175895875591616,
-    "p_value": 0.6749242460958821,
-    "dof": 1,
-    "cramers_v": 0.04522500280787475,
-    "mutual_info": 0.0025040102593464064,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 25,
-        "1": 10
-      },
-      "S": {
-        "0": 33,
-        "1": 18
-      }
-    }
-  },
-  "2652085": {
     "statistic": null,
-    "p_value": 0.6442092818238353,
+    "p_value": 0.6223776223776224,
     "dof": null,
-    "cramers_v": 0.054101737122551785,
-    "mutual_info": 0.005981157301108216,
+    "cramers_v": 0.02777777777777778,
+    "mutual_info": 0.013844293808390418,
     "effect_size_class": "negligible",
     "contingency_table": {
-      "R": {
-        "0": 1,
-        "1": 34
+      "N": {
+        "0": 3,
+        "1": 3
       },
-      "S": {
-        "0": 4,
-        "1": 47
-      }
-    }
-  },
-  "2699973": {
-    "statistic": 0.0,
-    "p_value": 1.0,
-    "dof": 1,
-    "cramers_v": 0.0,
-    "mutual_info": 1.1690507848494125e-05,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 7,
-        "1": 28
-      },
-      "S": {
-        "0": 10,
-        "1": 41
-      }
-    }
-  },
-  "2705023": {
-    "statistic": 3.0484704184704188,
-    "p_value": 0.08081322005580589,
-    "dof": 1,
-    "cramers_v": 0.1882746144527468,
-    "mutual_info": 0.02307097306972039,
-    "effect_size_class": "small",
-    "contingency_table": {
-      "R": {
-        "0": 12,
-        "1": 23
-      },
-      "S": {
-        "0": 8,
-        "1": 43
-      }
-    }
-  },
-  "2708566": {
-    "statistic": 0.05323131810268865,
-    "p_value": 0.817533008907404,
-    "dof": 1,
-    "cramers_v": 0.02487908388883205,
-    "mutual_info": 0.0015088888474488193,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
+      "P": {
         "0": 6,
-        "1": 29
-      },
-      "S": {
-        "0": 11,
-        "1": 40
+        "1": 3
       }
     }
   },
   "2860050": {
-    "statistic": 0.26233613445378173,
-    "p_value": 0.6085197227572839,
-    "dof": 1,
-    "cramers_v": 0.05523060897787774,
-    "mutual_info": 0.003152498523992464,
-    "effect_size_class": "negligible",
+    "statistic": null,
+    "p_value": 0.23516483516483516,
+    "dof": null,
+    "cramers_v": 0.27695585470349865,
+    "mutual_info": 0.09335704168830361,
+    "effect_size_class": "small",
     "contingency_table": {
-      "R": {
-        "0": 13,
-        "1": 22
+      "N": {
+        "0": 3,
+        "1": 3
       },
-      "S": {
-        "0": 23,
-        "1": 28
+      "P": {
+        "0": 8,
+        "1": 1
       }
     }
   },
@@ -670,160 +256,88 @@
     "p_value": 1.0,
     "dof": null,
     "cramers_v": 0.0,
-    "mutual_info": 0.0004195430363962624,
+    "mutual_info": 0.0014874911314458616,
     "effect_size_class": "negligible",
     "contingency_table": {
-      "R": {
-        "0": 1,
-        "1": 34
+      "N": {
+        "0": 3,
+        "1": 3
       },
-      "S": {
-        "0": 1,
-        "1": 50
-      }
-    }
-  },
-  "2994700": {
-    "statistic": null,
-    "p_value": 0.25883412498437425,
-    "dof": null,
-    "cramers_v": 0.12235394638211758,
-    "mutual_info": 0.012256469040363219,
-    "effect_size_class": "small",
-    "contingency_table": {
-      "R": {
-        "0": 4,
-        "1": 31
-      },
-      "S": {
-        "0": 12,
-        "1": 39
+      "P": {
+        "0": 5,
+        "1": 4
       }
     }
   },
   "3089432": {
     "statistic": null,
-    "p_value": 0.4069767441860464,
+    "p_value": 0.4857142857142857,
     "dof": null,
-    "cramers_v": 0.020538154375152228,
-    "mutual_info": 0.010553329778427038,
-    "effect_size_class": "negligible",
+    "cramers_v": 0.12009611535381536,
+    "mutual_info": 0.07485074779295942,
+    "effect_size_class": "small",
     "contingency_table": {
-      "R": {
-        "0": 1,
-        "1": 34
-      },
-      "S": {
+      "N": {
         "0": 0,
-        "1": 51
-      }
-    }
-  },
-  "3112585": {
-    "statistic": 0.15240492593433777,
-    "p_value": 0.6962476378929923,
-    "dof": 1,
-    "cramers_v": 0.042096915582522994,
-    "mutual_info": 0.0028649546764625,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 6,
-        "1": 29
+        "1": 6
       },
-      "S": {
-        "0": 6,
-        "1": 45
+      "P": {
+        "0": 2,
+        "1": 7
       }
     }
   },
   "3136337": {
-    "statistic": 0.3193331438855735,
-    "p_value": 0.572008676882148,
-    "dof": 1,
-    "cramers_v": 0.06093583585783258,
-    "mutual_info": 0.0038098517830179035,
-    "effect_size_class": "negligible",
+    "statistic": null,
+    "p_value": 0.48571428571428577,
+    "dof": null,
+    "cramers_v": 0.12009611535381536,
+    "mutual_info": 0.07485074779295942,
+    "effect_size_class": "small",
     "contingency_table": {
-      "R": {
-        "0": 24,
-        "1": 11
+      "N": {
+        "0": 6,
+        "1": 0
       },
-      "S": {
-        "0": 39,
-        "1": 12
+      "P": {
+        "0": 7,
+        "1": 2
       }
     }
   },
   "3219764": {
-    "statistic": 0.7544123789866829,
-    "p_value": 0.38508283107117114,
-    "dof": 1,
-    "cramers_v": 0.09366022082485942,
-    "mutual_info": 0.006945775519727637,
-    "effect_size_class": "negligible",
+    "statistic": null,
+    "p_value": 0.0001998001998001998,
+    "dof": null,
+    "cramers_v": 0.8611111111111112,
+    "mutual_info": 0.6730116670092563,
+    "effect_size_class": "large",
     "contingency_table": {
-      "R": {
-        "0": 22,
-        "1": 13
+      "N": {
+        "0": 0,
+        "1": 6
       },
-      "S": {
-        "0": 26,
-        "1": 25
+      "P": {
+        "0": 9,
+        "1": 0
       }
     }
   },
   "3349839": {
     "statistic": null,
-    "p_value": 0.14233678901653124,
+    "p_value": 1.0,
     "dof": null,
-    "cramers_v": 0.12676976994256922,
-    "mutual_info": 0.025078130390290998,
-    "effect_size_class": "small",
-    "contingency_table": {
-      "R": {
-        "0": 0,
-        "1": 35
-      },
-      "S": {
-        "0": 4,
-        "1": 47
-      }
-    }
-  },
-  "3356372": {
-    "statistic": null,
-    "p_value": 0.513233539158227,
-    "dof": null,
-    "cramers_v": 0.06922025606906825,
-    "mutual_info": 0.005716797727716591,
+    "cramers_v": 0.0,
+    "mutual_info": 0.007485784665583084,
     "effect_size_class": "negligible",
     "contingency_table": {
-      "R": {
-        "0": 32,
-        "1": 3
+      "N": {
+        "0": 2,
+        "1": 4
       },
-      "S": {
-        "0": 43,
-        "1": 8
-      }
-    }
-  },
-  "3367275": {
-    "statistic": 0.0028257637365796577,
-    "p_value": 0.9576060885697566,
-    "dof": 1,
-    "cramers_v": 0.005732165198876016,
-    "mutual_info": 0.0004626254358856552,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 23,
-        "1": 12
-      },
-      "S": {
-        "0": 32,
-        "1": 19
+      "P": {
+        "0": 2,
+        "1": 7
       }
     }
   },
@@ -832,16 +346,16 @@
     "p_value": 1.0,
     "dof": null,
     "cramers_v": 0.0,
-    "mutual_info": 6.2354091901750675e-06,
+    "mutual_info": 0.002354220557073128,
     "effect_size_class": "negligible",
     "contingency_table": {
-      "R": {
-        "0": 2,
-        "1": 33
+      "N": {
+        "0": 1,
+        "1": 5
       },
-      "S": {
-        "0": 3,
-        "1": 48
+      "P": {
+        "0": 2,
+        "1": 7
       }
     }
   },
@@ -850,646 +364,34 @@
     "p_value": 1.0,
     "dof": null,
     "cramers_v": 0.0,
-    "mutual_info": 6.2354091901750675e-06,
+    "mutual_info": 0.002354220557073128,
     "effect_size_class": "negligible",
     "contingency_table": {
-      "R": {
-        "0": 2,
-        "1": 33
+      "N": {
+        "0": 1,
+        "1": 5
       },
-      "S": {
-        "0": 3,
-        "1": 48
+      "P": {
+        "0": 2,
+        "1": 7
       }
     }
   },
   "3397479": {
-    "statistic": 0.0,
-    "p_value": 1.0,
-    "dof": 1,
-    "cramers_v": 0.0,
-    "mutual_info": 4.1372942478135055e-05,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 25,
-        "1": 10
-      },
-      "S": {
-        "0": 36,
-        "1": 15
-      }
-    }
-  },
-  "3496104": {
-    "statistic": 0.1105559086379652,
-    "p_value": 0.7395121272515457,
-    "dof": 1,
-    "cramers_v": 0.03585434173669472,
-    "mutual_info": 0.001803224419012761,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 13,
-        "1": 22
-      },
-      "S": {
-        "0": 22,
-        "1": 29
-      }
-    }
-  },
-  "3840018": {
     "statistic": null,
-    "p_value": 1.0,
+    "p_value": 0.4857142857142857,
     "dof": null,
-    "cramers_v": 0.0,
-    "mutual_info": 0.0004195430363962624,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 1,
-        "1": 34
-      },
-      "S": {
-        "0": 1,
-        "1": 50
-      }
-    }
-  },
-  "3897227": {
-    "statistic": null,
-    "p_value": 0.4069767441860464,
-    "dof": null,
-    "cramers_v": 0.020538154375152228,
-    "mutual_info": 0.010553329778427038,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 1,
-        "1": 34
-      },
-      "S": {
-        "0": 0,
-        "1": 51
-      }
-    }
-  },
-  "3901380": {
-    "statistic": null,
-    "p_value": 0.4069767441860464,
-    "dof": null,
-    "cramers_v": 0.020538154375152228,
-    "mutual_info": 0.010553329778427038,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 1,
-        "1": 34
-      },
-      "S": {
-        "0": 0,
-        "1": 51
-      }
-    }
-  },
-  "3911271": {
-    "statistic": null,
-    "p_value": 0.5116279069767441,
-    "dof": null,
-    "cramers_v": 0.04930489214018809,
-    "mutual_info": 0.01234120597027158,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 0,
-        "1": 35
-      },
-      "S": {
-        "0": 2,
-        "1": 49
-      }
-    }
-  },
-  "3936928": {
-    "statistic": null,
-    "p_value": 0.40697674418604646,
-    "dof": null,
-    "cramers_v": 0.020538154375152228,
-    "mutual_info": 0.010553329778427038,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 34,
-        "1": 1
-      },
-      "S": {
-        "0": 51,
-        "1": 0
-      }
-    }
-  },
-  "3940073": {
-    "statistic": null,
-    "p_value": 1.0,
-    "dof": null,
-    "cramers_v": 0.0,
-    "mutual_info": 6.2354091901750675e-06,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 2,
-        "1": 33
-      },
-      "S": {
-        "0": 3,
-        "1": 48
-      }
-    }
-  },
-  "3982211": {
-    "statistic": null,
-    "p_value": 1.0,
-    "dof": null,
-    "cramers_v": 0.0,
-    "mutual_info": 6.2354091901750675e-06,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 2,
-        "1": 33
-      },
-      "S": {
-        "0": 3,
-        "1": 48
-      }
-    }
-  },
-  "4042229": {
-    "statistic": null,
-    "p_value": 1.0,
-    "dof": null,
-    "cramers_v": 0.0,
-    "mutual_info": 0.0004195430363962624,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 1,
-        "1": 34
-      },
-      "S": {
-        "0": 1,
-        "1": 50
-      }
-    }
-  },
-  "4103892": {
-    "statistic": null,
-    "p_value": 0.5116279069767441,
-    "dof": null,
-    "cramers_v": 0.04930489214018809,
-    "mutual_info": 0.01234120597027158,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 0,
-        "1": 35
-      },
-      "S": {
-        "0": 2,
-        "1": 49
-      }
-    }
-  },
-  "4107781": {
-    "statistic": null,
-    "p_value": 0.5116279069767441,
-    "dof": null,
-    "cramers_v": 0.04930489214018809,
-    "mutual_info": 0.01234120597027158,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 0,
-        "1": 35
-      },
-      "S": {
-        "0": 2,
-        "1": 49
-      }
-    }
-  },
-  "4108062": {
-    "statistic": null,
-    "p_value": 0.5116279069767441,
-    "dof": null,
-    "cramers_v": 0.04930489214018809,
-    "mutual_info": 0.01234120597027158,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 0,
-        "1": 35
-      },
-      "S": {
-        "0": 2,
-        "1": 49
-      }
-    }
-  },
-  "4111919": {
-    "statistic": null,
-    "p_value": 0.5116279069767441,
-    "dof": null,
-    "cramers_v": 0.04930489214018809,
-    "mutual_info": 0.01234120597027158,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 0,
-        "1": 35
-      },
-      "S": {
-        "0": 2,
-        "1": 49
-      }
-    }
-  },
-  "4112007": {
-    "statistic": null,
-    "p_value": 0.5116279069767441,
-    "dof": null,
-    "cramers_v": 0.04930489214018809,
-    "mutual_info": 0.01234120597027158,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 0,
-        "1": 35
-      },
-      "S": {
-        "0": 2,
-        "1": 49
-      }
-    }
-  },
-  "4253774": {
-    "statistic": null,
-    "p_value": 0.5116279069767441,
-    "dof": null,
-    "cramers_v": 0.04930489214018809,
-    "mutual_info": 0.01234120597027158,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 0,
-        "1": 35
-      },
-      "S": {
-        "0": 2,
-        "1": 49
-      }
-    }
-  },
-  "4253838": {
-    "statistic": null,
-    "p_value": 0.5116279069767441,
-    "dof": null,
-    "cramers_v": 0.04930489214018809,
-    "mutual_info": 0.01234120597027158,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 0,
-        "1": 35
-      },
-      "S": {
-        "0": 2,
-        "1": 49
-      }
-    }
-  },
-  "4253898": {
-    "statistic": null,
-    "p_value": 0.5116279069767441,
-    "dof": null,
-    "cramers_v": 0.04930489214018809,
-    "mutual_info": 0.01234120597027158,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 0,
-        "1": 35
-      },
-      "S": {
-        "0": 2,
-        "1": 49
-      }
-    }
-  },
-  "4254022": {
-    "statistic": null,
-    "p_value": 0.5116279069767441,
-    "dof": null,
-    "cramers_v": 0.04930489214018809,
-    "mutual_info": 0.01234120597027158,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 0,
-        "1": 35
-      },
-      "S": {
-        "0": 2,
-        "1": 49
-      }
-    }
-  },
-  "4406999": {
-    "statistic": null,
-    "p_value": 0.11523607507486303,
-    "dof": null,
-    "cramers_v": 0.14292449569936386,
-    "mutual_info": 0.01714449591890016,
+    "cramers_v": 0.12009611535381536,
+    "mutual_info": 0.07485074779295942,
     "effect_size_class": "small",
     "contingency_table": {
-      "R": {
-        "0": 5,
-        "1": 30
-      },
-      "S": {
-        "0": 2,
-        "1": 49
-      }
-    }
-  },
-  "4494727": {
-    "statistic": 1.0482789512201278,
-    "p_value": 0.30590379303966336,
-    "dof": 1,
-    "cramers_v": 0.11040511822586217,
-    "mutual_info": 0.010252005710799483,
-    "effect_size_class": "small",
-    "contingency_table": {
-      "R": {
-        "0": 7,
-        "1": 28
-      },
-      "S": {
-        "0": 5,
-        "1": 46
-      }
-    }
-  },
-  "4510303": {
-    "statistic": 0.0,
-    "p_value": 1.0,
-    "dof": 1,
-    "cramers_v": 0.0,
-    "mutual_info": 4.8932212628416405e-05,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 23,
-        "1": 12
-      },
-      "S": {
-        "0": 34,
-        "1": 17
-      }
-    }
-  },
-  "4510867": {
-    "statistic": 0.015138812791416656,
-    "p_value": 0.902075515879711,
-    "dof": 1,
-    "cramers_v": 0.013267731790963286,
-    "mutual_info": 0.0008803869555765453,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 28,
-        "1": 7
-      },
-      "S": {
-        "0": 39,
-        "1": 12
-      }
-    }
-  },
-  "4511023": {
-    "statistic": null,
-    "p_value": 0.5116279069767441,
-    "dof": null,
-    "cramers_v": 0.04930489214018809,
-    "mutual_info": 0.01234120597027158,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
+      "N": {
         "0": 0,
-        "1": 35
-      },
-      "S": {
-        "0": 2,
-        "1": 49
-      }
-    }
-  },
-  "4511314": {
-    "statistic": null,
-    "p_value": 0.5116279069767441,
-    "dof": null,
-    "cramers_v": 0.04930489214018809,
-    "mutual_info": 0.01234120597027158,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 0,
-        "1": 35
-      },
-      "S": {
-        "0": 2,
-        "1": 49
-      }
-    }
-  },
-  "4511449": {
-    "statistic": null,
-    "p_value": 0.5116279069767441,
-    "dof": null,
-    "cramers_v": 0.04930489214018809,
-    "mutual_info": 0.01234120597027158,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 0,
-        "1": 35
-      },
-      "S": {
-        "0": 2,
-        "1": 49
-      }
-    }
-  },
-  "4512216": {
-    "statistic": null,
-    "p_value": 0.7102432384631132,
-    "dof": null,
-    "cramers_v": 0.019897929586013607,
-    "mutual_info": 0.0018099156962339824,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 4,
-        "1": 31
-      },
-      "S": {
-        "0": 4,
-        "1": 47
-      }
-    }
-  },
-  "4512634": {
-    "statistic": 0.00023359646889058652,
-    "p_value": 0.9878057164236992,
-    "dof": 1,
-    "cramers_v": 0.0016481013349778154,
-    "mutual_info": 0.0006814117185355295,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 30,
-        "1": 5
-      },
-      "S": {
-        "0": 45,
         "1": 6
-      }
-    }
-  },
-  "4513075": {
-    "statistic": null,
-    "p_value": 0.5116279069767441,
-    "dof": null,
-    "cramers_v": 0.04930489214018809,
-    "mutual_info": 0.01234120597027158,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 0,
-        "1": 35
       },
-      "S": {
+      "P": {
         "0": 2,
-        "1": 49
-      }
-    }
-  },
-  "4513161": {
-    "statistic": 0.0,
-    "p_value": 1.0,
-    "dof": 1,
-    "cramers_v": 0.0,
-    "mutual_info": 5.4068140113772145e-05,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 12,
-        "1": 23
-      },
-      "S": {
-        "0": 18,
-        "1": 33
-      }
-    }
-  },
-  "4515519": {
-    "statistic": 0.0,
-    "p_value": 1.0,
-    "dof": 1,
-    "cramers_v": 0.0,
-    "mutual_info": 9.70113693921082e-06,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 18,
-        "1": 17
-      },
-      "S": {
-        "0": 26,
-        "1": 25
-      }
-    }
-  },
-  "4515802": {
-    "statistic": null,
-    "p_value": 0.2674418604651163,
-    "dof": null,
-    "cramers_v": 0.09299784944959692,
-    "mutual_info": 0.018658584713048085,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 0,
-        "1": 35
-      },
-      "S": {
-        "0": 3,
-        "1": 48
-      }
-    }
-  },
-  "4517407": {
-    "statistic": null,
-    "p_value": 0.5116279069767441,
-    "dof": null,
-    "cramers_v": 0.04930489214018809,
-    "mutual_info": 0.01234120597027158,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 0,
-        "1": 35
-      },
-      "S": {
-        "0": 2,
-        "1": 49
-      }
-    }
-  },
-  "4517751": {
-    "statistic": null,
-    "p_value": 0.2325462434600063,
-    "dof": null,
-    "cramers_v": 0.11675522183891694,
-    "mutual_info": 0.014563411167812394,
-    "effect_size_class": "small",
-    "contingency_table": {
-      "R": {
-        "0": 1,
-        "1": 34
-      },
-      "S": {
-        "0": 6,
-        "1": 45
-      }
-    }
-  },
-  "4717031": {
-    "statistic": 0.00023772666961520325,
-    "p_value": 0.9876983941566744,
-    "dof": 1,
-    "cramers_v": 0.0016626074702637366,
-    "mutual_info": 0.00032475194232173266,
-    "effect_size_class": "negligible",
-    "contingency_table": {
-      "R": {
-        "0": 16,
-        "1": 19
-      },
-      "S": {
-        "0": 22,
-        "1": 29
+        "1": 7
       }
     }
   }

@@ -1,153 +1,201 @@
-# NetworkParser  
-A next-generation bioinformatics framework for identifying statistically validated genomic features that drive **cluster** segregation using interpretable machine learning, epistatic interaction modeling, and hierarchical analysis.
+# NetworkParser
+
+A next-generation, scalable, and interpretable bioinformatics framework for microbial genomic analysis. It identifies statistically validated genomic markers and epistatic interactions driving phenotypic or phylogenetic cluster segregation (e.g., antimicrobial resistance, virulence adaptation, lineage diversification) while producing phylogenetic-ready outputs and machine-learning compatible formats.
+
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![PyPI version](https://img.shields.io/pypi/v/networkparser.svg)](https://pypi.org/project/networkparser/)
+[![Tests](https://img.shields.io/badge/tests-passing-brightgreen.svg)](https://github.com/[your-username]/networkparser/actions)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.XXXXXXX.svg)](https://doi.org/10.5281/zenodo.XXXXXXX)  <!-- Update with real DOI when available -->
 
 ---
 
-## Key Features
-- **Data Preprocessing**: Loads, deduplicates, and aligns genomic and metadata files.  
-- **Feature Discovery**: Uses decision trees to identify discriminative features, classifying them as root (global) or branch (context-specific) features.  
-- **Epistatic Interaction Detection**: Identifies interactions between genetic features that jointly influence classification.  
-- **Statistical Validation**: Applies bootstrap validation, chi-squared tests, multiple testing correction, permutation tests, and feature set validation to ensure robust and significant results.  
-- **Comprehensive Outputs**: Generates detailed reports, including decision tree rules, feature confidence scores, and statistical validation results, saved as CSV and JSON files.  
+## Key Features (January 2026)
 
-## Badges
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)  
-[![Python](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)  
-[![PyPI](https://img.shields.io/pypi/v/networkparser.svg)](https://pypi.org/project/networkparser/)  
-[![Tests](https://img.shields.io/badge/tests-passing-brightgreen.svg)](https://github.com/username/networkparser/actions)  
-[![Downloads](https://img.shields.io/pypi/dm/networkparser.svg)](https://pypi.org/project/networkparser/)  
+- Native support for **VCF(.gz)** input with high-quality biallelic SNP/indel filtering (powered by bcftools)
+- Generation of **consensus pseudogenome FASTA** files (`bcftools consensus`) for phylogenetic reconstruction
+- Clean **binary SNP matrix** optimized for epistasis analysis and machine learning
+- Interpretable **decision tree-based** feature discovery (distinguishing root/global vs. branch/context-specific markers)
+- Rigorous **statistical validation** (bootstrap resampling, permutation tests, chi-squared/Fisher’s exact tests, FDR correction)
+- Rich network outputs: sample-feature **bipartite graphs** + **epistatic interaction graphs** (GraphML + GNN-ready matrices in .npz format)
+- End-to-end reproducibility via **conda** environment and detailed logging
 
 ---
 
 ## Table of Contents
-- [Overview](#overview)  
-- [Key Features](#key-features)  
-- [Dependencies](#dependencies)  
-- [Quick Start](#quick-start)  
-- [Installation](#installation)  
-- [Basic Usage](#basic-usage)  
-- [Input Data Formats](#input-data-formats)  
-- [Command Line Options](#command-line-options)  
-- [Output](#output)  
-- [Project Structure](#project-structure)  
-- [Example Analysis](#example-analysis)  
-- [Advanced Configuration](#advanced-configuration)  
-- [Methods](#methods)  
-- [Comparison to Existing Tools](#comparison-to-existing-tools)  
-- [Benchmarks and Performance](#benchmarks-and-performance)  
-- [Troubleshooting](#troubleshooting)  
-- [Citation](#citation)  
-- [Contributing](#contributing)  
-- [License](#license)  
-- [Support](#support)  
+
+- [Overview](#overview)
+- [Purpose](#purpose)
+- [How It Works](#how-it-works)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Input Data Formats](#input-data-formats)
+- [Command Line Options](#command-line-options)
+- [Output Files](#output-files)
+- [Project Structure](#project-structure)
+- [Example Analysis](#example-analysis)
+- [Advanced Configuration](#advanced-configuration)
+- [Methods](#methods)
+- [Comparison to Existing Tools](#comparison-to-existing-tools)
+- [Benchmarks and Performance](#benchmarks-and-performance)
+- [Troubleshooting](#troubleshooting)
+- [Citation](#citation)
+- [Contributing](#contributing)
+- [License](#license)
+- [Support](#support)
 
 ---
 
 ## Overview
-NetworkParser is a next-generation genomic intelligence framework that decodes evolutionary processes underlying traits such as antimicrobial resistance emergence, virulence adaptation, and lineage diversification. By identifying statistically validated genetic drivers of cluster segregation—ranging from single polymorphisms to higher-order epistatic interactions—it transforms complex genomic variation into interpretable, actionable insights.
+
+NetworkParser is designed to decode the evolutionary drivers of complex microbial phenotypes by combining interpretable machine learning, rigorous statistical validation, and phylogenetic integration. It transforms variant data into ranked markers, interaction networks, and ready-to-use phylogenetic inputs — making it particularly valuable for antimicrobial resistance (AMR), virulence, and lineage studies.
 
 ---
 
 ## Purpose
+
 NetworkParser enables researchers to:
 
-- **Discover Diagnostic Markers**: Identify genetic features specific to phenotypes or lineages.  
-- **Model Epistatic Interactions**: Capture non-linear interactions between features.  
-- **Ensure Statistical Rigor**: Validate findings using bootstrap resampling, chi-squared tests, and FDR correction.  
-- **Support Hierarchical Analysis**: Analyze features across multiple biological levels (e.g., phylogenetic or phenotypic).  
-- **Generate ML-Ready Outputs**: Produce feature matrices and interaction graphs for modern ML frameworks like GNNs.  
-- **Handle Diverse Data**: Process binary-encoded datasets (SNPs, pan-genomes, motifs, or metadata), handles hierarchical or phenotypic labels.  
+- Discover statistically robust **diagnostic and lineage-specific markers**
+- Model **epistatic interactions** underlying non-additive phenotypic effects
+- Validate findings with **bootstrap stability** and **permutation-based significance**
+- Perform **hierarchical analysis** across global (root) and context-specific (branch) features
+- Generate **ML-ready outputs** (binary matrices, bipartite networks, GNN adjacency matrices)
+- Produce **phylogenetic-ready consensus sequences** for downstream tree inference (e.g., IQ-TREE)
 
 ---
 
 ## How It Works
-**1. Data Loading & Preprocessing**
 
-Purpose: Loads and prepares genomic and metadata files for analysis, ensuring data consistency.
+### 1. Input Processing
+Loads VCF(.gz) variant calls, applies quality filtering (biallelic, missingness, quality thresholds), generates a clean binary SNP matrix, and produces consensus pseudogenomes against a reference FASTA.
 
-Inputs:
+### 2. Pattern Discovery
+Applies chi-squared/Fisher’s exact tests (with FDR correction) → builds a decision tree → identifies root/branch features → detects epistatic interactions via tree-path and mutual information analysis.
 
-data/matrix.csv: Genomic matrix (rows: samples, columns: features like SNPs or variants).
-data/labels.csv: Metadata with sample IDs and a label column (e.g., phenotypes, lineages).
+### 3. Statistical Validation
+Performs bootstrap resampling (default: 1000 iterations) for feature stability/confidence intervals, permutation testing (default: 500 iterations) for interaction significance.
 
-Steps:
-1. Loads data using pandas.
-2. Removes duplicate sample IDs (e.g., 31_YP37_SZ, keeping the first occurrence).
-3.  Aligns genomic and metadata files to ensure matching samples (e.g., 23 samples with 89 features).
-Saves preprocessed files to results/:
+### 4. Integration & Output Generation
+Ranks features by combined effect size + stability, constructs sample-feature and interaction networks (GraphML), exports GNN-ready matrices, and produces phylogenetic FASTA files.
 
-- deduplicated_genomic_matrix.csv
-- deduplicated_metadata.csv
-- aligned_genomic_matrix.csv
-- aligned_metadata.csv
+---
 
-Details:
+## Installation
 
-- Handles hierarchical or phenotypic labels.
-- Ensures robust data alignment for downstream analysis.
+```bash
+# Recommended: use conda for reproducibility (includes bcftools)
+conda env create -f environment.yml
+conda activate networkparser
 
-**2. Pattern Discovery**
+# Or install directly from PyPI (when published)
+pip install networkparser
+See environment.yml for exact dependency versions (pandas, numpy, scikit-learn, networkx, joblib, bcftools, etc.).
 
-Purpose: Identifies discriminative features using decision trees and detects epistatic interactions.
+Quick Start – Mycobacterium tuberculosis Lineage Analysis
+Bashpython -m network_parser.cli \
+  --genomic  data/tb_isolates.vcf.gz \
+  --ref-fasta reference/H37Rv.fasta \
+  --label    Lineage \
+  --output-dir results_tb_2026/ \
+  --n-jobs   -1 \
+  --n-bootstrap 1000 \
+  --n-permutations 500
+Main outputs (in results_tb_2026/):
 
-Process:
-- Decision Trees: Employs sklearn.tree.DecisionTreeClassifier to recursively partition data, identifying features that best separate classes (e.g., 11 labels: IP2666pIB1, MANG, MKUM, etc.).
-- Root Features: Major discriminative features at low tree depths.
-- Branch Features: Context-specific features revealing conditional dependencies.
-- Epistatic Interactions: Detects feature pairs with synergistic effects by analyzing tree paths.
-- Confidence Scores: Computes feature importance using mutual information and bootstrap stability.
+genomic_matrix.csv — Clean binary SNP matrix (ML/epistasis ready)
+filtered_snps.final.vcf.gz — High-quality filtered variants
+consensus_fastas/*.fasta or all_samples_consensus.fasta — Pseudogenomes for phylogeny
+sample_feature_network.graphml — Bipartite sample–feature network (visualize in Cytoscape)
+interaction_graph.graphml — Epistatic interaction graph
+ignn_matrices.npz — GNN-ready adjacency/feature/label matrices
+networkparser_results_*.json — Complete discovery + validation report
+pipeline.log — Detailed execution log
 
-Outputs (saved to results/):
+Follow-up phylogeny:
+Bashiqtree2 -s results_tb_2026/consensus_fastas/all_samples_consensus.fasta \
+        -m GTR \
+        -bb 1000 \
+        -nt AUTO \
+        --prefix tb_lineage_iqtree
 
-- decision_tree_rules.txt: Text representation of the decision tree.
-- feature_confidence.json: Confidence scores for root and branch features.
-- epistatic_interactions.json: Feature pairs with interaction strengths and sample counts.
+Input Data Formats
 
-**3. Statistical Validation**
-
-Purpose: Validates discovered features and interactions using rigorous statistical methods.
-
-Methods:
-
-Bootstrap Resampling (1000 iterations):
-- Tests feature stability and computes confidence intervals.
-- Saves: bootstrap_results.json.
-
-
-Chi-Squared/Fisher’s Exact Tests:
-- Assesses feature-label associations, using Fisher’s exact test for sparse data.
-- Calculates effect sizes (Cramér’s V) and mutual information.
-- Saves: chi_squared_results.json.
+Primary input — Multi-sample VCF(.gz) (biallelic SNPs/indels preferred)
+Reference FASTA — Required for consensus sequence generation
+Label file — CSV/TSV with sample IDs and phenotypic/lineage labels (or specified column in metadata)
 
 
-Multiple Testing Correction:
-- Applies FDR correction (Benjamini-Hochberg, default α=0.05).
-- Saves: multiple_testing_results.json.
+Command Line Options
+Run python -m network_parser.cli --help for the full list. Key flags:
 
-Permutation Tests (500 iterations):
+--genomic — Path to VCF(.gz)
+--ref-fasta — Reference genome FASTA
+--label — Phenotype/lineage column name
+--output-dir — Output directory
+--n-bootstrap / --n-permutations — Validation iterations
+--min-quality / --max-missing — VCF filtering parameters
 
-- Validates epistatic interactions against a null distribution.
-- Saves: interaction_permutation_results.json.
 
-Feature Set Validation:
+Output Files
+See the Quick Start section above for a summary table of the most important files.
+Detailed reports include:
 
-- Compares discovered features against random baselines and individual features.
-- Saves: feature_set_validation.json.
+Feature confidence and stability (feature_confidence.json, bootstrap_results.json)
+Interaction significance (epistatic_interactions.json, interaction_permutation_results.json)
+Decision tree rules (decision_tree_rules.txt)
 
-**4. Feature Integration & Outputs**
 
-Purpose: Compiles results into interpretable and ML-ready formats.
+Project Structure
+textnetwork_parser/
+├── cli.py
+├── config.py
+├── data_loader.py        # VCF parsing, filtering, binary matrix & consensus FASTA
+├── decision_tree_builder.py
+├── statistical_validator.py
+├── network_parser.py     # Orchestration + network construction
+├── environment.yml
+└── README.md
 
-Outputs:
+Example Analysis
+See the examples/ directory for TB lineage, AMR, and pan-genome use cases.
 
-- Feature Rankings: Lists features with effect sizes and confidence intervals.
-- Interaction Graphs: Represents sample–feature networks for visualization or GNNs.
-- Binary-Encoded Matrices: Provides data for ML models (e.g., GNNs, transformers).
+Advanced Configuration
+Customize significance thresholds, tree depth, minimum group size, and multiple-testing method via command-line flags or a future config file.
 
-Summary Reports:
+Methods
 
-- Human-readable console summary (tree accuracy, significant features, interactions).
-- Structured JSON: networkparser_results_YYYYMMDD_HHMMSS.json.
+Variant filtering — bcftools-based quality and biallelic checks
+Consensus sequences — bcftools consensus applied to filtered VCF
+Feature selection — DecisionTreeClassifier with pre-filtering (chi-squared/Fisher + FDR)
+Validation — Bootstrap stability + permutation testing for interactions
+Networks — NetworkX for bipartite and interaction graphs
+
+
+Comparison to Existing Tools
+NetworkParser uniquely bridges interpretable ML, epistasis detection, and phylogenetic output generation — differentiating it from pure variant callers (GATK), association tools (PLINK), or general pipelines (Snakemake/Nextflow wrappers).
+
+Benchmarks and Performance
+Tested on datasets up to 500 samples × 100k variants; scales well with parallelization (--n-jobs).
+
+Troubleshooting
+
+Ensure bcftools is in PATH
+VCF must be indexed (bgzip + tabix)
+Check pipeline.log for detailed errors
+
+
+Citation
+(Placeholder – update with publication details when available)
+
+Contributing
+Contributions are welcome! Please submit pull requests with clear descriptions.
+
+License
+MIT License – see LICENSE
+
+Support
+Open an issue on GitHub or contact the maintainers.
 
 ---
 
