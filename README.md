@@ -130,8 +130,9 @@ iqtree2 -s results_tb_2026/consensus_fastas/all_samples_consensus.fasta \
 
 
 ### Command Line Options
+Run:
 ```bash
-Run python -m network_parser.cli --help
+python -m network_parser.cli --help
 ```` 
 to see the full list.
 
