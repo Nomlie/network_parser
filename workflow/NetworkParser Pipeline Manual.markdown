@@ -8,7 +8,7 @@ The pipeline processes variant call format (VCF) files and phenotypic metadata t
 
 ### Key Features 
 
-- Native support for VCF(.gz) input with high-quality biallelic SNP/indel filtering (using bcftools)
+- Native support for CSV/VCF(.gz) input with high-quality biallelic SNP/indel filtering (using bcftools)
 - Generation of consensus pseudogenome FASTA files (`bcftools consensus`)
 - Clean binary SNP matrix optimized for machine learning and epistasis analysis
 - Interpretable decision tree-based feature discovery distinguishing root vs. branch markers
@@ -74,7 +74,7 @@ iqtree2 \
 ## Scripts and Their Functions
 ### 1. cli.py 
 **Purpose**
-Serves as the command-line interface to initiate the network_parser pipeline.
+- Serves as the command-line interface to initiate the network_parser pipeline.
 
 **Functionality**
 - Parses command-line arguments (e.g. --genomic, --label, --output-dir)
@@ -115,10 +115,9 @@ min_information_gain=0.001
 n_jobs=-1
 random_state=42
 ````
+- Enables consistent parameter sharing across modules
 
-Enables consistent parameter sharing across modules
-
-**Inputs*
+**Inputs**
 
 - Parsed CLI arguments (or configuration file if supported)
 
@@ -131,27 +130,28 @@ Enables consistent parameter sharing across modules
 
 ### 3. data_loader.py
 **Purpose**
-Handles modern microbial genomics input processing (Stage 1: Input Processing)
+
+- Handles modern microbial genomics input processing (Stage 1: Input Processing)
 
 **Functionality**
 
-Native loading of compressed VCF (.vcf.gz)
-High-quality variant filtering:
-biallelic SNPs/indels
-quality thresholds
-missingness filtering
-Generation of clean binary SNP matrix (0/1/NA)
-Consensus pseudogenome construction using bcftools consensus
-Optional concatenation of samples into a multi-FASTA for phylogenetics
-Sample deduplication and alignment of features and labels
-Removal of invariant sites
-Preservation of intermediate artefacts for traceability
+- Native loading of compressed VCF (.vcf.gz)
+- High-quality variant filtering:
+- biallelic SNPs/indels
+- quality thresholds
+- missingness filtering
+- Generation of clean binary SNP matrix (0/1)
+- Consensus pseudogenome construction using bcftools consensus
+- Optional concatenation of samples into a multi-FASTA for phylogenetics
+- Sample deduplication and alignment of features and labels
+- Removal of invariant sites
+- Preservation of intermediate artefacts for traceability
 
-**Inputs*
+**Inputs**
 
-VCF file (.vcf.gz)
-Reference FASTA
-Label column name
+- VCF file (.vcf.gz)
+- Reference FASTA
+- Label column name
 
 **Output**
 
@@ -181,7 +181,7 @@ Label column name
 - Identifies dominant features and candidate epistatic interactions
 - Writes interpretable artefacts
 
-**Inputs*
+**Inputs**
 
 - Aligned genomic matrix
 - Labels
@@ -208,7 +208,7 @@ Label column name
 - Permutation testing for epistatic interactions (default: 500 permutations)
 - Parallel execution via joblib
 
-**Inputs*
+**Inputs**
 
 - Aligned data and labels
 - Discovered features and interactions
@@ -237,7 +237,7 @@ Label column name
 - Computes network statistics (degree, clustering, centrality)
 - Writes final integrated reports
 
-**Inputs*
+**Inputs**
 
 - Configuration
 - Preprocessed data
