@@ -71,386 +71,216 @@ iqtree2 \
   --prefix tb_lineage_iqtree
   `````
 
-### Scripts and Their Functions
+## Scripts and Their Functions
 **1. cli.py** 
 ### Purpose
 Serves as the command-line interface to initiate the network_parser pipeline.
 
 ### Functionality
+- Parses command-line arguments (e.g. --genomic, --label, --output-dir)
+- Initializes NetworkParserConfig with parameters such as max_depth,min_group_size, significance_level, n_bootstrap_samples, n_permutation_tests, multiple_testing_method, min_information_gain, n_jobs, and random_state
+- Calls network_parser.py to execute all pipeline stages
+- Logs pipeline progress and errors
 
-Parses command-line arguments (e.g. --genomic, --label, --output-dir)
+### Inputs
+- --genomic: Path to genomic input (VCF or derived CSV)
+- --label: Name of the label column (e.g. Lineage)
+- --output-dir: Output directory (e.g. results/)
 
-Initializes NetworkParserConfig with parameters such as:
-
-max_depth
-
-min_group_size
-
-significance_level
-
-n_bootstrap_samples
-
-n_permutation_tests
-
-multiple_testing_method
-
-min_information_gain
-
-n_jobs
-
-random_state
-
-Calls network_parser.py to execute all pipeline stages
-
-Logs pipeline progress and errors
-
-Inputs
-
---genomic: Path to genomic input (VCF or derived CSV)
-
---label: Name of the label column (e.g. Lineage)
-
---output-dir: Output directory (e.g. results/)
-
-Outputs
-
-Coordinates all output files written to output-dir
-
-Log file: pipeline_run.log
+### Outputs
+- Coordinates all output files written to output-dir
+- Log file: pipeline_run.log
 
 ### Role in Pipeline
-
-Entry point that validates inputs and dispatches execution
-
-### Dependencies
-
-argparse, logging, pathlib
-
-network_parser.config
-
-network_parser.network_parser
+- Entry point that validates inputs and dispatches execution
 
 **2. config.py**
 ### Purpose
-Defines the configuration object used across the pipeline.
+- Defines the configuration object used across the pipeline.
 
 ### Functionality
 
-Implements the NetworkParserConfig class
+- Implements the NetworkParserConfig class
 
 Sets default parameters:
 
+```bash
 max_depth=None
-
 min_group_size=5
-
 significance_level=0.05
-
 n_bootstrap_samples=1000
-
 n_permutation_tests=500
-
 multiple_testing_method='fdr_bh'
-
 min_information_gain=0.001
-
 n_jobs=-1
-
 random_state=42
+````
 
 Enables consistent parameter sharing across modules
 
-Inputs
+### Inputs
 
-Parsed CLI arguments (or configuration file if supported)
+- Parsed CLI arguments (or configuration file if supported)
 
-Outputs
+### Outputs
 
-A NetworkParserConfig instance
+- A NetworkParserConfig instance
 
 ### Role in Pipeline
-
-Centralizes and standardizes configuration
+- Centralizes and standardizes configuration
 
 ### Dependencies
 
-Standard Python libraries (dataclasses, typing)
+- Standard Python libraries (dataclasses, typing)
 
 **3. data_loader.py**
 ### Purpose
-Handles modern microbial genomics input processing
-(Stage 1: Input Processing)
+Handles modern microbial genomics input processing (Stage 1: Input Processing)
 
 ### Functionality
 
 Native loading of compressed VCF (.vcf.gz)
-
 High-quality variant filtering:
-
 biallelic SNPs/indels
-
 quality thresholds
-
 missingness filtering
-
 Generation of clean binary SNP matrix (0/1/NA)
-
 Consensus pseudogenome construction using bcftools consensus
-
 Optional concatenation of samples into a multi-FASTA for phylogenetics
-
 Sample deduplication and alignment of features and labels
-
 Removal of invariant sites
-
 Preservation of intermediate artefacts for traceability
 
-Inputs
+### Inputs
 
 VCF file (.vcf.gz)
-
 Reference FASTA
-
 Label column name
 
-Output directory
+### Output directory
 
-Outputs
-
-genomic_matrix.csv
-
-filtered_snps.final.vcf.gz
-
-consensus_fastas/*.fasta or all_samples_consensus.fasta
-
-deduplicated_genomic_matrix.csv
-
-aligned_genomic_matrix.csv
-
-aligned_metadata.csv
+- genomic_matrix.csv
+- filtered_snps.final.vcf.gz
+- consensus_fastas/*.fasta or all_samples_consensus.fasta
+- deduplicated_genomic_matrix.csv
+- aligned_genomic_matrix.csv
+- aligned_metadata.csv
 
 ### Role in Pipeline
-
-Converts raw variant calls into analysis-ready matrices and phylogenetic inputs with full reproducibility
-
-### Dependencies
-
-pandas, numpy
-
-bcftools (via subprocess)
-
-pathlib, logging
-
-network_parser.config
+- Converts raw variant calls into analysis-ready matrices and phylogenetic inputs with full reproducibility
 
 **4. decision_tree_builder.py**
 ### Purpose
-Feature discovery and rule induction
-(Stage 2: Feature Discovery)
+- Feature discovery and rule induction (Stage 2: Feature Discovery)
 
 ### Functionality
 
-Performs association testing (chi-squared / Fisher’s exact)
+- Performs association testing (chi-squared / Fisher’s exact)
+- Applies multiple testing correction (e.g. FDR-BH)
+- Filters significant features
+- Builds a constrained decision tree:
+- max_depth
+- min_group_size
+- min_information_gain
+- Identifies dominant features and candidate epistatic interactions
+- Writes interpretable artefacts
 
-Applies multiple testing correction (e.g. FDR-BH)
+### Inputs
 
-Filters significant features
-
-Builds a constrained decision tree:
-
-max_depth
-
-min_group_size
-
-min_information_gain
-
-Identifies dominant features and candidate epistatic interactions
-
-Writes interpretable artefacts
-
-Inputs
-
-Aligned genomic matrix
-
-Labels
-
-Configuration parameters
-
-Outputs
-
-decision_tree_rules.txt
-
-feature_confidence.json
-
-epistatic_interactions.json
+- Aligned genomic matrix
+- Labels
+- Configuration parameters
+- Outputs
+- decision_tree_rules.txt
+- feature_confidence.json
+- epistatic_interactions.json
 
 ### Role in Pipeline
 
-Identifies discriminative variants and models their hierarchical structure
+- Identifies discriminative variants and models their hierarchical structure
 
-### Dependencies
-
-sklearn.tree
-
-pandas, numpy
-
-logging, pathlib
-
-network_parser.statistical_validator
 
 **5. statistical_validator.py**
 ### Purpose
-Rigorous statistical validation
-(Stage 3: Statistical Validation)
+- Rigorous statistical validation (Stage 3: Statistical Validation)
 
 ### Functionality
 
-Association testing with effect sizes and information metrics
+- Association testing with effect sizes and information metrics
+- Multiple testing correction
+- Bootstrap stability analysis (default: 1000 resamples)
+- Permutation testing for epistatic interactions (default: 500 permutations)
+- Parallel execution via joblib
 
-Multiple testing correction
+### Inputs
 
-Bootstrap stability analysis (default: 1000 resamples)
+- Aligned data and labels
+- Discovered features and interactions
+- Configuration parameters
 
-Permutation testing for epistatic interactions (default: 500 permutations)
-
-Parallel execution via joblib
-
-Inputs
-
-Aligned data and labels
-
-Discovered features and interactions
-
-Configuration parameters
-
-Outputs
-
-chi_squared_results.json
-
-multiple_testing_results.json
-
-bootstrap_results.json
-
-interaction_permutation_results.json
+### Outputs
+- chi_squared_results.json
+- multiple_testing_results.json
+- bootstrap_results.json
+- interaction_permutation_results.json
 
 ### Role in Pipeline
 
-Quantifies robustness, stability, and statistical support
-
-### Dependencies
-
-scipy.stats
-
-statsmodels.stats.multitest
-
-sklearn
-
-joblib
-
-pandas, numpy
-
-json, logging
+- Quantifies robustness, stability, and statistical support
 
 **6. network_parser.py**
 ### Purpose
-Pipeline orchestration and integration
-(Stage 4: Integration)
+- Pipeline orchestration and integration (Stage 4: Integration)
 
 ### Functionality
 
-Coordinates Stages 1–3
+- Coordinates Stages 1–3
+- Integrates discovery and validation outputs
+- Ranks features by confidence and stability
+- Constructs feature–interaction networks using networkx
+- Computes network statistics (degree, clustering, centrality)
+- Writes final integrated reports
 
-Integrates discovery and validation outputs
+### Inputs
 
-Ranks features by confidence and stability
+- Configuration
+- Preprocessed data
+- Discovery and validation results
 
-Constructs feature–interaction networks using networkx
-
-Computes network statistics (degree, clustering, centrality)
-
-Writes final integrated reports
-
-Inputs
-
-Configuration
-
-Preprocessed data
-
-Discovery and validation results
-
-Outputs
-
-network_graph.graphml
-
-networkparser_results_*.json
+### Outputs
+- network_graph.graphml
+- networkparser_results_*.json
 
 ### Role in Pipeline
 
-Final synthesis layer producing interpretable, network-aware results
+- Final synthesis layer producing interpretable, network-aware results
 
-### Dependencies
 
-networkx
-
-pandas, numpy
-
-json, logging, pathlib
-
-Internal network_parser modules
-
-Pipeline Workflow
-cli.py — parse arguments and initialize configuration
-
-network_parser.py — orchestrate execution
-
-data_loader.py — preprocess genomic inputs
-
-decision_tree_builder.py — discover discriminative features
-
-statistical_validator.py — validate robustness and significance
-
-network_parser.py — integrate results and build networks
+## Pipeline Workflow
+- cli.py — parse arguments and initialize configuration
+- network_parser.py — orchestrate execution
+- data_loader.py — preprocess genomic inputs
+- decision_tree_builder.py — discover discriminative features
+- statistical_validator.py — validate robustness and significance
+- network_parser.py — integrate results and build networks
 
 Output Files
-deduplicated_genomic_matrix.csv
-
-aligned_genomic_matrix.csv
-
-aligned_metadata.csv
-
-chi_squared_results.json
-
-multiple_testing_results.json
-
-decision_tree_rules.txt
-
-feature_confidence.json
-
-epistatic_interactions.json
-
-bootstrap_results.json
-
-interaction_permutation_results.json
-
-network_graph.graphml
-
-networkparser_results_*.json
+- deduplicated_genomic_matrix.csv
+- aligned_genomic_matrix.csv
+- aligned_metadata.csv
+- chi_squared_results.json
+- multiple_testing_results.json
+- decision_tree_rules.txt
+- feature_confidence.json
+- epistatic_interactions.json
+- bootstrap_results.json
+- interaction_permutation_results.json
+- network_graph.graphml
+- networkparser_results_*.json
 
 pipeline_run.log
 
-**Notes**
-Small datasets may yield shallow trees and limited epistatic structure
-
-Larger cohorts typically produce deeper hierarchies and richer networks
-
-Parallelization is enabled by default for computational efficiency
-
 **Troubleshooting**
-Ensure dependencies are installed:
-
-```bash
-conda install scipy statsmodels scikit-learn pandas numpy joblib networkx
-````
-Verify input formats and label consistency
-
-Inspect pipeline_run.log for detailed diagnostics
+- Ensure dependencies are installed:
+- Verify input formats and label consistency
+- Inspect pipeline_run.log for detailed diagnostics
