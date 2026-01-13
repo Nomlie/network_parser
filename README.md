@@ -84,6 +84,8 @@ Ranks features by combined effect size + stability, constructs sample-feature an
 ## Installation
 
 ```bash
+git clone https://github.com/Nomlie/network_parser
+cd network_parser
 conda env create -f environment.yml
 conda activate networkparser
 ````
@@ -96,9 +98,6 @@ python -m network_parser.cli \
   --ref-fasta reference/H37Rv.fasta \
   --label    Lineage \
   --output-dir results_tb_2026/ \
-  --n-jobs   -4 \
-  --n-bootstrap 1000 \
-  --n-permutations 500
 ````
 
 ## Main outputs (in results_tb_2026/):

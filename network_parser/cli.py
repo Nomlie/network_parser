@@ -49,8 +49,12 @@ def setup_parser() -> argparse.ArgumentParser:
         prog="network_parser",
         description="NetworkParser: Interpretable genomic feature discovery pipeline.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-        epilog="Example: network_parser --genomic data.csv --label phenotype"
-    )
+        epilog="Example: python -m network_parser.cli \
+            --genomic  /home/nmfuphi/network_parser/data/AFRO_TB/test_subset\
+            --meta /home/nmfuphi/network_parser/data/AFRO_TB/AFRO_dataset_meta.csv \
+            --label    Lineage \
+            --output-dir results_tb_2026/")
+    
     input_group = parser.add_argument_group('Input Files')
     input_group.add_argument("--genomic", required=True, type=str,
                              help="Genomic matrix (CSV/TSV/FASTA/VCF) containing features and optionally labels.")

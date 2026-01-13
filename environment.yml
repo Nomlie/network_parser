@@ -1,4 +1,5 @@
 name: networkparser
+channel_priority: strict 
 channels:
   - bioconda
   - conda-forge
@@ -35,5 +36,3 @@ dependencies:
   - pip:
       - pyyaml  # If you add YAML config support later
       - tqdm    # Progress bars (nice for large runs)
-
-prefix: /path/to/your/anaconda3/envs/networkparser
