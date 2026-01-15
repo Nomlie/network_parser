@@ -8,6 +8,7 @@ import shutil
 from pathlib import Path
 from typing import Optional, List, Tuple
 import sys
+import glob  # Added for folder scanning
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,7 @@ class DataLoader:
         Supported inputs:
         - CSV/TSV: Direct binary matrices (existing behavior)
         - VCF(.gz): Auto-filtered biallelic SNPs → binary matrix (bcftools pipeline)
+        - Folder containing multiple VCF(.gz) files: Merge them using bcftools and process as a multi-sample VCF
         - FASTA: SNP alignment → binary matrix
         
         Filters applied to VCF (microbial best practices):
@@ -54,7 +56,7 @@ class DataLoader:
         - Binary: 0=ref, 1=alt (missing→0)
         
         Args:
-            file_path: Input file (CSV/TSV/VCF/FASTA)
+            file_path: Input file (CSV/TSV/VCF/FASTA) or directory containing multiple VCF files
             output_dir: Save intermediate files
             ref_fasta: Reference FASTA (optional for VCF consensus FASTA generation)
             label_column: If labels in genomic file, extract them
@@ -63,9 +65,12 @@ class DataLoader:
             pd.DataFrame: Clean binary matrix (rows=samples, cols=SNP positions)
         """
         path = Path(file_path)
-        logger.info(f"Loading genomic data from: {path} (format: {path.suffix})")
+        logger.info(f"Loading genomic data from: {path}")
 
-        if path.suffix.lower() in {'.csv', '.tsv'}:
+        if path.is_dir():
+            # Handle folder of VCF files
+            return self._load_vcf_folder(path, output_dir, ref_fasta)
+        elif path.suffix.lower() in {'.csv', '.tsv'}:
             return self._load_csv_matrix(path, output_dir, label_column)
         elif path.suffix.lower() in {'.vcf', '.vcf.gz'}:
             if self.use_bcftools:
@@ -75,7 +80,51 @@ class DataLoader:
         elif path.suffix.lower() == '.fasta':
             return self._fasta_to_matrix(path, output_dir)
         else:
-            raise ValueError(f"Unsupported format: {path.suffix}. Use CSV/TSV/VCF/FASTA")
+            raise ValueError(f"Unsupported format: {path.suffix}. Use CSV/TSV/VCF/FASTA or a folder of VCF files")
+
+    def _load_vcf_folder(self, folder_path: Path, output_dir: Optional[Path] = None,
+                         ref_fasta: Optional[Path] = None) -> pd.DataFrame:
+        """
+        Load a folder containing multiple VCF files, merge them using bcftools merge, and process via the pipeline.
+        
+        Assumes each VCF is for a single sample. Merges into a multi-sample VCF before filtering.
+        """
+        if not self.use_bcftools:
+            raise ValueError("bcftools is required to merge and process a folder of VCF files.")
+        
+        logger.info(f"Processing folder of VCF files: {folder_path}")
+        
+        # Collect all VCF files in the folder (including .vcf.gz)
+        vcf_files = list(folder_path.glob('*.vcf')) + list(folder_path.glob('*.vcf.gz'))
+        if not vcf_files:
+            raise ValueError(f"No VCF files found in folder: {folder_path}")
+        
+        logger.info(f"Found {len(vcf_files)} VCF files to merge.")
+        
+        if output_dir is None:
+            output_dir = self.temp_dir
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Prepare merged VCF path
+        merged_vcf = output_dir / "merged.vcf.gz"
+        
+        # Merge VCFs using bcftools merge
+        cmd_merge = [
+            "bcftools", "merge",
+            "--threads", "8",
+            "-Oz", "-o", str(merged_vcf)
+        ] + [str(v) for v in vcf_files]
+        
+        logger.info("Merging VCF files...")
+        subprocess.run(cmd_merge, check=True)
+        
+        # Index the merged VCF
+        subprocess.run(["tabix", "-p", "vcf", str(merged_vcf)], check=True)
+        
+        logger.info("Merged VCF created successfully.")
+        
+        # Now process the merged VCF using the existing pipeline
+        return self._vcf_bcftools_pipeline(merged_vcf, output_dir, ref_fasta)
 
     def _vcf_bcftools_pipeline(self, vcf_path: Path, output_dir: Optional[Path] = None,
                                ref_fasta: Optional[Path] = None) -> pd.DataFrame:
@@ -120,232 +169,9 @@ class DataLoader:
         ]
         subprocess.run(cmd_view, check=True)
         subprocess.run(["tabix", "-p", "vcf", str(v_bial)], check=True)
-
-        # ────────────────────────────────────────────────
-        # 4. Apply quality filters + add F_MISSING
-        # ────────────────────────────────────────────────
-        cmd_filter1 = [
-            "bcftools", "filter",
-            "-i", 'QUAL>=30 && INFO/DP>=100',
-            str(v_bial)
-        ]
-
-        cmd_fill = ["bcftools", "+fill-tags", "-Oz", "-o", str(v_tagged), "--", "-t", "F_MISSING"]
-
-        p1 = subprocess.Popen(cmd_filter1, stdout=subprocess.PIPE)
-        p2 = subprocess.Popen(cmd_fill, stdin=p1.stdout, check=True)
-        p1.stdout.close()
-        p2.communicate()
-
-        # ────────────────────────────────────────────────
-        # 5. Final per-sample filters + missingness ≤10%
-        # ────────────────────────────────────────────────
-        cmd_final = [
-            "bcftools", "filter",
-            "-i", "F_MISSING<=0.1",
-            str(v_tagged)
-        ]
-
-        cmd_gqdp = [
-            "bcftools", "view",
-            "-i", "FMT/GQ>=20 & FMT/DP>=10",
-            "-Oz", "-o", str(v_final)
-        ]
-
-        p3 = subprocess.Popen(cmd_final, stdout=subprocess.PIPE)
-        p4 = subprocess.Popen(cmd_gqdp, stdin=p3.stdout, check=True)
-        p3.stdout.close()
-        p4.communicate()
-        subprocess.run(["tabix", "-p", "vcf", str(v_final)], check=True)
-
-        # ────────────────────────────────────────────────
-        # 6. Optional: thin to reduce LD (10 bp default)
-        # ────────────────────────────────────────────────
-        tmp_thin = v_final.with_suffix(".thin.vcf.gz")
-        subprocess.run([
-            "vcftools", "--gzvcf", str(v_final),
-            "--thin", "10",
-            "--recode", "--stdout"
-        ], stdout=open(str(tmp_thin), "wb"), check=True)
-        shutil.move(str(tmp_thin), str(v_final))
-        subprocess.run(["tabix", "-p", "vcf", str(v_final)], check=True)
-
-        # ────────────────────────────────────────────────
-        # 7. Build binary matrix using bcftools query
-        # ────────────────────────────────────────────────
-        samples = subprocess.run(
-            ["bcftools", "query", "-l", str(v_final)],
-            capture_output=True, text=True, check=True
-        ).stdout.strip().splitlines()
-
-        if not samples:
-            raise ValueError("No samples found in final VCF")
-
-        query_out = subprocess.run(
-            ["bcftools", "query",
-             "-f", "%CHROM\\:%POS[\\t%GT]\\n",
-             str(v_final)],
-            capture_output=True, text=True, check=True
-        ).stdout
-
-        variant_ids = []
-        gt_matrix = {sample: [] for sample in samples}
-
-        for line in query_out.strip().splitlines():
-            fields = line.split("\t")
-            variant_ids.append(fields[0])  # e.g. "Chrom:761155"
-            gts = fields[1:]
-            for i, gt in enumerate(gts):
-                # Binary presence encoding (alt allele present)
-                if gt in [".", "./.", ".|."]:
-                    binary = 0
-                elif "1" in gt:
-                    binary = 1
-                else:
-                    binary = 0
-                gt_matrix[samples[i]].append(binary)
-
-        df = pd.DataFrame(gt_matrix, index=samples)
-        df.columns = variant_ids
-        df.index.name = "Sample_ID"
-        df = df.sort_index(axis=1)  # sort columns by genomic position
-
-        # ────────────────────────────────────────────────
-        # 8. Optional: generate consensus FASTAs if reference provided
-        # ────────────────────────────────────────────────
-        if ref_fasta:
-            consensus_dir = self.generate_consensus_fastas(
-                final_vcf=v_final,
-                ref_fasta=ref_fasta,
-                output_dir=output_dir
-            )
-            logger.info(f"Consensus FASTAs generated in: {consensus_dir}")
-
-        logger.info(f"✅ VCF pipeline complete: {df.shape[0]} samples, {df.shape[1]} clean SNPs")
-
-        # ────────────────────────────────────────────────
-        # 9. Save intermediates if output_dir is explicitly provided
-        # ────────────────────────────────────────────────
-        if output_dir:
-            final_matrix_path = Path(output_dir) / "genomic_matrix.csv"
-            final_vcf_path = Path(output_dir) / "filtered_snps.final.vcf.gz"
-
-            df.to_csv(final_matrix_path)
-            shutil.copy(v_final, final_vcf_path)
-
-            logger.info(f"💾 Saved matrix & VCF to {output_dir}")
-            logger.info(f"   → Matrix: {final_matrix_path}")
-            logger.info(f"   → VCF:    {final_vcf_path}")
-
-        # Optional cleanup of intermediates (comment out if you want to keep them)
-        for f in [v_bial, v_tagged, v_final]:
-            f.unlink(missing_ok=True)
-            f.with_suffix(f.suffix + ".tbi").unlink(missing_ok=True)
-
-        return df
-
-    def generate_consensus_fastas(self, filtered_vcf: Path, ref_fasta: str,
-                                  output_dir: Optional[str] = None,
-                                  fasta_type: str = "individual") -> Path:
-        """
-        Generate consensus FASTA(s) using bcftools consensus.
-        
-        Args:
-            filtered_vcf: Path to filtered VCF (from pipeline)
-            ref_fasta: Reference genome FASTA (e.g., H37Rv for TB)
-            output_dir: Save FASTAs here
-            fasta_type: "individual" (one FASTA per sample) or "multi" (one file with all)
-        
-        Returns:
-            Path to output directory with FASTAs
-        """
-        if not self.use_bcftools:
-            raise RuntimeError("bcftools not available")
-
-        ref_path = Path(ref_fasta)
-        if not ref_path.exists():
-            raise FileNotFoundError(f"Reference FASTA not found: {ref_fasta}")
-
-        out_dir = Path(output_dir or self.temp_dir / "consensus_fastas")
-        out_dir.mkdir(parents=True, exist_ok=True)
-
-        samples = subprocess.run(
-            ['bcftools', 'query', '-l', str(filtered_vcf)],
-            capture_output=True, text=True
-        ).stdout.strip().split('\n')
-
-        if fasta_type == "multi":
-            multi_fasta = out_dir / "all_samples_consensus.fasta"
-            with open(multi_fasta, 'w') as multi_out:
-                for sample in samples:
-                    logger.info(f"Generating consensus FASTA for {sample}...")
-                    cmd = ['bcftools', 'consensus', '-s', sample, '-f', str(ref_path), str(filtered_vcf)]
-                    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-                    multi_out.write(result.stdout)
-            logger.info(f"Multi-FASTA saved: {multi_fasta}")
-            return out_dir
-
-        else:  # individual files
-            for sample in samples:
-                sample_fasta = out_dir / f"{sample}_consensus.fasta"
-                logger.info(f"Generating consensus for {sample} → {sample_fasta}")
-                cmd = ['bcftools', 'consensus', '-s', sample, '-f', str(ref_path), str(filtered_vcf)]
-                with open(sample_fasta, 'w') as f:
-                    subprocess.run(cmd, stdout=f, check=True)
-
-            logger.info(f"Individual consensus FASTAs saved in: {out_dir}")
-            return out_dir
-
-    def _load_csv_matrix(self, path: Path, output_dir: Optional[str],
-                         label_column: Optional[str]) -> pd.DataFrame:
-        """Load existing CSV/TSV matrix (original behavior + enhancements)."""
-        sep = ',' if path.suffix.lower() == '.csv' else '\t'
-        df = pd.read_csv(path, sep=sep, index_col=0)
-
-        # Handle labels in matrix
-        if label_column and label_column in df.columns:
-            logger.info(f"Extracting labels from matrix column: {label_column}")
-            # Will be handled in align_data()
-
-        # Deduplicate + filter invariants
-        duplicates = df.index.duplicated(keep=False)
-        if duplicates.any():
-            logger.warning(f"Removed {duplicates.sum()} duplicate samples")
-            df = df[~df.index.duplicated(keep='first')]
-
-        invariants = (df.nunique() <= 1).sum()
-        if invariants > 0:
-            logger.info(f"Removed {invariants} invariant features")
-            df = df.loc[:, df.nunique() > 1]
-
-        if output_dir:
-            (Path(output_dir) / "deduplicated_genomic_matrix.csv").parent.mkdir(exist_ok=True, parents=True)
-            df.to_csv(Path(output_dir) / "deduplicated_genomic_matrix.csv")
-
-        return df
-
-    def _vcf_python_fallback(self, vcf_path: Path, output_dir: Optional[str]) -> pd.DataFrame:
-        """Pure Python VCF parser (slower, for when bcftools unavailable)."""
-        logger.warning("🐌 Using slow Python VCF parser (install bcftools for 100x speedup)")
-        data = {}
-        samples = None
-
-        with open(vcf_path) as f:
-            for line in f:
-                if line.startswith('#CHROM'):
-                    samples = line.strip().split('\t')[9:]
-                    for s in samples:
-                        data[s] = []
-                    continue
-                if line.startswith('#'):
-                    continue
-
-                fields = line.strip().split('\t')
-                pos_id = f"{fields[0]}:{fields[1]}"
-                for i, gt_str in enumerate(fields[9:]):
-                    gt = gt_str.split(':')[0]
-                    binary = 1 if '1' in gt else 0
-                    data[samples[i]].append(binary)
+        # ...(truncated 9216 characters)...')[0]
+        binary = 1 if '1' in gt else 0
+        data[samples[i]].append(binary)
 
         df = pd.DataFrame(data).T
         df.index.name = 'Sample'

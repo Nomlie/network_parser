@@ -50,7 +50,7 @@ class NetworkParser:
 
         # Load genomic data → clean binary matrix (handles VCF filtering + consensus FASTA if ref_fasta given)
         genomic_df = self.loader.load_genomic_matrix(
-            file_path=genomic_path,
+            genomic_path=genomic_path,
             output_dir=output_dir,
             ref_fasta=ref_fasta  # Triggers bcftools consensus for VCF inputs
         )
