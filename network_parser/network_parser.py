@@ -7,12 +7,14 @@ from pathlib import Path
 import json
 import networkx as nx  # For graph creation
 from typing import Optional, Dict, List, Tuple
+
 from .config import NetworkParserConfig
 from .data_loader import DataLoader
 from .statistical_validation import StatisticalValidator
 from .decision_tree_builder import EnhancedDecisionTreeBuilder
 
 logger = logging.getLogger(__name__)
+
 
 class NetworkParser:
     """
@@ -26,33 +28,21 @@ class NetworkParser:
         self.validator = StatisticalValidator(config)
         self.tree_builder = EnhancedDecisionTreeBuilder(config)
 
-    def run_pipeline(self, genomic_path: str, meta_path: Optional[str] = None, label_column: str = None,
-                     known_markers_path: Optional[str] = None, output_dir: str = "results/",
-                     validate_statistics: bool = True, validate_interactions: bool = True,
+    def run_pipeline(self, genomic_path: str, meta_path: Optional[str] = None,
+                     label_column: str = None, known_markers_path: Optional[str] = None,
+                     output_dir: str = "results/", validate_statistics: bool = True,
+                     validate_interactions: bool = True,
                      ref_fasta: Optional[str] = None) -> Dict:
         """
         Execute the full pipeline: load data, discover features, validate, and integrate results.
-
-        Args:
-            genomic_path (str): Path to the genomic data file (CSV/TSV/VCF/FASTA).
-            meta_path (Optional[str]): Path to the metadata file. Defaults to None.
-            label_column (str): Name of the column containing labels (required).
-            known_markers_path (Optional[str]): Path to known markers file. Defaults to None.
-            output_dir (str): Output directory. Defaults to "results/".
-            validate_statistics (bool): Run statistical validation. Defaults to True.
-            validate_interactions (bool): Validate epistatic interactions. Defaults to True.
-            ref_fasta (Optional[str]): Reference genome FASTA (used for VCF → consensus FASTA generation).
-
-        Returns:
-            dict: Pipeline results including discovered features, networks, and validation.
         """
         logger.info("\033[1m📥 Stage 1: Input Processing\033[0m")
 
         # Load genomic data → clean binary matrix (handles VCF filtering + consensus FASTA if ref_fasta given)
         genomic_df = self.loader.load_genomic_matrix(
-            genomic_path=genomic_path,
+            file_path=genomic_path,          # ← FIXED: changed from genomic_path= to file_path=
             output_dir=output_dir,
-            ref_fasta=ref_fasta  # Triggers bcftools consensus for VCF inputs
+            ref_fasta=ref_fasta              # Triggers bcftools consensus for VCF inputs
         )
 
         # Load optional metadata and known markers
@@ -74,6 +64,7 @@ class NetworkParser:
         corrected = self.validator.multiple_testing_correction(chi2_results, output_dir=output_dir)
         significant_features = [f for f, res in corrected.items() if res['significant']]
         logger.info(f"Filtered {len(significant_features)} significant features.")
+
         discovery_results = self.tree_builder.discover_features(data, labels, significant_features, output_dir)
 
         logger.info("\033[1m✅ Stage 3: Statistical Validation\033[0m")
@@ -113,9 +104,11 @@ class NetworkParser:
         logger.info("✅ Pipeline completed successfully")
         return results
 
-    def _integrate_features(self, results: Dict, data: pd.DataFrame, labels: pd.Series, output_dir: Optional[str]) -> Dict:
+    def _integrate_features(self, results: Dict, data: pd.DataFrame, labels: pd.Series,
+                            output_dir: Optional[str]) -> Dict:
         """Stage 4: Integrate features into networks and rankings."""
-        ranked = sorted(results['feature_confidence'].items(), key=lambda x: x[1]['confidence'], reverse=True)
+        ranked = sorted(results['feature_confidence'].items(),
+                        key=lambda x: x[1]['confidence'], reverse=True)
         logger.info(f"Ranked {len(ranked)} features by confidence.")
 
         # Sample-Feature Network (bipartite)
@@ -145,15 +138,19 @@ class NetworkParser:
 
         return {
             'ranked_features': ranked,
-            'sample_feature_network': {'nodes': list(sample_feature_graph.nodes()), 'edges': list(sample_feature_graph.edges())},
-            'interaction_graph': {'nodes': list(interaction_graph.nodes()), 'edges': list(interaction_graph.edges())}
+            'sample_feature_network': {'nodes': list(sample_feature_graph.nodes()),
+                                       'edges': list(sample_feature_graph.edges())},
+            'interaction_graph': {'nodes': list(interaction_graph.nodes()),
+                                  'edges': list(interaction_graph.edges())}
         }
 
-    def _compare_known_markers(self, data: pd.DataFrame, labels: pd.Series, discovered: List[str], known: List[str]) -> Dict:
+    def _compare_known_markers(self, data: pd.DataFrame, labels: pd.Series,
+                               discovered: List[str], known: List[str]) -> Dict:
         """Compare discovered features with known markers."""
         overlap = set(discovered) & set(known)
         logger.info(f"Found {len(overlap)} overlapping markers with known set.")
-        return {'overlap': list(overlap), 'overlap_ratio': len(overlap) / len(known) if known else 0}
+        return {'overlap': list(overlap),
+                'overlap_ratio': len(overlap) / len(known) if known else 0}
 
 
 def run_networkparser_analysis(**kwargs):
@@ -175,7 +172,7 @@ def run_networkparser_analysis(**kwargs):
 if __name__ == "__main__":
     import sys
     if len(sys.argv) < 3:
-        print("Usage: python network_parser.py <genomic_file> <label_column>")
+        print("Usage: python network_parser.py <genomic_file_or_dir> <label_column>")
         sys.exit(1)
     # Simple direct run (for testing)
     results = run_networkparser_analysis(

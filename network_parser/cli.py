@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 import time
-import numpy as np
+import json
 
 # Configure detailed logging with timestamps
 logging.basicConfig(
@@ -25,41 +25,41 @@ except ImportError as e:
     logger.error(f"Import error: {e}")
     sys.exit(1)
 
-def validate_file_path(file_path: str, file_type: str) -> None:
-    """Validate if a file exists."""
-    if not Path(file_path).is_file():
-        logger.error(f"{file_type} file not found: {file_path}")
-        sys.exit(1)
 
 def load_config(config_path: Optional[str], default_config: NetworkParserConfig) -> NetworkParserConfig:
     """Load configuration from file or use default."""
     if config_path:
         logger.info(f"Loading config from: {config_path}")
-        # Implement JSON/YAML loading here if needed
-        import json
-        with open(config_path, 'r') as f:
-            config_data = json.load(f)
+        try:
+            with open(config_path, 'r') as f:
+                config_data = json.load(f)
             for key, value in config_data.items():
-                setattr(default_config, key, value)
+                if hasattr(default_config, key):
+                    setattr(default_config, key, value)
+                else:
+                    logger.warning(f"Config key '{key}' not found in NetworkParserConfig")
+        except Exception as e:
+            logger.error(f"Failed to load config file: {e}")
+            sys.exit(1)
     return default_config
+
 
 def setup_parser() -> argparse.ArgumentParser:
     """Setup CLI parser with groups."""
     parser = argparse.ArgumentParser(
         prog="network_parser",
-        description="NetworkParser: Interpretable genomic feature discovery pipeline. \
-                     Supports CSV/TSV/VCF/FASTA files or a directory of VCF files.",
+        description="NetworkParser: Interpretable genomic feature discovery pipeline.\n"
+                    "Supports CSV/TSV/VCF/FASTA files or a directory of VCF files.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-        epilog="Example: python -m network_parser.cli \
-            --genomic  /home/nmfuphi/network_parser/data/AFRO_TB/test_subset \
-            --meta /home/nmfuphi/network_parser/data/AFRO_TB/AFRO_dataset_meta.csv \
-            --label    Lineage \
-            --output-dir results_tb_2026/")
-    
+        epilog="Examples:\n"
+               "  python -m network_parser.cli --genomic data/matrix.csv --label Group\n"
+               "  python -m network_parser.cli --genomic vcfs_folder/ --meta metadata.csv --label Lineage"
+    )
+
     input_group = parser.add_argument_group('Input Files')
     input_group.add_argument("--genomic", required=True, type=str,
-                             help="Genomic input: either a single file (CSV/TSV/VCF/FASTA) "
-                                  "or a DIRECTORY containing multiple VCF(.gz) files")
+                             help="Genomic input: single file (CSV/TSV/VCF/FASTA) "
+                                  "or DIRECTORY containing multiple VCF(.gz) files")
     input_group.add_argument("--meta", type=str, default=None,
                              help="Metadata CSV/TSV with sample IDs and labels")
     input_group.add_argument("--label", required=True, type=str,
@@ -67,7 +67,8 @@ def setup_parser() -> argparse.ArgumentParser:
     input_group.add_argument("--known-markers", type=str, default=None,
                              help="File with known resistance markers (optional)")
     input_group.add_argument("--ref-fasta", type=str, default=None,
-                             help="Reference genome FASTA file (e.g., H37Rv.fa). Required for consensus FASTA output from VCF.")
+                             help="Reference genome FASTA file (required for consensus FASTA from VCF)")
+
     opt_group = parser.add_argument_group('Options')
     opt_group.add_argument("--output-dir", type=str, default="results/",
                            help="Output directory")
@@ -80,16 +81,17 @@ def setup_parser() -> argparse.ArgumentParser:
     opt_group.add_argument("--export-format", choices=["json", "pickle"], default="json",
                            help="Export format")
     opt_group.add_argument("--version", action="version", version="NetworkParser 1.0.0")
-    
+
     return parser
-    
+
+
 def validate_input_path(path_str: str) -> Path:
     """Validate that --genomic is either a file or a directory."""
     path = Path(path_str)
     if not path.exists():
         logger.error(f"Input path does not exist: {path}")
         sys.exit(1)
-    
+
     if path.is_dir():
         vcf_files = list(path.glob("*.vcf")) + list(path.glob("*.vcf.gz"))
         if not vcf_files:
@@ -105,49 +107,76 @@ def validate_input_path(path_str: str) -> Path:
     else:
         logger.error(f"Input path is neither a file nor a directory: {path}")
         sys.exit(1)
-    
+
     return path
+
 
 def main():
     """CLI entrypoint."""
     parser = setup_parser()
     args = parser.parse_args()
-    # Validate genomic input
-    genomic_path = validate_input_path(args.genomic)
+
+    # ────────────────────────────────────────────────
     # Validate inputs
-    validate_file_path(args.genomic, 'genomic')
+    # ────────────────────────────────────────────────
+    genomic_path = validate_input_path(args.genomic)
+
+    meta_path = None
     if args.meta:
-        validate_file_path(args.meta, 'meta')
+        meta_p = Path(args.meta)
+        if not meta_p.is_file():
+            logger.error(f"Metadata file not found: {meta_p}")
+            sys.exit(1)
+        meta_path = meta_p
+
+    known_markers_path = None
     if args.known_markers:
-        validate_file_path(args.known_markers, 'known_markers')
-    
-    # Config
+        km_p = Path(args.known_markers)
+        if not km_p.is_file():
+            logger.error(f"Known markers file not found: {km_p}")
+            sys.exit(1)
+        known_markers_path = km_p
+
+    ref_fasta_path = None
+    if args.ref_fasta:
+        rf_p = Path(args.ref_fasta)
+        if not rf_p.is_file():
+            logger.error(f"Reference FASTA file not found: {rf_p}")
+            sys.exit(1)
+        ref_fasta_path = rf_p
+
+    # Load config
     config = load_config(args.config, NetworkParserConfig())
-    
-    logger.info("Attempting to import run_networkparser_analysis and NetworkParserConfig")
-    logger.info(f"Running cli.py from: {Path(__file__).resolve()}")
+
+    # Logging summary
     logger.info("Starting NetworkParser pipeline")
-    logger.info(f"Genomic data: {Path(args.genomic).resolve()}")
-    logger.info(f"Label column: {args.label}")
+    logger.info(f"Genomic input:   {genomic_path.resolve()}")
+    logger.info(f"Metadata:        {meta_path.resolve() if meta_path else 'None'}")
+    logger.info(f"Label column:    {args.label}")
     logger.info(f"Output directory: {Path(args.output_dir).resolve()}")
-    
+    if ref_fasta_path:
+        logger.info(f"Reference FASTA: {ref_fasta_path.resolve()}")
+
     try:
         start_time = time.time()
         run_networkparser_analysis(
-            genomic_path=str(genomic_path),          # Now can be file OR directory path
+            genomic_path=str(genomic_path),
             meta_path=str(meta_path) if meta_path else None,
             label_column=args.label,
             known_markers_path=str(known_markers_path) if known_markers_path else None,
             output_dir=args.output_dir,
             config=config,
             validate_statistics=args.validate_statistics,
-            validate_interactions=args.validate_interactions
+            validate_interactions=args.validate_interactions,
+            ref_fasta=str(ref_fasta_path) if ref_fasta_path else None   # pass ref_fasta if provided
         )
         elapsed_time = time.time() - start_time
         logger.info(f"NetworkParser pipeline completed successfully in {elapsed_time:.2f} seconds")
     except Exception as e:
-        logger.error(f"Pipeline failed: {e}")
+        logger.error(f"Pipeline failed: {e}", exc_info=True)
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
+    
