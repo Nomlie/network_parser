@@ -1,53 +1,7 @@
-2026-01-08 14:29:06,840 - INFO - Attempting to import run_networkparser_analysis and NetworkParserConfig
-2026-01-08 14:29:06,840 - INFO - Running cli.py from: /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/network_parser/cli.py
-2026-01-08 14:29:06,840 - INFO - Starting NetworkParser pipeline
-2026-01-08 14:29:06,840 - INFO - Genomic data: /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/MatrixSelector/input/example.csv
-2026-01-08 14:29:06,840 - INFO - Label column: Group
-2026-01-08 14:29:06,840 - INFO - Output directory: /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/results
-2026-01-08 14:29:06,840 - INFO - Initializing NetworkParser with provided configuration.
-2026-01-08 14:29:06,840 - INFO - Initializing NetworkParser with config: {'max_depth': None, 'min_samples_split': 10, 'min_samples_leaf': 5, 'min_information_gain': 0.001, 'min_group_size': 10, 'significance_level': 0.05, 'fdr_threshold': 0.05, 'multiple_testing_method': 'fdr_bh', 'n_bootstrap_samples': 1000, 'n_permutation_tests': 500, 'min_bootstrap_support': 0.7, 'n_jobs': -1, 'random_state': 42, 'memory_efficient': False, 'qual_threshold': 30.0, 'min_dp_per_sample': 10, 'min_gq_per_sample': 20, 'max_missing_fraction': 0.1, 'min_spacing_bp': 10, 'generate_consensus_fasta': True, 'consensus_fasta_type': 'individual', 'include_intermediate_files': True}
-2026-01-08 14:29:06,859 - WARNING - ⚠️  bcftools/vcftools not found - VCF parsing will be slower (pure Python fallback)
-2026-01-08 14:29:06,860 - INFO - Initialized StatisticalValidator.
-2026-01-08 14:29:06,860 - INFO - Starting pipeline execution...
-2026-01-08 14:29:06,860 - INFO - [1m📥 Stage 1: Input Processing[0m
-2026-01-08 14:29:06,860 - INFO - Loading genomic data from: /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/MatrixSelector/input/example.csv (format: .csv)
-2026-01-08 14:29:06,893 - INFO - Removed 29 invariant features
-2026-01-08 14:29:06,902 - INFO - Aligning genomic data and metadata...
-2026-01-08 14:29:06,902 - INFO - 📊 Extracting labels 'Group' directly from genomic matrix
-2026-01-08 14:29:06,905 - INFO - Removed 38 invariant features
-2026-01-08 14:29:06,907 - INFO - ✅ Aligned: 15 samples, 22 features
-2026-01-08 14:29:06,907 - INFO - Final aligned dataset: 15 samples, 22 features
-2026-01-08 14:29:06,907 - INFO - [1m🌳 Stage 2: Feature Discovery[0m
-2026-01-08 14:29:06,907 - INFO - Running association tests for 22 features.
-2026-01-08 14:29:14,638 - INFO - Saved chi-squared results to: results/
-2026-01-08 14:29:14,638 - INFO - Applying multiple testing correction using fdr_bh.
-2026-01-08 14:29:14,642 - INFO - Saved multiple testing results to: results/
-2026-01-08 14:29:14,642 - INFO - Filtered 7 significant features.
-2026-01-08 14:29:14,642 - INFO - 🔍 Feature discovery: 15 samples, 7 features
-2026-01-08 14:29:14,642 - INFO - Input features: ['679712', '771128', '1392623', '1470751', '1572071', '1678339', '3219764']
-2026-01-08 14:29:14,694 - INFO - Prefiltered 7/7 features via FDR
-2026-01-08 14:29:14,694 - INFO - Prefiltered features: ['679712', '771128', '1392623', '1470751', '1572071', '1678339', '3219764']
-2026-01-08 14:29:14,695 - INFO - 📊 2 classes: ['N', 'P']
-2026-01-08 14:29:14,705 - INFO - Built decision tree with depth 1 and 2 leaves.
-2026-01-08 14:29:14,725 - INFO - [1m✅ Stage 3: Statistical Validation[0m
-2026-01-08 14:29:14,726 - INFO - Running bootstrap validation with 1000 samples.
-2026-01-08 14:29:15,444 - INFO - Saved bootstrap results to: results/
-2026-01-08 14:29:15,444 - INFO - [1m🔗 Stage 4: Integration[0m
-2026-01-08 14:29:15,444 - INFO - Ranked 1 features by confidence.
-2026-01-08 14:29:16,128 - INFO - Saved network graphs to GraphML files.
-2026-01-08 14:29:16,129 - INFO - Saved iGNN adjacency matrices.
-2026-01-08 14:29:16,129 - INFO - [1m📤 Stage 5: Output Generation[0m
-2026-01-08 14:29:16,130 - INFO - Saved final results to: results/networkparser_results_20260108_142916.json
-2026-01-08 14:29:16,130 - INFO - ✅ Pipeline completed successfully
-2026-01-08 14:29:16,131 - INFO - 🧹 Cleaned temp dir: /var/folders/mh/8pglg_h97hj7_3y7_x2yz5ww0000gn/T/networkparser_81csvphz
-2026-01-08 14:29:16,131 - INFO - NetworkParser pipeline completed successfully in 9.29 seconds
-
-======================================================================
-[1m 🎯 FEATURE DISCOVERY SUMMARY (Workflow Stage 2)[0m
-======================================================================
-📈 Tree Accuracy: 1.000 | Classes: 2
-🌳 Root Features: 1 | Branch: 0
-  1. 3219764 (conf: 0.841)
-🔗 Epistatic Interactions: 0
-======================================================================
-
+2026-01-15 13:48:00,678 - INFO - Attempting to import run_networkparser_analysis and NetworkParserConfig
+2026-01-15 13:48:00,678 - INFO - Running cli.py from: /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/network_parser/cli.py
+2026-01-15 13:48:00,678 - INFO - Starting NetworkParser pipeline
+2026-01-15 13:48:00,678 - INFO - Genomic data: /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/data/polymorphic_genetic_loci.csv
+2026-01-15 13:48:00,678 - INFO - Label column: Labels
+2026-01-15 13:48:00,678 - INFO - Output directory: /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/results
+2026-01-15 13:48:00,678 - ERROR - Pipeline failed: name 'meta_path' is not defined
