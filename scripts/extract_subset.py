@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-create_subset.py
+extracts_subset.py
 
 Create a subset of samples from VCFs based on metadata.
 
@@ -29,6 +29,10 @@ def print_examples():
     examples = """
 Examples
 --------
+python3 /home/nmfuphi/network_parser/scripts/extract_subset.py \
+--vcf-dir /mnt/lustre/users/nmfuphi/AFRO_TB/AFRO_TB_ANNOTATION_VCF \
+--meta-file /mnt/lustre/users/nmfuphi/AFRO_TB/AFRO_dataset_meta.csv \
+--output-dir test_subset_basic --n-samples 100 
 
 Random 100-sample subset (no merge):
   ./extract_subset.py \\

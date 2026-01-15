@@ -47,23 +47,25 @@ def setup_parser() -> argparse.ArgumentParser:
     """Setup CLI parser with groups."""
     parser = argparse.ArgumentParser(
         prog="network_parser",
-        description="NetworkParser: Interpretable genomic feature discovery pipeline.",
+        description="NetworkParser: Interpretable genomic feature discovery pipeline. \
+                     Supports CSV/TSV/VCF/FASTA files or a directory of VCF files.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         epilog="Example: python -m network_parser.cli \
-            --genomic  /home/nmfuphi/network_parser/data/AFRO_TB/test_subset\
+            --genomic  /home/nmfuphi/network_parser/data/AFRO_TB/test_subset \
             --meta /home/nmfuphi/network_parser/data/AFRO_TB/AFRO_dataset_meta.csv \
             --label    Lineage \
             --output-dir results_tb_2026/")
     
     input_group = parser.add_argument_group('Input Files')
     input_group.add_argument("--genomic", required=True, type=str,
-                             help="Genomic matrix (CSV/TSV/FASTA/VCF) containing features and optionally labels.")
+                             help="Genomic input: either a single file (CSV/TSV/VCF/FASTA) "
+                                  "or a DIRECTORY containing multiple VCF(.gz) files")
     input_group.add_argument("--meta", type=str, default=None,
-                             help="Metadata (CSV/TSV) with annotations including labels (optional if labels are in genomic).")
+                             help="Metadata CSV/TSV with sample IDs and labels")
     input_group.add_argument("--label", required=True, type=str,
-                             help="Label column name, must exist in meta or genomic file.")
+                             help="Column name containing the phenotype/label")
     input_group.add_argument("--known-markers", type=str, default=None,
-                             help="Known markers file (TXT/CSV/TSV)")
+                             help="File with known resistance markers (optional)")
     input_group.add_argument("--ref-fasta", type=str, default=None,
                              help="Reference genome FASTA file (e.g., H37Rv.fa). Required for consensus FASTA output from VCF.")
     opt_group = parser.add_argument_group('Options')
@@ -80,12 +82,38 @@ def setup_parser() -> argparse.ArgumentParser:
     opt_group.add_argument("--version", action="version", version="NetworkParser 1.0.0")
     
     return parser
+    
+def validate_input_path(path_str: str) -> Path:
+    """Validate that --genomic is either a file or a directory."""
+    path = Path(path_str)
+    if not path.exists():
+        logger.error(f"Input path does not exist: {path}")
+        sys.exit(1)
+    
+    if path.is_dir():
+        vcf_files = list(path.glob("*.vcf")) + list(path.glob("*.vcf.gz"))
+        if not vcf_files:
+            logger.error(f"No VCF files (.vcf or .vcf.gz) found in directory: {path}")
+            sys.exit(1)
+        logger.info(f"Detected directory input with {len(vcf_files)} VCF files")
+    elif path.is_file():
+        supported = {'.csv', '.tsv', '.vcf', '.vcf.gz', '.fasta', '.fa'}
+        if path.suffix.lower() not in supported:
+            logger.error(f"Unsupported file extension: {path.suffix}. "
+                         f"Supported: {', '.join(supported)}")
+            sys.exit(1)
+    else:
+        logger.error(f"Input path is neither a file nor a directory: {path}")
+        sys.exit(1)
+    
+    return path
 
 def main():
     """CLI entrypoint."""
     parser = setup_parser()
     args = parser.parse_args()
-    
+    # Validate genomic input
+    genomic_path = validate_input_path(args.genomic)
     # Validate inputs
     validate_file_path(args.genomic, 'genomic')
     if args.meta:
@@ -106,15 +134,14 @@ def main():
     try:
         start_time = time.time()
         run_networkparser_analysis(
-            genomic_path=args.genomic,  # Changed from genomic_data_path to genomic_path
-            meta_path=args.meta,        # Changed from metadata_path to meta_path
+            genomic_path=str(genomic_path),          # Now can be file OR directory path
+            meta_path=str(meta_path) if meta_path else None,
             label_column=args.label,
-            known_markers_path=args.known_markers,
+            known_markers_path=str(known_markers_path) if known_markers_path else None,
             output_dir=args.output_dir,
             config=config,
             validate_statistics=args.validate_statistics,
-            validate_interactions=args.validate_interactions,
-            ref_fasta=args.ref_fasta
+            validate_interactions=args.validate_interactions
         )
         elapsed_time = time.time() - start_time
         logger.info(f"NetworkParser pipeline completed successfully in {elapsed_time:.2f} seconds")
