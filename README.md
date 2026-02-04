@@ -207,6 +207,33 @@ utils.py              – configuration helpers
 Troubleshooting
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 IssuePossible Fix / Checkbcftools/tabix not foundInstall via conda or system package managerMemory usage too highSet memory_efficient: true in configNo significant featuresRelax --fdr-threshold or check phenotype balanceSamples not aligningVerify sample IDs match exactly between matrix/VCF and metadataVCF indexing errorsMake sure .tbi files exist or can be created
 Always check pipeline.log in the working directory.
 Contributing
@@ -225,4 +252,4 @@ See LICENSE file for full text.
 Contact
 Nomlindelo Mfuphi
 📧 nomlindelow@gmail.com
- https://github.com/Nomlie/network_parser
+🐙 https://github.com/Nomlie/network_parser
