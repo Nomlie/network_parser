@@ -1,341 +1,503 @@
 # data_loader.py
 import logging
 import pandas as pd
-import numpy as np
 import subprocess
+import os
 import tempfile
-import shutil
 from pathlib import Path
-from typing import Optional, List, Tuple
-import sys
-import glob
+from typing import Optional, List, Dict
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from .config import VCFProcessingConfig
 
 logger = logging.getLogger(__name__)
 
+try:
+    from tqdm import tqdm  # type: ignore
+except Exception:  # pragma: no cover
+    tqdm = None
+
 
 class DataLoader:
-    """Enhanced DataLoader with VCF→clean SNP matrix and consensus FASTA pipeline using bcftools/vcftools."""
+    """
+    NetworkParser DataLoader
 
-    def __init__(self, use_bcftools: bool = True, temp_dir: Optional[str] = None):
+    This module is responsible for producing a sample × variant
+    0/1 matrix from VCFs, without doing any statistical filtering.
+
+    -------------------------------------------------------------------------
+    KEY NOTES
+    -------------------------------------------------------------------------
+
+    1) WHAT "0/1 MATRIX" MEANS HERE
+       We encode *ALT-allele presence* at each biallelic SNP site:
+         - 0/0            -> 0
+         - 0/1, 1/0       -> 1
+         - 1/1            -> 1
+         - missing (./.)  -> NaN (later filled to 0 if required downstream)
+
+    2) VCF FILTERING IS PRE-TREE AND PRE-STATS
+       The output of this stage is a CLEANED matrix that later stages can use
+       for association tests, decision tree building, and epistasis mining.
+
+    3) MULTI-ALLELIC SITES
+       We split multi-allelic sites into biallelic rows using:
+           bcftools norm -m- -any
+       This avoids discarding biologically meaningful polymorphisms.
+
+    4) OPTIONAL REGION RESTRICTION
+       If `regions` is provided (e.g. "NC_000962.3:1-1000000" or a BED file),
+       we pass it into bcftools view to restrict processing.
+
+    -------------------------------------------------------------------------
+    """
+
+    def __init__(
+        self,
+        use_bcftools: bool = True,
+        temp_dir: Optional[str] = None,
+        n_jobs: Optional[int] = None,
+        vcf_config: Optional[VCFProcessingConfig] = None,
+    ):
         self.use_bcftools = use_bcftools
         self.temp_dir = Path(temp_dir or tempfile.mkdtemp(prefix="networkparser_"))
         self.temp_dir.mkdir(exist_ok=True)
+
+        # NOTE:
+        # - n_jobs is used ONLY for safe parallelism around independent subprocess calls.
+        # - Determinism: ordering of outputs does not change; parallelism only affects runtime.
+        cpu = os.cpu_count() or 1
+        self.n_jobs = int(n_jobs) if (n_jobs is not None and int(n_jobs) > 0) else max(1, cpu - 1)
+
+        self.vcf_config = vcf_config or VCFProcessingConfig()
+
         self._check_bcftools()
 
     def _check_bcftools(self):
         try:
-            subprocess.run(['bcftools', '--version'], check=True, capture_output=True)
-            subprocess.run(['vcftools', '--version'], check=True, capture_output=True)
-            logger.info("✅ bcftools & vcftools detected - fast VCF processing enabled")
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            logger.warning("⚠️ bcftools/vcftools not found - VCF parsing will be slower (pure Python fallback)")
-            self.use_bcftools = False
+            subprocess.run(["bcftools", "--version"], check=True, capture_output=True)
+            subprocess.run(["tabix", "--version"], check=True, capture_output=True)
+        except Exception as e:
+            msg = (
+                "bcftools/tabix not available on PATH. "
+                "Install via conda (bioconda) or system package manager."
+            )
+            raise RuntimeError(msg) from e
 
-    def load_genomic_matrix(self, file_path: str, output_dir: Optional[str] = None,
-                            ref_fasta: Optional[str] = None, label_column: Optional[str] = None) -> pd.DataFrame:
+    def load_genomic_matrix(
+        self,
+        file_path: str,
+        output_dir: Optional[str] = None,
+        ref_fasta: Optional[str] = None,
+        label_column: Optional[str] = None,
+        regions: Optional[str] = None,
+    ) -> pd.DataFrame:
         path = Path(file_path)
         logger.info(f"Loading genomic data from: {path}")
 
         if path.is_dir():
-            return self._load_vcf_folder(path, output_dir, ref_fasta)
-        elif path.suffix.lower() in {'.csv', '.tsv'}:
-            return self._load_csv_matrix(path, output_dir, label_column)
-        elif path.suffix.lower() in {'.vcf', '.vcf.gz'}:
+            return self._load_vcf_folder(path, output_dir, ref_fasta, regions=regions)
+
+        suffix = "".join(path.suffixes).lower()
+        if suffix.endswith(".vcf") or suffix.endswith(".vcf.gz"):
             if self.use_bcftools:
-                return self._vcf_bcftools_pipeline(path, output_dir, ref_fasta)
-            else:
-                return self._vcf_python_fallback(path, output_dir)
-        elif path.suffix.lower() == '.fasta':
-            return self._fasta_to_matrix(path, output_dir)
-        else:
-            raise ValueError(f"Unsupported format: {path.suffix}. Use CSV/TSV/VCF/FASTA or a folder of VCF files")
+                return self._vcf_bcftools_pipeline(path, output_dir or str(self.temp_dir), ref_fasta, regions=regions)
+            return self._vcf_python_fallback(path, output_dir or str(self.temp_dir), ref_fasta, regions=regions)
 
-    def _load_vcf_folder(self, folder_path: Path, output_dir: Optional[str] = None,
-                         ref_fasta: Optional[str] = None) -> pd.DataFrame:
-        if not self.use_bcftools:
-            raise ValueError("bcftools is required to merge and process a folder of VCF files.")
+        if suffix.endswith(".csv") or suffix.endswith(".tsv"):
+            return self._load_csv_matrix(path)
 
-        logger.info(f"Processing folder of VCF files: {folder_path}")
+        if suffix.endswith(".fa") or suffix.endswith(".fasta"):
+            return self._fasta_to_matrix(path)
 
-        vcf_files = list(folder_path.glob('*.vcf')) + list(folder_path.glob('*.vcf.gz'))
-        if not vcf_files:
-            raise ValueError(f"No VCF files found in folder: {folder_path}")
+        raise ValueError(f"Unsupported genomic input: {path}")
 
-        logger.info(f"Found {len(vcf_files)} VCF files to merge.")
+    def _load_csv_matrix(self, path: Path) -> pd.DataFrame:
+        sep = "\t" if path.suffix.lower() == ".tsv" else ","
+        df = pd.read_csv(path, sep=sep, index_col=0)
+        df.index = df.index.astype(str)
+        return df
 
+    def _fasta_to_matrix(self, path: Path) -> pd.DataFrame:
+        raise NotImplementedError("FASTA → matrix not implemented in this version.")
+
+    # -------------------------------------------------------------------------
+    # Multi-VCF handling
+    # -------------------------------------------------------------------------
+    def _tbi_path(self, vcf_path: Path) -> Path:
+        return vcf_path.with_suffix(vcf_path.suffix + ".tbi")
+
+    def _needs_reindex(self, vcf_path: Path) -> bool:
+        tbi = self._tbi_path(vcf_path)
+        if not tbi.exists():
+            return True
+        return tbi.stat().st_mtime < vcf_path.stat().st_mtime
+
+    def _run_tabix_index(self, vcf_path: Path) -> None:
+        subprocess.run(["tabix", "-f", "-p", "vcf", str(vcf_path)], check=True)
+
+    def _index_vcfs_parallel(self, vcf_paths: List[Path]) -> None:
+        to_index = [p for p in vcf_paths if self._needs_reindex(p)]
+        if not to_index:
+            return
+
+        logger.info(f"Indexing {len(to_index)} VCFs with tabix (n_jobs={self.n_jobs}) ...")
+        with ThreadPoolExecutor(max_workers=self.n_jobs) as ex:
+            futures = {ex.submit(self._run_tabix_index, p): p for p in to_index}
+            for fut in as_completed(futures):
+                p = futures[fut]
+                try:
+                    fut.result()
+                except Exception as e:
+                    raise RuntimeError(f"Failed to tabix-index: {p}") from e
+
+    def _load_vcf_folder(
+        self,
+        folder_path: Path,
+        output_dir: Optional[str] = None,
+        ref_fasta: Optional[str] = None,
+        regions: Optional[str] = None,
+    ) -> pd.DataFrame:
+        """
+        Load folder of VCFs → ensure all are indexed → merge → apply preprocessing.
+
+        Notes:
+        - Only .vcf.gz inputs are supported for merging (tabix indexing required).
+        - Merging is done via bcftools merge.
+        """
         output_dir_path = Path(output_dir) if output_dir else self.temp_dir
         output_dir_path.mkdir(parents=True, exist_ok=True)
 
-        # Index all input files before merge
-        logger.info("Checking and indexing all input VCF files...")
-        for vcf_file in vcf_files:
-            if vcf_file.suffix.lower() == '.gz':
-                tbi_file = vcf_file.with_name(vcf_file.name + '.tbi')
-                if not tbi_file.exists():
-                    logger.info(f"Creating index for: {vcf_file.name}")
-                    subprocess.run(["tabix", "-p", "vcf", str(vcf_file)], check=True)
+        vcfs = sorted(folder_path.glob("*.vcf.gz"))
+        if not vcfs:
+            raise FileNotFoundError(f"No .vcf.gz files found in: {folder_path}")
 
-        logger.info("All input VCF files are indexed.")
+        self._index_vcfs_parallel(vcfs)
 
-        # Merge
         merged_vcf = output_dir_path / "merged.vcf.gz"
-        cmd_merge = [
-            "bcftools", "merge",
-            "--threads", "8",
-            "-Oz", "-o", str(merged_vcf)
-        ] + [str(v) for v in vcf_files]
+        if not merged_vcf.exists() or merged_vcf.stat().st_size < 100:
+            logger.info(f"Merging {len(vcfs)} VCFs → {merged_vcf}")
+            cmd = ["bcftools", "merge", "-Oz", "-o", str(merged_vcf)] + [str(v) for v in vcfs]
+            subprocess.run(cmd, check=True)
+            subprocess.run(["tabix", "-f", "-p", "vcf", str(merged_vcf)], check=True)
 
-        logger.info("Merging VCF files...")
-        subprocess.run(cmd_merge, check=True)
+        if self.use_bcftools:
+            return self._vcf_bcftools_pipeline(merged_vcf, str(output_dir_path), ref_fasta, regions=regions)
+        return self._vcf_python_fallback(merged_vcf, str(output_dir_path), ref_fasta, regions=regions)
 
-        # Index merged
-        subprocess.run(["tabix", "-p", "vcf", str(merged_vcf)], check=True)
-        logger.info("Merged VCF created and indexed successfully.")
-
-        return self._vcf_bcftools_pipeline(merged_vcf, str(output_dir_path), ref_fasta)
-
-    def _vcf_bcftools_pipeline(self, vcf_path: Path, output_dir: str, ref_fasta: Optional[str] = None) -> pd.DataFrame:
-        output_dir_path = Path(output_dir)
+    # -------------------------------------------------------------------------
+    # BCFtools pipeline
+    # -------------------------------------------------------------------------
+    def _vcf_bcftools_pipeline(
+        self,
+        vcf_path: Path,
+        output_dir: str,
+        ref_fasta: Optional[str] = None,
+        regions: Optional[str] = None,
+    ) -> pd.DataFrame:
+        output_dir_path = Path(output_dir) if output_dir else self.temp_dir
         output_dir_path.mkdir(parents=True, exist_ok=True)
 
         logger.info(f"Processing VCF: {vcf_path}")
-
         prefix = output_dir_path / vcf_path.stem
-        v_bial = prefix.with_name(prefix.name + ".biallelic.vcf.gz")
-        v_final = prefix.with_name(prefix.name + ".final.vcf.gz")
+
+        files = {
+            "norm": prefix.with_name(prefix.name + ".01.norm.vcf.gz"),
+            "snps_pre": prefix.with_name(prefix.name + ".02a.snps_only.vcf.gz"),
+            "snps": prefix.with_name(prefix.name + ".02b.snps_split.vcf.gz"),
+            "var_qc": prefix.with_name(prefix.name + ".03.variant_qc.vcf.gz"),
+            "gt_qc": prefix.with_name(prefix.name + ".04.genotype_qc.vcf.gz"),
+            "variable": prefix.with_name(prefix.name + ".05.variable.vcf.gz"),
+            "nogap": prefix.with_name(prefix.name + ".06.no_indel_gap.vcf.gz"),
+            "final": prefix.with_name(prefix.name + ".07.final_cleaned.vcf.gz"),
+        }
+
         matrix_csv = prefix.with_name(prefix.name + ".genomic_matrix.csv")
 
-        # Index input (redundant safety)
-        tbi = vcf_path.with_suffix(vcf_path.suffix + '.tbi')
-        if not tbi.exists():
-            subprocess.run(["tabix", "-p", "vcf", str(vcf_path)], check=True)
+        def run_step(cmd, output_file: Path, desc: str):
+            """
+            Notes:
+            - Skip if output exists and non-trivial size.
+            - If output exists but tiny/invalid, re-run.
+            - Always tabix-index bgzipped VCF outputs.
+            """
+            try:
+                if output_file.exists():
+                    if output_file.stat().st_size > 100:
+                        logger.info(f"[SKIP] {desc} (valid file exists: {output_file})")
+                        return
+                    logger.warning(f"[RE-RUN] {desc} (file invalid/empty)")
+                    output_file.unlink(missing_ok=True)
 
-        # Filter: biallelic SNPs
-        cmd_view = [
-            "bcftools", "view",
-            "-m2", "-M2", "-v", "snps",
-            "--threads", "8",
-            "-Oz", "-o", str(v_bial),
-            str(vcf_path)
-        ]
-        subprocess.run(cmd_view, check=True)
-        subprocess.run(["tabix", "-p", "vcf", str(v_bial)], check=True)
+                logger.info(f"[RUN] {desc}")
+                subprocess.run(cmd, check=True)
+                subprocess.run(["tabix", "-f", "-p", "vcf", str(output_file)], check=True)
+            except Exception as e:
+                raise RuntimeError(f"Step failed: {desc}\nCmd: {' '.join(cmd)}") from e
 
-        # Final file (you can add more filters here: QUAL, DP, GQ, missingness, thinning...)
-        shutil.copy(v_bial, v_final)  # placeholder — add real filtering if needed
-        subprocess.run(["tabix", "-p", "vcf", str(v_final)], check=True)
+        cfg = self.vcf_config
 
-        # ────────────────────────────────────────────────
-        # Extract real sample names + genotypes
-        # ────────────────────────────────────────────────
-        logger.info("Extracting sample names and genotypes...")
+        def _append_regions(cmd: List[str]) -> List[str]:
+            if regions:
+                cmd.extend(["--regions", regions])
+            return cmd
 
-        # Get samples
-        cmd_samples = ["bcftools", "query", "-l", str(v_final)]
-        samples_raw = subprocess.run(cmd_samples, capture_output=True, text=True, check=True).stdout.strip().splitlines()
+        # 1) Normalize VCF (reference-aware, if ref fasta provided)
+        if ref_fasta and Path(ref_fasta).exists():
+            if cfg.normalize:
+                run_step(
+                    ["bcftools", "norm", "-f", ref_fasta, "-Oz", "-o", str(files["norm"]), str(vcf_path)],
+                    files["norm"],
+                    "Normalize VCF (reference-aware)",
+                )
+            else:
+                logger.info("[SKIP] Normalization (disabled in config)")
+                files["norm"] = vcf_path
+        else:
+            logger.info("[SKIP] Normalization (no valid reference FASTA)")
+            files["norm"] = vcf_path
 
-        # Normalize sample IDs (matching extract_subset.py logic)
-        samples = []
-        for s in samples_raw:
-            name = s
-            if name.endswith(".vcf.gz"):
-                name = name[:-7]
-            elif name.endswith(".vcf"):
-                name = name[:-4]
-            clean_id = name.split("_")[0].split(".")[0].split("/")[0].strip()
-            if clean_id and clean_id not in samples:
-                samples.append(clean_id)
+        # 2) SNP selection + multi-allelic → biallelic splitting
+        if cfg.keep_only_snps:
+            cmd_view = ["bcftools", "view", "-v", "snps", "-Oz", "-o", str(files["snps_pre"]), str(files["norm"])]
+            _append_regions(cmd_view)
+            run_step(cmd_view, files["snps_pre"], "Select SNPs")
+            split_input = files["snps_pre"]
+        else:
+            split_input = files["norm"]
 
-        logger.info(f"Extracted {len(samples)} unique normalized sample IDs")
-        logger.info(f"First few samples: {samples[:6]}")
+        # Split multi-allelic sites into biallelic rows (preferred for microbial genomics)
+        run_step(
+            ["bcftools", "norm", "-m-", "-any", "-Oz", "-o", str(files["snps"]), str(split_input)],
+            files["snps"],
+            "Split multi-allelic sites & normalize representation",
+        )
 
-        if not samples:
-            raise ValueError("No samples found in VCF header")
+        # 3) Variant-level QC (QUAL and INFO/DP if present)
+        header = subprocess.run(["bcftools", "view", "-h", str(files["snps"])], capture_output=True, text=True).stdout
+        has_dp_info = "##INFO=<ID=DP" in header
 
-        # Prepare data dict
-        data = {sample: [] for sample in samples}
+        var_filter = f"QUAL < {cfg.qual_min}"
+        if has_dp_info:
+            var_filter += f" || INFO/DP < {cfg.dp_min_variant}"
 
-        # Query genotypes (CHROM + all GT columns)
-        cmd_gt = [
-            "bcftools", "query",
-            "-f", "%CHROM\t[%GT\t]\n",
-            str(v_final)
-        ]
-        gt_output = subprocess.run(cmd_gt, capture_output=True, text=True, check=True).stdout.strip()
+        run_step(
+            ["bcftools", "filter", "-e", var_filter, "-Oz", "-o", str(files["var_qc"]), str(files["snps"])],
+            files["var_qc"],
+            "Variant-level QC",
+        )
 
-        lines = gt_output.splitlines()
-        logger.info(f"Processing {len(lines)} variant lines...")
+        # 4) Genotype-level QC: mask low-quality genotype calls to missing (.)
+        header = subprocess.run(["bcftools", "view", "-h", str(files["var_qc"])], capture_output=True, text=True).stdout
+        has_gq = "FORMAT=<ID=GQ" in header
+        has_dp_fmt = "FORMAT=<ID=DP" in header
 
-        for line in lines:
-            if not line.strip():
+        gt_filter = ""
+        if has_gq and has_dp_fmt:
+            gt_filter = f"FMT/GQ < {cfg.gq_min} || FMT/DP < {cfg.dp_min_genotype}"
+        elif has_gq:
+            gt_filter = f"FMT/GQ < {cfg.gq_min}"
+        elif has_dp_fmt:
+            gt_filter = f"FMT/DP < {cfg.dp_min_genotype}"
+        else:
+            logger.warning("No GQ or DP FORMAT tags - skipping genotype QC")
+            files["gt_qc"] = files["var_qc"]
+
+        if gt_filter:
+            run_step(
+                ["bcftools", "filter", "-S", ".", "-e", gt_filter, "-Oz", "-o", str(files["gt_qc"]), str(files["var_qc"])],
+                files["gt_qc"],
+                "Genotype-level QC",
+            )
+
+        # 5) Remove invariant sites (preliminary)
+        if cfg.remove_invariants:
+            run_step(
+                ["bcftools", "view", "-i", "MAX(AC)>0", "-Oz", "-o", str(files["variable"]), str(files["gt_qc"])],
+                files["variable"],
+                "Remove invariant sites",
+            )
+        else:
+            logger.info("[SKIP] Remove invariant sites (disabled in config)")
+            files["variable"] = files["gt_qc"]
+
+        # 6) Remove SNPs near indels/gaps
+        run_step(
+            ["bcftools", "filter", "--SnpGap", str(cfg.snp_gap_bp), "-Oz", "-o", str(files["nogap"]), str(files["variable"])],
+            files["nogap"],
+            "Remove SNPs near indels/gaps",
+        )
+
+        # 7) Final missingness/MAF filters if tags exist (may be absent depending on upstream annotations)
+        header = subprocess.run(["bcftools", "view", "-h", str(files["nogap"])], capture_output=True, text=True).stdout
+        has_missing = "INFO=<ID=F_MISSING" in header
+        has_maf = "INFO=<ID=MAF" in header
+
+        final_filter = ""
+        if has_missing or has_maf:
+            parts = []
+            if has_missing:
+                parts.append(f"F_MISSING < {cfg.max_missing}")
+            if has_maf and (cfg.min_maf is not None):
+                parts.append(f"MAF > {cfg.min_maf}")
+            final_filter = " && ".join(parts)
+
+            if not final_filter:
+                logger.info("[SKIP] Final MAF filter disabled (min_maf=None) and/or tags absent")
+                files["final"] = files["nogap"]
+        else:
+            logger.warning("No F_MISSING or MAF tags - skipping final filter")
+            files["final"] = files["nogap"]
+
+        if final_filter:
+            run_step(
+                ["bcftools", "view", "-i", final_filter, "-Oz", "-o", str(files["final"]), str(files["nogap"])],
+                files["final"],
+                "Apply missingness & MAF filters",
+            )
+
+        # Save stats for auditability
+        stats_file = output_dir_path / "vcf_stats.txt"
+        with open(stats_file, "w") as fh:
+            subprocess.run(["bcftools", "stats", str(files["final"])], stdout=fh, check=True)
+            logger.info(f"VCF stats saved: {stats_file}")
+
+        # ---------------------------------------------------------------------
+        # Variant annotations (ID + INFO preservation)
+        # ---------------------------------------------------------------------
+        try:
+            cmd_anno = [
+                "bcftools", "query",
+                "-f", "%CHROM\t%POS\t%REF\t%ALT\t%ID\t%INFO\n",
+                str(files["final"]),
+            ]
+            proc_anno = subprocess.Popen(cmd_anno, stdout=subprocess.PIPE, text=True)
+            anno_df = pd.read_csv(
+                proc_anno.stdout,  # type: ignore[arg-type]
+                sep="\t", header=None,
+                names=["CHROM", "POS", "REF", "ALT", "ID", "INFO"],
+            )
+            proc_anno.wait()
+
+            if not anno_df.empty:
+                anno_df["Variant"] = anno_df.apply(lambda r: f"{r.CHROM}:{r.POS}:{r.REF}:{r.ALT}", axis=1)
+                anno_df.set_index("Variant", inplace=True)
+                anno_out = output_dir_path / "variant_annotations.csv"
+                anno_df.to_csv(anno_out)
+                logger.info(f"Variant annotations saved: {anno_out}")
+        except Exception as e:
+            logger.warning(f"Could not write variant annotations: {e}")
+
+        # ---------------------------------------------------------------------
+        # VCF → 0/1 matrix (STREAMING + GT PARSING)
+        # ---------------------------------------------------------------------
+        logger.info("Extracting genotypes from final cleaned VCF (streaming)...")
+
+        # Samples: keep bcftools-provided IDs verbatim (stable, unique)
+        cmd_samples = ["bcftools", "query", "-l", str(files["final"])]
+        samples = subprocess.run(cmd_samples, capture_output=True, text=True, check=True).stdout.splitlines()
+        samples = [s.strip() for s in samples if s.strip()]
+
+        if len(set(samples)) != len(samples):
+            raise ValueError("Duplicate sample IDs detected in VCF; cannot build stable matrix")
+
+        # Stream variants + genotypes:
+        # Format: CHROM POS REF ALT then all sample GTs
+        cmd_query = ["bcftools", "query", "-f", "%CHROM\t%POS\t%REF\t%ALT[\t%GT]\n", str(files["final"])]
+        proc = subprocess.Popen(cmd_query, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
+
+        skipped = 0
+        processed = 0
+
+        assert proc.stdout is not None  # for type checkers
+
+        line_iter = proc.stdout
+        if tqdm is not None:
+            total = None
+            try:
+                cmd_count = f'bcftools view -H "{files["final"]}" | wc -l'
+                total = int(subprocess.check_output(cmd_count, shell=True, text=True).strip())
+            except Exception:
+                total = None
+            line_iter = tqdm(line_iter, total=total, desc="Parsing variants", unit="var")
+
+        variant_ids: List[str] = []
+        matrix_rows: List[List[float]] = []
+
+        def gt_to_01(gt: str) -> float:
+            """
+            Convert GT string to 0/1/NaN:
+              - 0 if all called alleles are '0'
+              - 1 if any called allele is non-zero
+              - NaN if missing/unknown (./., .|., any '.')
+            """
+            gt = (gt or "").strip()
+            if not gt or gt in {"./.", ".|.", "."}:
+                return float("nan")
+
+            sep = "/" if "/" in gt else ("|" if "|" in gt else None)
+            if sep is None:
+                # Unknown/unexpected representation; preserve as missing
+                return float("nan")
+
+            alleles = gt.split(sep)
+            if any(a == "." for a in alleles):
+                return float("nan")
+
+            # Any ALT allele (1,2,...) → 1
+            return 1.0 if any(a != "0" for a in alleles) else 0.0
+
+        for line in line_iter:
+            if not line:
                 continue
-            fields = line.split('\t')
-            chrom = fields[0]
-            gts = fields[1:]  # one GT per sample
+            line = line.rstrip("\n")
+            if not line:
+                skipped += 1
+                continue
+
+            fields = line.split("\t")
+            if len(fields) < 4:
+                skipped += 1
+                continue
+
+            chrom, pos, ref, alt = fields[0], fields[1], fields[2], fields[3]
+            vid = f"{chrom}:{pos}:{ref}:{alt}"
+            gts = fields[4:]
 
             if len(gts) != len(samples):
-                logger.warning(f"GT count mismatch at {chrom}: {len(gts)} vs {len(samples)} samples")
+                skipped += 1
                 continue
 
-            for i, gt in enumerate(gts):
-                # Handle missing / no-call
-                if gt == '.' or not gt:
-                    binary = 0
-                else:
-                    binary = 1 if '1' in gt else 0  # alt present → 1
-                data[samples[i]].append(binary)
+            row = [gt_to_01(x) for x in gts]
+            variant_ids.append(vid)
+            matrix_rows.append(row)
+            processed += 1
 
-        # Create DataFrame
-        if not data or not data[samples[0]]:
-            logger.error("No genotypes parsed – returning empty matrix")
-            df = pd.DataFrame(index=samples)
-        else:
-            df = pd.DataFrame(data, index=samples)
-            df.index.name = 'Sample'
-            df.columns.name = 'SNP'
+        if proc.stderr is not None:
+            err = proc.stderr.read().strip()
+            if err:
+                logger.warning(f"bcftools query stderr: {err}")
 
-        # Save for debugging
+        # Build DataFrame (samples × variants)
+        df = pd.DataFrame(matrix_rows, columns=samples, index=variant_ids).T
+        df.index.name = "Sample"
+
+        logger.info(f"Parsed variants: {processed} (skipped: {skipped})")
+        logger.info(f"Matrix shape: {df.shape[0]} samples × {df.shape[1]} variants")
+
         df.to_csv(matrix_csv)
-        logger.info(f"💾 Saved genomic matrix: {matrix_csv}")
-        logger.info(f"Matrix shape: {df.shape}")
-
-        # Optional: consensus FASTA
-        if ref_fasta:
-            consensus_fa = output_dir_path / f"{vcf_path.stem}.consensus.fa"
-            cmd_cons = [
-                "bcftools", "consensus",
-                "-f", ref_fasta,
-                str(v_final),
-                "-o", str(consensus_fa)
-            ]
-            try:
-                subprocess.run(cmd_cons, check=True)
-                logger.info(f"Consensus FASTA created: {consensus_fa}")
-            except Exception as e:
-                logger.warning(f"Consensus FASTA failed: {e}")
+        logger.info(f"Genomic matrix saved: {matrix_csv}")
 
         return df
 
-    # ────────────────────────────────────────────────
-    # The rest of your methods remain unchanged
-    # ────────────────────────────────────────────────
-
-    def _load_csv_matrix(self, path: Path, output_dir: Optional[str], label_column: Optional[str]) -> pd.DataFrame:
-        logger.info(f"Loading CSV/TSV from: {path}")
-        df = pd.read_csv(path, index_col=0)
-        return df
-
-    def _vcf_python_fallback(self, path: Path, output_dir: Optional[str]) -> pd.DataFrame:
-        raise NotImplementedError("Pure Python VCF fallback not implemented")
-
-    def _fasta_to_matrix(self, fasta_path: Path, output_dir: Optional[str]) -> pd.DataFrame:
-        try:
-            from Bio import SeqIO
-        except ImportError:
-            raise ImportError("pip install biopython")
-        
-        sequences = {rec.id: str(rec.seq) for rec in SeqIO.parse(fasta_path, 'fasta')}
-        if len(sequences) < 2:
-            raise ValueError("FASTA needs ≥2 sequences")
-        
-        ref_id = next(iter(sequences))
-        ref_seq = sequences.pop(ref_id)
-        matrix = []
-        
-        for pos in range(len(ref_seq)):
-            snp_col = [1 if seq[pos] != ref_seq[pos] else 0 for seq in sequences.values()]
-            snp_col.insert(0, 0)
-            matrix.append(snp_col)
-        
-        df = pd.DataFrame(matrix, columns=[f"pos_{i}" for i in range(len(ref_seq))])
-        df.index = [ref_id] + list(sequences.keys())
-        return df
-
-    def load_metadata(self, file_path: str, output_dir: Optional[str] = None) -> pd.DataFrame:
-        path = Path(file_path)
-        logger.info(f"Loading metadata from: {path}")
-        
-        if path.suffix.lower() in {'.csv', '.tsv'}:
-            sep = ',' if path.suffix.lower() == '.csv' else '\t'
-            df = pd.read_csv(path, sep=sep, index_col=0)
-        else:
-            raise ValueError(f"Unsupported metadata format: {path.suffix}")
-
-        duplicates = df.index.duplicated(keep=False)
-        if duplicates.any():
-            logger.warning(f"Found {duplicates.sum()} duplicate IDs. Keeping first.")
-            df = df[~df.index.duplicated(keep='first')]
-
-        if output_dir:
-            out_path = Path(output_dir) / "deduplicated_metadata.csv"
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-            df.to_csv(out_path)
-            logger.info(f"Saved deduplicated metadata: {out_path}")
-
-        return df
-
-    def load_known_markers(self, file_path: str, output_dir: Optional[str] = None) -> List[str]:
-        path = Path(file_path)
-        logger.info(f"Loading known markers from: {path}")
-
-        markers = [line.strip() for line in path.read_text().splitlines() if line.strip()]
-
-        if output_dir:
-            out_path = Path(output_dir) / "processed_known_markers.txt"
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-            out_path.write_text('\n'.join(markers))
-            logger.info(f"Saved known markers: {out_path}")
-
-        return markers
-
-    def align_data(self, genomic_data: pd.DataFrame, metadata: Optional[pd.DataFrame],
-                   label_column: str, output_dir: Optional[str] = None) -> Tuple[pd.DataFrame, pd.Series]:
-        logger.info("Aligning genomic data and metadata...")
-
-        if genomic_data is None:
-            raise ValueError("genomic_data is None – check VCF processing in _vcf_bcftools_pipeline")
-
-        # Debug: show sample names early
-        logger.info(f"Genomic samples (first 6): {list(genomic_data.index[:6])}")
-        if metadata is not None:
-            logger.info(f"Metadata samples (first 6): {list(metadata.index[:6])}")
-
-        if metadata is None and label_column in genomic_data.columns:
-            logger.info(f"Extracting labels '{label_column}' from genomic matrix")
-            labels = genomic_data[label_column]
-            aligned_genomic = genomic_data.drop(columns=[label_column])
-        else:
-            if metadata is None:
-                raise ValueError(f"Label column '{label_column}' not found. Provide --meta.")
-            
-            common_samples = genomic_data.index.intersection(metadata.index)
-            if common_samples.empty:
-                logger.error(f"No overlap! Genomic: {len(genomic_data)} samples | Metadata: {len(metadata)}")
-                logger.error(f"Genomic sample preview: {list(genomic_data.index[:10])}")
-                logger.error(f"Metadata sample preview: {list(metadata.index[:10])}")
-                raise ValueError("No common samples between genomic data and metadata.")
-            
-            aligned_genomic = genomic_data.loc[common_samples]
-            labels = metadata.loc[common_samples, label_column]
-
-        non_na_mask = ~labels.isna()
-        aligned_genomic = aligned_genomic.loc[non_na_mask]
-        labels = labels[non_na_mask]
-
-        invariants = aligned_genomic.nunique() <= 1
-        if invariants.any():
-            logger.info(f"Removed {invariants.sum()} invariant features")
-            aligned_genomic = aligned_genomic.loc[:, ~invariants]
-
-        if output_dir:
-            out_path = Path(output_dir)
-            out_path.mkdir(parents=True, exist_ok=True)
-            aligned_genomic.to_csv(out_path / "aligned_genomic_matrix.csv")
-            labels.to_csv(out_path / "aligned_labels.csv")
-
-        logger.info(f"Aligned: {len(labels)} samples, {aligned_genomic.shape[1]} features")
-        return aligned_genomic, labels
-
-    def cleanup(self):
-        shutil.rmtree(self.temp_dir, ignore_errors=True)
-        logger.info(f"Cleaned temp dir: {self.temp_dir}")
+    # -------------------------------------------------------------------------
+    # Pure-python fallback (kept for robustness; minimal in this implementation)
+    # -------------------------------------------------------------------------
+    def _vcf_python_fallback(
+        self,
+        vcf_path: Path,
+        output_dir: str,
+        ref_fasta: Optional[str] = None,
+        regions: Optional[str] = None,
+    ) -> pd.DataFrame:
+        raise NotImplementedError("Python VCF fallback not implemented in this version.")
