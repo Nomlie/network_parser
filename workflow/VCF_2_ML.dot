@@ -1,0 +1,151 @@
+digraph VCF_to_ML_Matrix_Vertical {
+  rankdir=TB;
+  labelloc="t";
+  fontsize=20;
+  fontname="Helvetica,Arial,sans-serif";
+  label="VCF (variant-centric) → ML feature matrix (sample-centric)\nIdentity – Annotations – Filtering – Encoding – Orientation flip";
+
+  node [shape=box, style="rounded,filled", fontname="Helvetica,Arial,sans-serif", fontsize=11, penwidth=1.1];
+  edge [fontname="Helvetica,Arial,sans-serif", fontsize=10, penwidth=1.2, arrowsize=0.9];
+
+  // ───────────────────────────────────────────────
+  //               INPUT
+  // ───────────────────────────────────────────────
+  vcf_input [label=<
+    <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="5">
+      <TR><TD COLSPAN="2"><B>Input: VCF — variant-centric</B></TD></TR>
+      <TR><TD>Rows</TD><TD>Variants</TD></TR>
+      <TR><TD>Columns</TD><TD>Samples + FORMAT fields</TD></TR>
+      <TR><TD>Key fields</TD><TD>CHROM, POS, REF, ALT, QUAL/FILTER/INFO, GT:DP:GQ:...</TD></TR>
+    </TABLE>
+  >, fillcolor="#e8f0ff", width=3.2];
+
+  vcf_example [label=<
+    <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4">
+      <TR><TD COLSPAN="4"><B>VCF orientation (simplified)</B></TD></TR>
+      <TR><TD></TD><TD><B>S1</B></TD><TD><B>S2</B></TD><TD><B>S3</B></TD></TR>
+      <TR><TD><B>var1</B></TD><TD>0/1</TD><TD>0/0</TD><TD>./.</TD></TR>
+      <TR><TD><B>var2</B></TD><TD>0/0</TD><TD>0/1</TD><TD>1/1</TD></TR>
+    </TABLE>
+  >, fillcolor="#f0f4ff", width=2.8];
+
+  // ───────────────────────────────────────────────
+  //               DECOMPOSITION
+  // ───────────────────────────────────────────────
+  decompose [label=<
+    <B>Each VCF row splits into 3 conceptual parts:</B><BR/>
+    1. Variant identity<BR/>
+    2. Variant-level annotations (QC / frequency)<BR/>
+    3. Sample-level genotype calls
+  >, fillcolor="#fdfdff", shape=plaintext, fontsize=13];
+
+  identity [label=<
+    <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="5">
+      <TR><TD><B>Variant identity</B> → becomes column name</TD></TR>
+      <TR><TD ALIGN="LEFT">CHROM : POS : REF : ALT</TD></TR>
+      <TR><TD ALIGN="LEFT"><FONT POINT-SIZE="10">Purpose: unambiguous address of “what changed where”</FONT></TD></TR>
+    </TABLE>
+  >, fillcolor="#e6ffe6"];
+
+  var_qc [label=<
+    <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="5">
+      <TR><TD><B>Variant-level QC annotations</B></TD></TR>
+      <TR><TD ALIGN="LEFT">QUAL, FILTER, DP, AC, AF, MQ, F_MISSING, ...</TD></TR>
+      <TR><TD ALIGN="LEFT"><FONT POINT-SIZE="10">→ used for site filtering</FONT></TD></TR>
+    </TABLE>
+  >, fillcolor="#fff0e0"];
+
+  sample_gt [label=<
+    <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="5">
+      <TR><TD><B>Sample-level calls</B></TD></TR>
+      <TR><TD ALIGN="LEFT">GT (+ DP, GQ, AD, PL, ...)</TD></TR>
+      <TR><TD ALIGN="LEFT"><FONT POINT-SIZE="10">→ used for genotype masking</FONT></TD></TR>
+    </TABLE>
+  >, fillcolor="#e0f0ff"];
+
+  // ───────────────────────────────────────────────
+  //               FILTERING & MASKING
+  // ───────────────────────────────────────────────
+  filtering [label=<
+    <B>Pre-matrix QC steps</B><BR/>
+    (keep variant identity stable, improve reliability)
+  >, fillcolor="#fdfdff", shape=plaintext, fontsize=13];
+
+  site_filter [label=<
+    <B>Site-level filtering</B><BR/>
+    Drop globally unreliable variants<BR/>
+    (QUAL, FILTER, excess het, low call rate, ...)
+  >, fillcolor="#ffe8d0"];
+
+  gt_mask [label=<
+    <B>Genotype-level masking</B><BR/>
+    Set low-confidence calls → .<BR/>
+    (GQ &lt; threshold, DP &lt; threshold, ...)
+  >, fillcolor="#d8e8ff"];
+
+  remove_invariant [label=<
+    <B>Optional: drop invariant sites</B><BR/>
+    (no ALT allele observed in cohort)
+  >, fillcolor="#ffe8d0"];
+
+  // ───────────────────────────────────────────────
+  //               ENCODING + MATRIX BUILD
+  // ───────────────────────────────────────────────
+  encode [label=<
+    <B>Genotype encoding</B>
+  >, fillcolor="#fdfdff", shape=plaintext, fontsize=13];
+
+  gt_numeric [label=<
+    <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4">
+      <TR><TD>0/0, 0|0</TD><TD>→ 0</TD></TR>
+      <TR><TD>0/1, 1/0, 0|1, 1|0, 1/1, 1|1</TD><TD>→ 1</TD></TR>
+      <TR><TD>./., .|.</TD><TD>→ NaN</TD></TR>
+    </TABLE>
+  >, fillcolor="#e6ffe6"];
+
+  build_matrix [label=<
+    <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="5">
+      <TR><TD COLSPAN="4"><B>Final ML matrix (sample-centric)</B></TD></TR>
+      <TR><TD></TD><TD><B>var1</B></TD><TD><B>var2</B></TD><TD><B>var3</B></TD></TR>
+      <TR><TD><B>S1</B></TD><TD>1</TD><TD>0</TD><TD>NaN</TD></TR>
+      <TR><TD><B>S2</B></TD><TD>0</TD><TD>1</TD><TD>1</TD></TR>
+      <TR><TD><B>S3</B></TD><TD>0</TD><TD>1</TD><TD>0</TD></TR>
+    </TABLE>
+  >, fillcolor="#e0ffe0"];
+
+  downstream [label=<
+    <B>Why sample × variant orientation matters</B><BR/><BR/>
+    • Rows = independent observations (samples)<BR/>
+    • Columns = features (genomic variants)<BR/>
+    • Enables proper statistical modeling<BR/>
+    • Compatible with almost all ML frameworks
+  >, fillcolor="#f0f8ff"];
+
+  // ─── Flow ──────────────────────────────────────────────
+
+  vcf_input       -> vcf_example       [style=invis];  // alignment only
+  vcf_input       -> decompose;
+  decompose       -> identity;
+  decompose       -> var_qc;
+  decompose       -> sample_gt;
+
+  {rank=same; identity var_qc sample_gt}
+
+  identity        -> build_matrix       [style=dashed, color="#555555"];
+  var_qc          -> site_filter;
+  sample_gt       -> gt_mask;
+
+  site_filter     -> remove_invariant   [label="optional"];
+  gt_mask         -> gt_numeric;
+
+  gt_numeric      -> build_matrix       [label="per-sample values"];
+  remove_invariant-> build_matrix       [style=dashed, label="variants kept"];
+
+  build_matrix    -> downstream;
+
+  // Help vertical spacing & readability
+  {rank=same; vcf_input vcf_example}
+  {rank=same; decompose}
+  {rank=same; site_filter gt_mask remove_invariant}
+  {rank=same; encode gt_numeric}
+}

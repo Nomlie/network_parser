@@ -1,67 +1,127 @@
-digraph NetworkParserWorkflow {
-    rankdir=TB;
-    node [shape=box, style=filled, fontname="Helvetica", fontsize=12];
-    edge [fontname="Helvetica", fontsize=10];
+digraph VCF_to_ML_Matrix_Vertical_SNPs {
+  rankdir=TB;
+  labelloc="t";
+  fontsize=20;
+  fontname="Helvetica,Arial,sans-serif";
+  label="VCF (variant-centric) → Clean SNP-only ML feature matrix (sample-centric)\n0/1/NaN — biallelic SNPs only";
 
-    // Nodes
-    subgraph cluster_input {
-        label="Input Options";
-        color=lightgrey;
-        style=rounded;
+  node [shape=box, style="rounded,filled", fontname="Helvetica,Arial,sans-serif", fontsize=11, penwidth=1.1];
+  edge [fontname="Helvetica,Arial,sans-serif", fontsize=10, penwidth=1.2, arrowsize=0.9];
 
-        VCF [label="VCF / VCF.gz\n(raw variants)", fillcolor="#FFCCBC"];
-        CSV [label="CSV / TSV\n(binary matrix)", fillcolor="#E1F5FE"];
-        FASTA [label="FASTA\n(alignment)", fillcolor="#E8F5E9"];
-    }
+  // ───────────────────────────────────────────────
+  //               INPUT
+  // ───────────────────────────────────────────────
+  vcf_input [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="5">
+      <TR><TD COLSPAN="2"><B>Input: VCF — variant-centric</B></TD></TR>
+      <TR><TD>Rows</TD><TD>Variants (SNPs + indels + multiallelic)</TD></TR>
+      <TR><TD>Columns</TD><TD>Samples + FORMAT fields</TD></TR>
+      <TR><TD>Key fields</TD><TD>CHROM, POS, REF, ALT, QUAL/FILTER/INFO, GT:DP:GQ:...</TD></TR>
+    </TABLE>>, fillcolor="#e8f0ff", width=3.4];
 
-    DataLoader [label="data_loader.py\n(Input Processing)", fillcolor="#FFF9C4"];
+  vcf_example [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4">
+      <TR><TD COLSPAN="4"><B>VCF orientation (simplified)</B></TD></TR>
+      <TR><TD></TD><TD><B>S1</B></TD><TD><B>S2</B></TD><TD><B>S3</B></TD></TR>
+      <TR><TD><B>rs123</B> (SNP)</TD><TD>0/1</TD><TD>0/0</TD><TD>./.</TD></TR>
+      <TR><TD><B>del-456</B> (indel)</TD><TD>0/1</TD><TD>0/1</TD><TD>0/0</TD></TR>
+      <TR><TD><B>rs789</B> (multi-ALT)</TD><TD>0/2</TD><TD>1/1</TD><TD>./1</TD></TR>
+    </TABLE>>, fillcolor="#f0f4ff", width=3.0];
 
-    FilterVCF [label="bcftools filtering\n(biallelic SNPs, QUAL≥30,\nGQ≥20, DP≥10, <10% missing,\nthinned ≥10bp)", fillcolor="#FFEBEE"];
-    Consensus [label="bcftools consensus\n(Consensus FASTAs)", fillcolor="#E8F5E9"];
-    Matrix [label="Binary SNP Matrix\n(0=ref/absent, 1=alt/present)", fillcolor="#E1F5FE"];
+  // ───────────────────────────────────────────────
+  decompose [label=<<B>Step 1: Decompose + strict variant type filtering</B><BR/>
+    Keep <B>only clean biallelic SNPs</B><BR/>
+    Drop everything else early>, fillcolor="#fdfdff", shape=plaintext, fontsize=13];
 
-    Align [label="Align data & labels\n(remove invariants/duplicates)", fillcolor="#F0F4C3"];
+  snp_filter [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="5">
+      <TR><TD><B>SNP-only filtering (core restriction)</B></TD></TR>
+      <TR><TD ALIGN="LEFT">• ALT must be single allele</TD></TR>
+      <TR><TD ALIGN="LEFT">• REF &amp; ALT must be single nucleotides (A/C/G/T)</TD></TR>
+      <TR><TD ALIGN="LEFT">→ Drop all:</TD></TR>
+      <TR><TD ALIGN="LEFT">  - Insertions / Deletions (indels)</TD></TR>
+      <TR><TD ALIGN="LEFT">  - Multi-allelic sites (ALT with commas)</TD></TR>
+      <TR><TD ALIGN="LEFT">  - MNPs, complex variants, etc.</TD></TR>
+    </TABLE>>, fillcolor="#ffebee", fontcolor="#c62828"];
 
-    Discovery [label="decision_tree_builder.py\n(Feature Discovery)\nChi² + FDR + Decision Tree\nRoot & Branch markers\nEpistatic paths", fillcolor="#FFCCBC"];
+  identity [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="5">
+      <TR><TD><B>Variant identity (SNPs only)</B> → column name</TD></TR>
+      <TR><TD ALIGN="LEFT">CHROM : POS : REF : ALT</TD></TR>
+      <TR><TD ALIGN="LEFT"><FONT POINT-SIZE="10">e.g. chr1:12345:A:G</FONT></TD></TR>
+    </TABLE>>, fillcolor="#e6ffe6"];
 
-    Validation [label="statistical_validator.py\n(Statistical Validation)\nBootstrap (1000)\nPermutation tests (500)", fillcolor="#E3F2FD"];
+  var_qc [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="5">
+      <TR><TD><B>Variant-level QC annotations</B></TD></TR>
+      <TR><TD ALIGN="LEFT">QUAL, FILTER, DP, AC, AF, MQ, F_MISSING, ...</TD></TR>
+      <TR><TD ALIGN="LEFT"><FONT POINT-SIZE="10">→ used for additional site filtering</FONT></TD></TR>
+    </TABLE>>, fillcolor="#fff0e0"];
 
-    Integration [label="network_parser.py\n(Integration)\nRank features\nBuild networks", fillcolor="#F3E5F5"];
+  sample_gt [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="5">
+      <TR><TD><B>Sample-level calls</B></TD></TR>
+      <TR><TD ALIGN="LEFT">GT (+ DP, GQ, AD, PL, ...)</TD></TR>
+      <TR><TD ALIGN="LEFT"><FONT POINT-SIZE="10">→ used for genotype masking</FONT></TD></TR>
+    </TABLE>>, fillcolor="#e0f0ff"];
 
-    Networks [label="Network Outputs\n- sample_feature_network.graphml\n- interaction_graph.graphml\n- ignn_matrices.npz", fillcolor="#FFF3E0"];
+  // ───────────────────────────────────────────────
+  filtering [label=<<B>Step 2: Additional QC filtering &amp; masking</B>>, fillcolor="#fdfdff", shape=plaintext, fontsize=13];
 
-    FinalReport [label="networkparser_results_*.json\nFull discovery + validation report", fillcolor="#E8F5E9"];
+  site_filter [label=<<B>Site-level filtering</B><BR/>
+    Drop unreliable SNP sites<BR/>
+    (low QUAL, failed FILTER, low call rate, ...)>, fillcolor="#ffe8d0"];
 
-    Phylogeny [label="Downstream Phylogeny\n(IQ-TREE, RAxML, etc.)\nusing consensus FASTAs", fillcolor="#E0F7FA"];
+  gt_mask [label=<<B>Genotype-level masking</B><BR/>
+    Low-confidence calls → .<BR/>
+    (GQ &lt; 20, DP &lt; 10, ...)>, fillcolor="#d8e8ff"];
 
-    // Edges
-    VCF -> DataLoader;
-    CSV -> DataLoader;
-    FASTA -> DataLoader;
+  remove_invariant [label=<<B>Drop monomorphic sites</B><BR/>
+    (no ALT allele in cohort after masking)>, fillcolor="#ffe8d0"];
 
-    DataLoader -> FilterVCF [label="if VCF"];
-    DataLoader -> Matrix [label="if CSV/FASTA"];
-    FilterVCF -> Matrix;
-    FilterVCF -> Consensus [label="if --ref-fasta provided"];
-    Consensus -> Phylogeny;
+  // ───────────────────────────────────────────────
+  encode [label=<<B>Step 3: Encode to numeric (0/1/NaN only)</B>>, fillcolor="#fdfdff", shape=plaintext, fontsize=13];
 
-    Matrix -> Align;
-    Align -> Discovery;
+  gt_numeric [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4">
+      <TR><TD>0/0, 0|0</TD><TD>→ 0 (homozygous reference)</TD></TR>
+      <TR><TD>0/1, 1/0, 0|1, 1|0, 1/1, 1|1</TD><TD>→ 1 (carrier / homozygous ALT)</TD></TR>
+      <TR><TD>./., .|.</TD><TD>→ NaN (missing / masked)</TD></TR>
+    </TABLE>>, fillcolor="#e6ffe6"];
 
-    Discovery -> Validation;
-    Validation -> Integration;
+  final_matrix [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="5">
+      <TR><TD COLSPAN="4"><B>Final clean SNP matrix</B> (samples × biallelic SNPs)</TD></TR>
+      <TR><TD></TD><TD><B>chr1:123:A:G</B></TD><TD><B>chr2:456:C:T</B></TD><TD><B>chr3:789:G:A</B></TD></TR>
+      <TR><TD><B>S1</B></TD><TD>1</TD><TD>0</TD><TD>NaN</TD></TR>
+      <TR><TD><B>S2</B></TD><TD>0</TD><TD>1</TD><TD>1</TD></TR>
+      <TR><TD><B>S3</B></TD><TD>0</TD><TD>0</TD><TD>1</TD></TR>
+    </TABLE>>, fillcolor="#e0ffe0"];
 
-    Integration -> Networks;
-    Integration -> FinalReport;
+  downstream [label=<<B>Ready for ML / statistics</B><BR/><BR/>
+    • Rows = samples (observations)<BR/>
+    • Columns = biallelic SNPs (features)<BR/>
+    • Values = 0 / 1 / NaN only<BR/>
+    • No indels, no multi-allelic sites>, fillcolor="#f0f8ff"];
 
-    // Styling
-    {rank=same; VCF CSV FASTA}
-    {rank=same; Matrix Consensus}
-    {rank=same; Networks FinalReport Phylogeny}
+  // ─── Flow ──────────────────────────────────────────────
+  vcf_input       -> vcf_example       [style=invis];  // alignment helper
 
-    // Title
-    labelloc="t";
-    label="NetworkParser Workflow";
-    fontsize=16;
-    fontname="Helvetica Bold";
+  vcf_input       -> decompose;
+  decompose       -> snp_filter;
+  snp_filter      -> identity;
+  snp_filter      -> var_qc;
+  snp_filter      -> sample_gt;
+
+  {rank=same; identity var_qc sample_gt}
+
+  identity        -> final_matrix       [style=dashed, color="#555555"];
+  var_qc          -> site_filter;
+  sample_gt       -> gt_mask;
+
+  site_filter     -> remove_invariant   [label="optional"];
+  gt_mask         -> gt_numeric;
+
+  gt_numeric      -> final_matrix       [label="per-sample values"];
+  remove_invariant-> final_matrix       [style=dashed, label="variants kept"];
+
+  final_matrix    -> downstream;
+
+  // Grouping for better vertical layout
+  {rank=same; vcf_input vcf_example}
+  {rank=same; decompose snp_filter}
+  {rank=same; filtering site_filter gt_mask remove_invariant}
+  {rank=same; encode gt_numeric}
 }

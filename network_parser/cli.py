@@ -16,10 +16,11 @@ logging.basicConfig(
         logging.FileHandler('pipeline.log')
     ]
 )
+
 logger = logging.getLogger(__name__)
 
 try:
-    from network_parser.config import NetworkParserConfig
+    from config import NetworkParserConfig
     from network_parser import run_networkparser_analysis
 except ImportError as e:
     logger.error(f"Import error: {e}")
@@ -27,98 +28,74 @@ except ImportError as e:
 
 
 def load_config(config_path: Optional[str], default_config: NetworkParserConfig) -> NetworkParserConfig:
-    """Load configuration from file or use default."""
-    if config_path:
-        logger.info(f"Loading config from: {config_path}")
-        try:
-            with open(config_path, 'r') as f:
-                config_data = json.load(f)
-            for key, value in config_data.items():
-                if hasattr(default_config, key):
-                    setattr(default_config, key, value)
-                else:
-                    logger.warning(f"Config key '{key}' not found in NetworkParserConfig")
-        except Exception as e:
-            logger.error(f"Failed to load config file: {e}")
-            sys.exit(1)
+    if not config_path:
+        return default_config
+
+    path = Path(config_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"Config file not found: {path}")
+
+    with open(path, "r") as fh:
+        data = json.load(fh)
+
+    # Shallow override on NetworkParserConfig fields (legacy behavior)
+    for k, v in data.items():
+        if hasattr(default_config, k):
+            setattr(default_config, k, v)
+
     return default_config
 
 
-def setup_parser() -> argparse.ArgumentParser:
-    """Setup CLI parser with groups."""
+def validate_input_path(path_str: str) -> Path:
+    p = Path(path_str)
+    if not p.exists():
+        raise FileNotFoundError(f"Genomic input not found: {p}")
+    return p
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="network_parser",
-        description="NetworkParser: Interpretable genomic feature discovery pipeline.\n"
-                    "Supports CSV/TSV/VCF/FASTA files or a directory of VCF files.",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-        epilog="Examples:\n"
-               "  python -m network_parser.cli --genomic data/matrix.csv --label Group\n"
-               "  python -m network_parser.cli --genomic vcfs_folder/ --meta metadata.csv --label Lineage"
+        description="NetworkParser: VCF/Matrix → statistically validated features + interpretable networks"
     )
 
     input_group = parser.add_argument_group('Input Files')
     input_group.add_argument("--genomic", required=True, type=str,
                              help="Genomic input: single file (CSV/TSV/VCF/FASTA) "
                                   "or DIRECTORY containing multiple VCF(.gz) files")
+    input_group.add_argument("--regions", type=str, default=None,
+                             help="Optional regions/targets restriction for VCF processing. "
+                                  "Examples: 'chrom:start-end' (e.g. 'NC_000962.3:1-1000000') "
+                                  "or a BED file path supported by bcftools.")
     input_group.add_argument("--meta", type=str, default=None,
                              help="Metadata CSV/TSV with sample IDs and labels")
     input_group.add_argument("--label", required=True, type=str,
-                             help="Column name containing the phenotype/label")
-    input_group.add_argument("--known-markers", type=str, default=None,
-                             help="File with known resistance markers (optional)")
-    input_group.add_argument("--ref-fasta", type=str, default=None,
-                             help="Reference genome FASTA file (required for consensus FASTA from VCF)")
+                             help="Metadata label column to use for phenotype (e.g. Lineage, AMR)")
+    input_group.add_argument("--known_markers", type=str, default=None,
+                             help="Optional known markers file path")
+    input_group.add_argument("--ref_fasta", type=str, default=None,
+                             help="Optional reference FASTA (enables bcftools consensus + reference-aware normalization)")
 
-    opt_group = parser.add_argument_group('Options')
-    opt_group.add_argument("--output-dir", type=str, default="results/",
-                           help="Output directory")
-    opt_group.add_argument("--config", type=str, default=None,
-                           help="JSON/YAML config file")
-    opt_group.add_argument("--validate-statistics", action="store_true", default=True,
-                           help="Run statistical validation")
-    opt_group.add_argument("--validate-interactions", action="store_true", default=True,
-                           help="Validate epistatic interactions")
-    opt_group.add_argument("--export-format", choices=["json", "pickle"], default="json",
-                           help="Export format")
-    opt_group.add_argument("--version", action="version", version="NetworkParser 1.0.0")
+    output_group = parser.add_argument_group('Output')
+    output_group.add_argument("--output_dir", required=True, type=str,
+                              help="Output directory for results")
+
+    cfg_group = parser.add_argument_group('Config')
+    cfg_group.add_argument("--config", type=str, default=None,
+                           help="Optional JSON config file to override defaults")
+
+    flags_group = parser.add_argument_group('Validation Flags')
+    flags_group.add_argument("--validate_statistics", action="store_true",
+                             help="Run association testing + multiple testing correction (pre-tree)")
+    flags_group.add_argument("--validate_interactions", action="store_true",
+                             help="Run post-tree interaction permutation validation")
 
     return parser
 
 
-def validate_input_path(path_str: str) -> Path:
-    """Validate that --genomic is either a file or a directory."""
-    path = Path(path_str)
-    if not path.exists():
-        logger.error(f"Input path does not exist: {path}")
-        sys.exit(1)
-
-    if path.is_dir():
-        vcf_files = list(path.glob("*.vcf")) + list(path.glob("*.vcf.gz"))
-        if not vcf_files:
-            logger.error(f"No VCF files (.vcf or .vcf.gz) found in directory: {path}")
-            sys.exit(1)
-        logger.info(f"Detected directory input with {len(vcf_files)} VCF files")
-    elif path.is_file():
-        supported = {'.csv', '.tsv', '.vcf', '.vcf.gz', '.fasta', '.fa'}
-        if path.suffix.lower() not in supported:
-            logger.error(f"Unsupported file extension: {path.suffix}. "
-                         f"Supported: {', '.join(supported)}")
-            sys.exit(1)
-    else:
-        logger.error(f"Input path is neither a file nor a directory: {path}")
-        sys.exit(1)
-
-    return path
-
-
 def main():
-    """CLI entrypoint."""
-    parser = setup_parser()
+    parser = build_arg_parser()
     args = parser.parse_args()
 
-    # ────────────────────────────────────────────────
-    # Validate inputs
-    # ────────────────────────────────────────────────
     genomic_path = validate_input_path(args.genomic)
 
     meta_path = None
@@ -156,6 +133,8 @@ def main():
     logger.info(f"Output directory: {Path(args.output_dir).resolve()}")
     if ref_fasta_path:
         logger.info(f"Reference FASTA: {ref_fasta_path.resolve()}")
+    if args.regions:
+        logger.info(f"Regions/targets: {args.regions}")
 
     try:
         start_time = time.time()
@@ -168,7 +147,8 @@ def main():
             config=config,
             validate_statistics=args.validate_statistics,
             validate_interactions=args.validate_interactions,
-            ref_fasta=str(ref_fasta_path) if ref_fasta_path else None   # pass ref_fasta if provided
+            ref_fasta=str(ref_fasta_path) if ref_fasta_path else None,  # pass ref_fasta if provided
+            regions=args.regions
         )
         elapsed_time = time.time() - start_time
         logger.info(f"NetworkParser pipeline completed successfully in {elapsed_time:.2f} seconds")
@@ -179,4 +159,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
