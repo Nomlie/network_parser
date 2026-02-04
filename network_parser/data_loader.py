@@ -5,7 +5,7 @@ import subprocess
 import os
 import tempfile
 from pathlib import Path
-from typing import Optional, List, Dict
+from typing import Optional, List
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .config import VCFProcessingConfig
@@ -22,34 +22,14 @@ class DataLoader:
     """
     NetworkParser DataLoader
 
-    This module is responsible for producing a sample × variant
-    0/1 matrix from VCFs, without doing any statistical filtering.
+    Produces a sample × variant 0/1 matrix from VCFs (or accepts pre-built matrices).
 
-    -------------------------------------------------------------------------
-    KEY NOTES
-    -------------------------------------------------------------------------
-
-    1) WHAT "0/1 MATRIX" MEANS HERE
-       We encode *ALT-allele presence* at each biallelic SNP site:
-         - 0/0            -> 0
-         - 0/1, 1/0       -> 1
-         - 1/1            -> 1
-         - missing (./.)  -> NaN (later filled to 0 if required downstream)
-
-    2) VCF FILTERING IS PRE-TREE AND PRE-STATS
-       The output of this stage is a CLEANED matrix that later stages can use
-       for association tests, decision tree building, and epistasis mining.
-
-    3) MULTI-ALLELIC SITES
-       We split multi-allelic sites into biallelic rows using:
-           bcftools norm -m- -any
-       This avoids discarding biologically meaningful polymorphisms.
-
-    4) OPTIONAL REGION RESTRICTION
-       If `regions` is provided (e.g. "NC_000962.3:1-1000000" or a BED file),
-       we pass it into bcftools view to restrict processing.
-
-    -------------------------------------------------------------------------
+    Key design choices (current):
+    - BIALLELIC SNP-ONLY VCF path: multi-allelic sites are excluded (filtered out early).
+    - Filtering is configuration-driven (VCFProcessingConfig).
+    - Optional region restriction via bcftools --regions/--targets.
+    - Variant annotations (ID, INFO) preserved via variant_annotations.csv.
+    - Streaming parse with optional tqdm progress (large VCFs).
     """
 
     def __init__(
@@ -63,9 +43,6 @@ class DataLoader:
         self.temp_dir = Path(temp_dir or tempfile.mkdtemp(prefix="networkparser_"))
         self.temp_dir.mkdir(exist_ok=True)
 
-        # NOTE:
-        # - n_jobs is used ONLY for safe parallelism around independent subprocess calls.
-        # - Determinism: ordering of outputs does not change; parallelism only affects runtime.
         cpu = os.cpu_count() or 1
         self.n_jobs = int(n_jobs) if (n_jobs is not None and int(n_jobs) > 0) else max(1, cpu - 1)
 
@@ -89,8 +66,8 @@ class DataLoader:
         file_path: str,
         output_dir: Optional[str] = None,
         ref_fasta: Optional[str] = None,
-        label_column: Optional[str] = None,
-        regions: Optional[str] = None,
+        label_column: Optional[str] = None,  # kept for API compatibility
+        regions: Optional[str] = None,        # e.g. "chrom:start-end" or BED file
     ) -> pd.DataFrame:
         path = Path(file_path)
         logger.info(f"Loading genomic data from: {path}")
@@ -101,7 +78,12 @@ class DataLoader:
         suffix = "".join(path.suffixes).lower()
         if suffix.endswith(".vcf") or suffix.endswith(".vcf.gz"):
             if self.use_bcftools:
-                return self._vcf_bcftools_pipeline(path, output_dir or str(self.temp_dir), ref_fasta, regions=regions)
+                return self._vcf_bcftools_pipeline(
+                    path,
+                    output_dir or str(self.temp_dir),
+                    ref_fasta,
+                    regions=regions,
+                )
             return self._vcf_python_fallback(path, output_dir or str(self.temp_dir), ref_fasta, regions=regions)
 
         if suffix.endswith(".csv") or suffix.endswith(".tsv"):
@@ -186,7 +168,7 @@ class DataLoader:
         return self._vcf_python_fallback(merged_vcf, str(output_dir_path), ref_fasta, regions=regions)
 
     # -------------------------------------------------------------------------
-    # BCFtools pipeline
+    # BCFtools pipeline (biallelic SNPs only)
     # -------------------------------------------------------------------------
     def _vcf_bcftools_pipeline(
         self,
@@ -203,8 +185,7 @@ class DataLoader:
 
         files = {
             "norm": prefix.with_name(prefix.name + ".01.norm.vcf.gz"),
-            "snps_pre": prefix.with_name(prefix.name + ".02a.snps_only.vcf.gz"),
-            "snps": prefix.with_name(prefix.name + ".02b.snps_split.vcf.gz"),
+            "snps": prefix.with_name(prefix.name + ".02.snps_biallelic.vcf.gz"),
             "var_qc": prefix.with_name(prefix.name + ".03.variant_qc.vcf.gz"),
             "gt_qc": prefix.with_name(prefix.name + ".04.genotype_qc.vcf.gz"),
             "variable": prefix.with_name(prefix.name + ".05.variable.vcf.gz"),
@@ -257,21 +238,27 @@ class DataLoader:
             logger.info("[SKIP] Normalization (no valid reference FASTA)")
             files["norm"] = vcf_path
 
-        # 2) SNP selection + multi-allelic → biallelic splitting
+        # 2) SNP selection + enforce biallelic representation (EARLY)
+        #    Multi-allelic sites are excluded for now.
         if cfg.keep_only_snps:
-            cmd_view = ["bcftools", "view", "-v", "snps", "-Oz", "-o", str(files["snps_pre"]), str(files["norm"])]
+            cmd_view = [
+                "bcftools", "view",
+                "-v", "snps",
+                "-m2", "-M2",
+                "-Oz",
+                "-o", str(files["snps"]),
+                str(files["norm"]),
+            ]
             _append_regions(cmd_view)
-            run_step(cmd_view, files["snps_pre"], "Select SNPs")
-            split_input = files["snps_pre"]
+            run_step(
+                cmd_view,
+                files["snps"],
+                "Select biallelic SNPs only (exclude multi-allelic sites)",
+            )
         else:
-            split_input = files["norm"]
-
-        # Split multi-allelic sites into biallelic rows (preferred for microbial genomics)
-        run_step(
-            ["bcftools", "norm", "-m-", "-any", "-Oz", "-o", str(files["snps"]), str(split_input)],
-            files["snps"],
-            "Split multi-allelic sites & normalize representation",
-        )
+            # If SNP-only filtering is disabled, we still recommend biallelic SNP restriction upstream.
+            # Keeping behavior unchanged: downstream steps will proceed on the normalized input.
+            files["snps"] = files["norm"]
 
         # 3) Variant-level QC (QUAL and INFO/DP if present)
         header = subprocess.run(["bcftools", "view", "-h", str(files["snps"])], capture_output=True, text=True).stdout
@@ -437,14 +424,12 @@ class DataLoader:
 
             sep = "/" if "/" in gt else ("|" if "|" in gt else None)
             if sep is None:
-                # Unknown/unexpected representation; preserve as missing
                 return float("nan")
 
             alleles = gt.split(sep)
             if any(a == "." for a in alleles):
                 return float("nan")
 
-            # Any ALT allele (1,2,...) → 1
             return 1.0 if any(a != "0" for a in alleles) else 0.0
 
         for line in line_iter:
