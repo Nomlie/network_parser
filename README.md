@@ -175,13 +175,13 @@ python -m network_parser.cli \
 
 VCF:
 
-python -m network_parser.cli \
+  ```bashpython -m network_parser.cli \
   --genomic data/vcfs/ \
   --regions "NC_000962.3:1-1000000" \
   --ref-fasta ref/MTB_H37Rv.fasta \
   --meta metadata.csv \
   --label AMR \
-  --output-dir results_amr/
+  --output-dir results_amr/```
 
 ## Scripts
 
