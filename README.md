@@ -165,13 +165,13 @@ network_graph.graphml
 
 CSV:
 
-python -m network_parser.cli \
+  ```bashpython -m network_parser.cli \
   --genomic input/example.csv \
   --meta input/metadata.csv \
   --label Group \
   --output-dir results/ \
   --validate-statistics \
-  --validate-interactions
+  --validate-interactions```
 
 VCF:
 
@@ -185,13 +185,13 @@ VCF:
 
 ## Scripts
 
-network_parser.py  
+  ```bashnetwork_parser.py  
 cli.py  
 data_loader.py  
 decision_tree_builder.py  
 statistical_validation.py  
 extract_subset.py  
-utils.py  
+utils.py```
 
 ## Troubleshooting
 
