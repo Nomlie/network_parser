@@ -32,78 +32,104 @@ Particularly valuable for:
 - Lack of interpretability in black-box machine learning models  
 - Absence of integrated pipelines that combine discovery, rigorous validation, and network interpretation  
 
-## Table of Contents
+Table of Contents
 
-- Installation  
-- Quick Start  
-- Usage  
-- Pipeline Stages  
-- Configuration  
-- Input Formats  
-- Output Files  
-- Examples  
-- Scripts Overview  
-- Troubleshooting  
-- Contributing  
-- License  
-- Contact  
+Quick Start
 
-## Installation
+Usage
 
-### Prerequisites
+Pipeline Stages
 
-- Python 3.8+
+Configuration
 
-Core dependencies:
+Input Formats
 
-pandas numpy scikit-learn scipy statsmodels networkx joblib tqdm
+Output Files
 
-VCF processing (recommended):
+Examples
 
+Scripts Overview
+
+Troubleshooting
+
+Contributing
+
+License
+
+Contact
+
+Installation
+Requirements
+
+Python 3.8+
+
+Core Python dependencies
+
+pandas
+
+numpy
+
+scikit-learn
+
+scipy
+
+statsmodels
+
+networkx
+
+joblib
+
+tqdm
+
+Optional dependencies for VCF processing
 conda install -c bioconda bcftools tabix
 
-Installation:
+## Installation
+git clone https://github.com/Nomlie/network_parser.git
+cd network_parser
+pip install -e .
 
-git clone https://github.com/Nomlie/network_parser.git  
-cd network_parser  
-pip install -e .  
-
-Verify:
-
+**Verification**
 python -m network_parser.cli --help
 
 ## Quick Start
-
-python -m network_parser.cli \
+Command-line execution
+```bash python -m network_parser.cli \
   --genomic input/example.csv \
   --label Group \
   --output-dir results/
+```
 
-With logging:
-
-python -m network_parser.cli [args] 2>&1 | tee pipeline_run.log
+**Execution with logging**
+```bash python -m network_parser.cli [args] 2>&1 | tee pipeline_run.log ```
 
 ## Usage
+Required arguments
 
-Required:
+--genomic – Genomic input matrix or VCF
 
---genomic  
---label  
---output-dir  
+--label – Phenotype or group label column
 
-Optional:
+--output-dir – Output directory
 
---meta  
---regions  
---ref-fasta  
---config  
---validate-statistics  
---validate-interactions  
+Optional arguments
 
-## Programmatic
+--meta
 
-from network_parser.network_parser import run_networkparser_analysis  
-from network_parser.config import NetworkParserConfig  
+--regions
+
+--ref-fasta
+
+--config
+
+--validate-statistics
+
+--validate-interactions
+
+**Programmatic Interface**
+```bash 
+from network_parser.network_parser import run_networkparser_analysis
+from network_parser.config import NetworkParserConfig
 
 config = NetworkParserConfig()
 
@@ -116,21 +142,30 @@ results = run_networkparser_analysis(
     validate_statistics=True,
     validate_interactions=True
 )
+```
 
 ## Pipeline Stages
 
-Input Processing – data_loader.py  
-Pattern Discovery – decision_tree_builder.py  
-Statistical Validation – statistical_validation.py  
-Graph Building – network_parser.py  
-Output Generation  
+Input Processing (data_loader.py)
+Loading, normalization, filtering, and alignment of genomic features and metadata.
 
-## Configuration
+Feature Discovery (decision_tree_builder.py)
+Identification of discriminative genomic features and hierarchical patterns using constrained decision trees.
 
-Override defaults via JSON/YAML or CLI.
+Statistical Validation (statistical_validation.py)
+Robust inference via bootstrap resampling and permutation-based testing with multiple-testing correction.
 
-Example:
+Network Integration (network_parser.py)
+Construction of feature–feature and sample–feature interaction networks.
 
+Output Generation
+Export of interpretable artefacts and network representations.
+
+Configuration
+
+Pipeline behavior is controlled via a centralized configuration object, configurable through CLI arguments or JSON/YAML files.
+
+**Example configuration**
 analysis:
   bootstrap_iterations: 500
   fdr_threshold: 0.01
@@ -141,25 +176,36 @@ processing:
 validation:
   min_bootstrap_support: 0.7
 
-## Input Formats
+Input Formats
+Genomic inputs
 
-Genomic:
-- CSV/TSV binary matrix  
-- VCF (.gz)  
-- FASTA (limited)
+CSV / TSV binary feature matrices
 
-Metadata:
-CSV/TSV with sample IDs + phenotype
+VCF (.vcf, .vcf.gz)
+
+FASTA (limited support)
+
+Metadata
+
+CSV / TSV files containing sample identifiers and phenotype or group labels
 
 ## Output Files
 
-deduplicated_genomic_matrix.csv  
-aligned_genomic_matrix.csv  
-decision_tree_rules.txt  
-feature_confidence.json  
-bootstrap_results.json  
-interaction_permutation_results.json  
-network_graph.graphml  
+Representative outputs include:
+
+deduplicated_genomic_matrix.csv
+
+aligned_genomic_matrix.csv
+
+decision_tree_rules.txt
+
+feature_confidence.json
+
+bootstrap_results.json
+
+interaction_permutation_results.json
+
+network_graph.graphml
 
 ## Examples
 
@@ -217,5 +263,5 @@ MIT
 ## Contact
 
 Nomlindelo Mfuphi  
-nomlindelow@gmail.com  
 https://github.com/Nomlie/network_parser
+
