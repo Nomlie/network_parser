@@ -58,14 +58,15 @@ Particularly valuable for:
 - Core dependencies:
   ```bash
   pandas numpy scikit-learn scipy statsmodels networkx joblib tqdm
+  ```
 
-Optional / visualization:Bashmatplotlib biopython
-VCF processing (strongly recommended):Bashconda install -c bioconda bcftools tabix
+VCF processing (strongly recommended):  ```bash conda install -c bioconda bcftools tabix```
 
 Installation Steps
-Bash# Clone repository
+  ```bash# Clone repository
 git clone https://github.com/Nomlie/network_parser.git
 cd network_parser
+```
 
 # Install as editable package (recommended)
 pip install -e .
@@ -74,15 +75,16 @@ pip install -e .
 python -m network_parser.cli --help
 Quick Start
 Basic run on example CSV matrix:
-Bashpython -m network_parser.cli \
+  ```bashpython -m network_parser.cli \
   --genomic input/example.csv \
   --label Group \
   --output-dir results/
+```
 With full logging:
-Bashpython -m network_parser.cli [your arguments] 2>&1 | tee pipeline_run.log
+  ```bash python -m network_parser.cli [your arguments] 2>&1 | tee pipeline_run.log```
 Usage
 CLI Usage
-Bashpython -m network_parser.cli [options]
+  ```bash python -m network_parser.cli [options]```
 Required arguments
 text--genomic       Path to input (CSV/TSV matrix, single VCF, or folder of VCFs)
 --label         Phenotype column name in metadata (e.g. Lineage, AMR, Group)
@@ -95,10 +97,12 @@ text--meta                  Metadata CSV/TSV file
 --validate-statistics   Run association testing + FDR correction
 --validate-interactions Run permutation testing for epistasis
 See full options:
-Bashpython -m network_parser.cli --help
+  ```bash python -m network_parser.cli --help```
 Programmatic Usage
-Pythonfrom network_parser.network_parser import run_networkparser_analysis
-from network_parser.config import NetworkParserConfig
+
+
+```bash from network_parser.network_parser import run_networkparser_analysis
+from network_parser.config import NetworkParserConfig```
 
 config = NetworkParserConfig()
 # Customize e.g.:
@@ -173,27 +177,32 @@ networkparser_results_*.json (full structured results)
 
 Examples
 Basic CSV run
-Bashpython -m network_parser.cli \
+  ```bashpython -m network_parser.cli \
   --genomic input/example.csv \
   --meta input/metadata.csv \
   --label Group \
   --output-dir results/ \
   --validate-statistics \
-  --validate-interactions
+  --validate-interactions ```
 VCF folder + region filter
-Bashpython -m network_parser.cli \
+  ```bash
+  python -m network_parser.cli \
   --genomic data/vcfs/ \
   --regions "NC_000962.3:1-1000000" \
   --ref-fasta ref/MTB_H37Rv.fasta \
   --meta metadata.csv \
   --label AMR \
   --output-dir results_amr/
+
+```
 Create 100-sample test subset
-Bashpython scripts/extract_subset.py \
+  ```bash python scripts/extract_subset.py \
   --vcf-dir path/to/vcfs \
   --meta-file metadata.csv \
   --output-dir subset_100_vcfs \
   --n-samples 100
+```
+
 Scripts Overview
 
 network_parser.py     – main pipeline orchestrator
