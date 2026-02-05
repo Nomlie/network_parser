@@ -165,33 +165,36 @@ network_graph.graphml
 
 CSV:
 
-  ```bashpython -m network_parser.cli \
+  ```bash python -m network_parser.cli \
   --genomic input/example.csv \
   --meta input/metadata.csv \
   --label Group \
   --output-dir results/ \
   --validate-statistics \
-  --validate-interactions```
+  --validate-interactions 
+```
 
 VCF:
 
-  ```bashpython -m network_parser.cli \
+  ```bash python -m network_parser.cli \
   --genomic data/vcfs/ \
   --regions "NC_000962.3:1-1000000" \
   --ref-fasta ref/MTB_H37Rv.fasta \
   --meta metadata.csv \
   --label AMR \
-  --output-dir results_amr/```
+  --output-dir results_amr/ 
+```
 
 ## Scripts
 
-  ```bashnetwork_parser.py  
+  ```bash network_parser.py  
 cli.py  
 data_loader.py  
 decision_tree_builder.py  
 statistical_validation.py  
 extract_subset.py  
-utils.py```
+utils.py
+```
 
 ## Troubleshooting
 
