@@ -1,127 +1,164 @@
-digraph VCF_to_ML_Matrix_Vertical_SNPs {
+digraph NetworkParserWorkflow {
   rankdir=TB;
+  splines=ortho;
+  nodesep=0.55;
+  ranksep=0.9;
+  compound=true;
+
   labelloc="t";
-  fontsize=20;
-  fontname="Helvetica,Arial,sans-serif";
-  label="VCF (variant-centric) → Clean SNP-only ML feature matrix (sample-centric)\n0/1/NaN — biallelic SNPs only";
+  fontsize=26;
+  fontname="Arial,Helvetica,sans-serif";
+  label="NetworkParser Workflow\nRaw data → statistically validated markers & interaction networks";
 
-  node [shape=box, style="rounded,filled", fontname="Helvetica,Arial,sans-serif", fontsize=11, penwidth=1.1];
-  edge [fontname="Helvetica,Arial,sans-serif", fontsize=10, penwidth=1.2, arrowsize=0.9];
-
-  // ───────────────────────────────────────────────
-  //               INPUT
-  // ───────────────────────────────────────────────
-  vcf_input [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="5">
-      <TR><TD COLSPAN="2"><B>Input: VCF — variant-centric</B></TD></TR>
-      <TR><TD>Rows</TD><TD>Variants (SNPs + indels + multiallelic)</TD></TR>
-      <TR><TD>Columns</TD><TD>Samples + FORMAT fields</TD></TR>
-      <TR><TD>Key fields</TD><TD>CHROM, POS, REF, ALT, QUAL/FILTER/INFO, GT:DP:GQ:...</TD></TR>
-    </TABLE>>, fillcolor="#e8f0ff", width=3.4];
-
-  vcf_example [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4">
-      <TR><TD COLSPAN="4"><B>VCF orientation (simplified)</B></TD></TR>
-      <TR><TD></TD><TD><B>S1</B></TD><TD><B>S2</B></TD><TD><B>S3</B></TD></TR>
-      <TR><TD><B>rs123</B> (SNP)</TD><TD>0/1</TD><TD>0/0</TD><TD>./.</TD></TR>
-      <TR><TD><B>del-456</B> (indel)</TD><TD>0/1</TD><TD>0/1</TD><TD>0/0</TD></TR>
-      <TR><TD><B>rs789</B> (multi-ALT)</TD><TD>0/2</TD><TD>1/1</TD><TD>./1</TD></TR>
-    </TABLE>>, fillcolor="#f0f4ff", width=3.0];
+  node [shape=box, style="rounded,filled", fontname="Arial,Helvetica,sans-serif", fontsize=11, penwidth=1.2];
+  edge [fontname="Arial,Helvetica,sans-serif", fontsize=10, penwidth=1.4, arrowsize=0.95, color="#555"];
 
   // ───────────────────────────────────────────────
-  decompose [label=<<B>Step 1: Decompose + strict variant type filtering</B><BR/>
-    Keep <B>only clean biallelic SNPs</B><BR/>
-    Drop everything else early>, fillcolor="#fdfdff", shape=plaintext, fontsize=13];
+  // INPUTS
+  // ───────────────────────────────────────────────
+  subgraph cluster_inputs {
+    label="Inputs";
+    labelloc="t";
+    fontsize=14;
+    style="rounded";
+    color="lightgray";
+    penwidth=1.2;
 
-  snp_filter [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="5">
-      <TR><TD><B>SNP-only filtering (core restriction)</B></TD></TR>
-      <TR><TD ALIGN="LEFT">• ALT must be single allele</TD></TR>
-      <TR><TD ALIGN="LEFT">• REF &amp; ALT must be single nucleotides (A/C/G/T)</TD></TR>
-      <TR><TD ALIGN="LEFT">→ Drop all:</TD></TR>
-      <TR><TD ALIGN="LEFT">  - Insertions / Deletions (indels)</TD></TR>
-      <TR><TD ALIGN="LEFT">  - Multi-allelic sites (ALT with commas)</TD></TR>
-      <TR><TD ALIGN="LEFT">  - MNPs, complex variants, etc.</TD></TR>
-    </TABLE>>, fillcolor="#ffebee", fontcolor="#c62828"];
+    VCF   [label=<<B>VCF / VCF.gz</B><BR/><FONT POINT-SIZE="10">raw variants</FONT>>, fillcolor="#e3f2fd"];
+    CSV   [label=<<B>CSV / TSV</B><BR/><FONT POINT-SIZE="10">feature matrix</FONT>>, fillcolor="#e3f2fd"];
+    FASTA [label=<<B>FASTA</B><BR/><FONT POINT-SIZE="10">reference / MSA (optional)</FONT>>, fillcolor="#e3f2fd"];
 
-  identity [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="5">
-      <TR><TD><B>Variant identity (SNPs only)</B> → column name</TD></TR>
-      <TR><TD ALIGN="LEFT">CHROM : POS : REF : ALT</TD></TR>
-      <TR><TD ALIGN="LEFT"><FONT POINT-SIZE="10">e.g. chr1:12345:A:G</FONT></TD></TR>
-    </TABLE>>, fillcolor="#e6ffe6"];
-
-  var_qc [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="5">
-      <TR><TD><B>Variant-level QC annotations</B></TD></TR>
-      <TR><TD ALIGN="LEFT">QUAL, FILTER, DP, AC, AF, MQ, F_MISSING, ...</TD></TR>
-      <TR><TD ALIGN="LEFT"><FONT POINT-SIZE="10">→ used for additional site filtering</FONT></TD></TR>
-    </TABLE>>, fillcolor="#fff0e0"];
-
-  sample_gt [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="5">
-      <TR><TD><B>Sample-level calls</B></TD></TR>
-      <TR><TD ALIGN="LEFT">GT (+ DP, GQ, AD, PL, ...)</TD></TR>
-      <TR><TD ALIGN="LEFT"><FONT POINT-SIZE="10">→ used for genotype masking</FONT></TD></TR>
-    </TABLE>>, fillcolor="#e0f0ff"];
+    {rank=same; VCF; CSV; FASTA;}
+  }
 
   // ───────────────────────────────────────────────
-  filtering [label=<<B>Step 2: Additional QC filtering &amp; masking</B>>, fillcolor="#fdfdff", shape=plaintext, fontsize=13];
+  // STAGE 1: PREPROCESSING
+  // ───────────────────────────────────────────────
+  subgraph cluster_stage1 {
+    label="1) Input & Preprocessing";
+    labelloc="t";
+    fontsize=14;
+    style="rounded";
+    color="#cfd8dc";
+    penwidth=1.2;
 
-  site_filter [label=<<B>Site-level filtering</B><BR/>
-    Drop unreliable SNP sites<BR/>
-    (low QUAL, failed FILTER, low call rate, ...)>, fillcolor="#ffe8d0"];
+    Loader [label=<<B>data_loader.py</B><BR/><FONT POINT-SIZE="10" ALIGN="LEFT">
+• Load inputs / merge<BR ALIGN="LEFT"/>
+• bcftools normalize / QC + index<BR ALIGN="LEFT"/>
+• <B>Strict biallelic SNP filter</B><BR ALIGN="LEFT"/>
+• Encode 0/1 (NaN → 0 downstream)<BR ALIGN="LEFT"/>
+• Optional: consensus FASTA via bcftools consensus
+</FONT>>, fillcolor="#fff3e0"];
 
-  gt_mask [label=<<B>Genotype-level masking</B><BR/>
-    Low-confidence calls → .<BR/>
-    (GQ &lt; 20, DP &lt; 10, ...)>, fillcolor="#d8e8ff"];
+    BcfFilters [label=<<B>bcftools filtering</B><BR/><FONT POINT-SIZE="10">quality / missingness / biallelic</FONT>>, fillcolor="#ffebee"];
 
-  remove_invariant [label=<<B>Drop monomorphic sites</B><BR/>
-    (no ALT allele in cohort after masking)>, fillcolor="#ffe8d0"];
+    Matrix [label=<<B>Variant feature matrix</B><BR/><FONT POINT-SIZE="10">samples × variants (binary)</FONT>>, fillcolor="#e1f5fe"];
+
+    Consensus [label=<<B>Consensus FASTA</B><BR/><FONT POINT-SIZE="10">optional, reference-aware</FONT>>, fillcolor="#e8f5e9", style="rounded,dashed"];
+  }
 
   // ───────────────────────────────────────────────
-  encode [label=<<B>Step 3: Encode to numeric (0/1/NaN only)</B>>, fillcolor="#fdfdff", shape=plaintext, fontsize=13];
+  // STAGE 2: ALIGNMENT & CLEANING
+  // ───────────────────────────────────────────────
+  subgraph cluster_stage2 {
+    label="2) Alignment & Cleaning";
+    labelloc="t";
+    fontsize=14;
+    style="rounded";
+    color="#cfd8dc";
+    penwidth=1.2;
 
-  gt_numeric [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4">
-      <TR><TD>0/0, 0|0</TD><TD>→ 0 (homozygous reference)</TD></TR>
-      <TR><TD>0/1, 1/0, 0|1, 1|0, 1/1, 1|1</TD><TD>→ 1 (carrier / homozygous ALT)</TD></TR>
-      <TR><TD>./., .|.</TD><TD>→ NaN (missing / masked)</TD></TR>
-    </TABLE>>, fillcolor="#e6ffe6"];
+    Align [label=<<B>align & clean</B><BR/><FONT POINT-SIZE="10" ALIGN="LEFT">
+• Match samples ↔ labels<BR ALIGN="LEFT"/>
+• Drop invariant sites<BR ALIGN="LEFT"/>
+• Ensure consistent feature space
+</FONT>>, fillcolor="#f0f4c3"];
+  }
 
-  final_matrix [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="5">
-      <TR><TD COLSPAN="4"><B>Final clean SNP matrix</B> (samples × biallelic SNPs)</TD></TR>
-      <TR><TD></TD><TD><B>chr1:123:A:G</B></TD><TD><B>chr2:456:C:T</B></TD><TD><B>chr3:789:G:A</B></TD></TR>
-      <TR><TD><B>S1</B></TD><TD>1</TD><TD>0</TD><TD>NaN</TD></TR>
-      <TR><TD><B>S2</B></TD><TD>0</TD><TD>1</TD><TD>1</TD></TR>
-      <TR><TD><B>S3</B></TD><TD>0</TD><TD>0</TD><TD>1</TD></TR>
-    </TABLE>>, fillcolor="#e0ffe0"];
+  // ───────────────────────────────────────────────
+  // STAGE 3: FEATURE DISCOVERY (PRE-TREE VALIDATION INCLUDED)
+  // ───────────────────────────────────────────────
+  subgraph cluster_stage3 {
+    label="3) Feature Discovery";
+    labelloc="t";
+    fontsize=14;
+    style="rounded";
+    color="#cfd8dc";
+    penwidth=1.2;
 
-  downstream [label=<<B>Ready for ML / statistics</B><BR/><BR/>
-    • Rows = samples (observations)<BR/>
-    • Columns = biallelic SNPs (features)<BR/>
-    • Values = 0 / 1 / NaN only<BR/>
-    • No indels, no multi-allelic sites>, fillcolor="#f0f8ff"];
+    StatFilter [label=<<B>Statistical filtering</B><BR/><FONT POINT-SIZE="10" ALIGN="LEFT">
+• Chi² / Fisher association<BR ALIGN="LEFT"/>
+• Multiple testing (FDR-BH)<BR ALIGN="LEFT"/>
+• Keep statistically defensible features
+</FONT>>, fillcolor="#ffe0b2"];
 
-  // ─── Flow ──────────────────────────────────────────────
-  vcf_input       -> vcf_example       [style=invis];  // alignment helper
+    Builder [label=<<B>decision_tree_builder.py</B><BR/><FONT POINT-SIZE="10" ALIGN="LEFT">
+• Decision tree construction<BR ALIGN="LEFT"/>
+• Root vs branch markers<BR ALIGN="LEFT"/>
+• Path-based epistasis mining
+</FONT>>, fillcolor="#ffecb3"];
+  }
 
-  vcf_input       -> decompose;
-  decompose       -> snp_filter;
-  snp_filter      -> identity;
-  snp_filter      -> var_qc;
-  snp_filter      -> sample_gt;
+  // ───────────────────────────────────────────────
+  // STAGE 4: POST-TREE VALIDATION
+  // ───────────────────────────────────────────────
+  subgraph cluster_stage4 {
+    label="4) Statistical Validation";
+    labelloc="t";
+    fontsize=14;
+    style="rounded";
+    color="#cfd8dc";
+    penwidth=1.2;
 
-  {rank=same; identity var_qc sample_gt}
+    Validator [label=<<B>statistical_validator.py</B><BR/><FONT POINT-SIZE="10" ALIGN="LEFT">
+• Bootstrap stability (post-tree)<BR ALIGN="LEFT"/>
+• Permutation tests (interactions)<BR ALIGN="LEFT"/>
+• Confidence scoring / robustness
+</FONT>>, fillcolor="#e8f5e9"];
+  }
 
-  identity        -> final_matrix       [style=dashed, color="#555555"];
-  var_qc          -> site_filter;
-  sample_gt       -> gt_mask;
+  // ───────────────────────────────────────────────
+  // STAGE 5: INTEGRATION & EXPORT
+  // ───────────────────────────────────────────────
+  subgraph cluster_stage5 {
+    label="5) Integration & Export";
+    labelloc="t";
+    fontsize=14;
+    style="rounded";
+    color="#cfd8dc";
+    penwidth=1.2;
 
-  site_filter     -> remove_invariant   [label="optional"];
-  gt_mask         -> gt_numeric;
+    Parser [label=<<B>network_parser.py</B><BR/><FONT POINT-SIZE="10">
+rank features • build networks • export
+</FONT>>, fillcolor="#f3e5f5"];
 
-  gt_numeric      -> final_matrix       [label="per-sample values"];
-  remove_invariant-> final_matrix       [style=dashed, label="variants kept"];
+    Outputs [label=<<B>Outputs</B><BR/><FONT POINT-SIZE="10" ALIGN="LEFT">
+• ranked feature report (json)<BR ALIGN="LEFT"/>
+• interaction graph (GraphML)<BR ALIGN="LEFT"/>
+• sample–feature network (GraphML)<BR ALIGN="LEFT"/>
+• GNN-ready matrices (.npz)
+</FONT>>, fillcolor="#e0f7fa"];
+  }
 
-  final_matrix    -> downstream;
+  // ───────────────────────────────────────────────
+  // DOWNSTREAM (OPTIONAL)
+  // ───────────────────────────────────────────────
+  Downstream [label=<<B>Downstream phylogeny</B><BR/><FONT POINT-SIZE="10">IQ-TREE / etc. (optional)</FONT>>, fillcolor="#e0f7fa", style="rounded,dashed"];
 
-  // Grouping for better vertical layout
-  {rank=same; vcf_input vcf_example}
-  {rank=same; decompose snp_filter}
-  {rank=same; filtering site_filter gt_mask remove_invariant}
-  {rank=same; encode gt_numeric}
+  // ───────────────────────────────────────────────
+  // FLOW
+  // ───────────────────────────────────────────────
+  VCF   -> Loader;
+  CSV   -> Loader;
+  FASTA -> Loader;
+
+  Loader -> BcfFilters [label="VCF path"];
+  BcfFilters -> Matrix [label="encode"];
+  BcfFilters -> Consensus [label="--ref-fasta", style=dashed, color="gray"];
+
+  Loader -> Matrix [label="matrix path", style=dashed, color="gray"];
+
+  Matrix -> Align -> StatFilter -> Builder -> Validator -> Parser -> Outputs;
+
+  Consensus -> Downstream [style=dashed, color="gray"];
 }
