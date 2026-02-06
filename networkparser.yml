@@ -1,0 +1,29 @@
+name: networkparser
+
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+
+dependencies:
+  # Core
+  - python=3.10
+  - pip
+
+  # Scientific stack
+  - numpy
+  - pandas
+  - scipy
+  - scikit-learn
+  - statsmodels
+  - networkx
+  - joblib
+  - tqdm
+
+  # VCF processing (optional but included)
+  - bcftools
+  - tabix
+
+  # Pip-installed packages (if any)
+  - pip:
+      - matplotlib
