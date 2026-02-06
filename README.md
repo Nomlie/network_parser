@@ -32,75 +32,82 @@ Particularly valuable for:
 - Lack of interpretability in black-box machine learning models  
 - Absence of integrated pipelines that combine discovery, rigorous validation, and network interpretation  
 
-Table of Contents
+## Table of Contents
 
-Quick Start
-
-Usage
-
-Pipeline Stages
-
-Configuration
-
-Input Formats
-
-Output Files
-
-Examples
-
-Scripts Overview
-
-Troubleshooting
-
-Contributing
-
-License
-
-Contact
-
-Installation
-Requirements
-
-Python 3.8+
-
-Core Python dependencies
-
-pandas
-
-numpy
-
-scikit-learn
-
-scipy
-
-statsmodels
-
-networkx
-
-joblib
-
-tqdm
-
-Optional dependencies for VCF processing
-conda install -c bioconda bcftools tabix
+- [Quick Start](#quick-start)
+- [Usage](#usage)
+- [Pipeline Stages](#pipeline-stages)
+- [Configuration](#configuration)
+- [Input Formats](#input-formats)
+- [Output Files](#output-files)
+- [Examples](#examples)
+- [Scripts Overview](#scripts-overview)
+- [Troubleshooting](#troubleshooting)
+- [Contributing](#contributing)
+- [License](#license)
+- [Contact](#contact)
 
 ## Installation
+
+NetworkParser uses a Conda environment for full dependency reproducibility.
+
+### Requirements
+
+- Conda (Miniconda or Anaconda)
+- Git
+
+---
+
+### Create Environment
+
+From the root of the repository:
+
+```bash
 git clone https://github.com/Nomlie/network_parser.git
 cd network_parser
-pip install -e .
+```
+```bash
+conda env create -f networkparser.yaml
+```
+
+```bash
+conda activate networkparser
+```
+**Install NetworkParser**
+```bash
+pip install .
+```
 
 **Verification**
-python -m network_parser.cli --help
+```bash python -m network_parser.cli --help
+```
+If successful, this will display the CLI usage.
 
-## Quick Start
-Command-line execution
-```bash python -m network_parser.cli \
+Quick Start
+Command-line Example
+```bash
+conda activate networkparser
+```
+
+```bash
+python -m network_parser.cli \
   --genomic input/example.csv \
   --label Group \
   --output-dir results/
 ```
 
+Output
+The results/ directory will contain:
+
+Ranked genomic features
+
+Statistical validation tables
+
+Epistatic interaction networks
+
+ML-ready matrices
 **Execution with logging**
+
 ```bash python -m network_parser.cli [args] 2>&1 | tee pipeline_run.log ```
 
 ## Usage
