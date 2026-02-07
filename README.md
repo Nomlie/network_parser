@@ -112,6 +112,7 @@ python -m network_parser.cli \
 * --validate-interactions: Enable post-tree interaction validation.
 
 For full options, run --help.
+
 **Output**
 The output-dir will contain:
 
@@ -130,6 +131,7 @@ The output-dir will contain:
 
 ## Configuration
 Pipeline behavior is controlled via a centralized configuration in config.py, overrideable through CLI arguments or a JSON/YAML file (via --config).
+
 **Example CLI Configuration**
 
 ```bash
@@ -148,6 +150,7 @@ python -m network_parser.cli \
   --random-state 42
 ```
 For YAML/JSON config, see utils.py for loading details.
+
 ## Input Formats
 
 * Genomic Data: CSV/TSV (binary matrix), VCF(.gz), or directory of VCFs.
@@ -189,8 +192,7 @@ python -m network_parser.cli \
   --output-dir results_amr/
 ```
 
-```bash
-Subset Extraction Script
+**Subset Extraction Script**
 ```bash ./scripts/extract_subset.py \
   --vcf-dir data/vcfs/ \
   --meta-file metadata.csv \
@@ -200,39 +202,34 @@ Subset Extraction Script
 
 ## Scripts Overview
 
-network_parser.py: Main orchestrator.
-cli.py: Command-line interface.
-config.py: Configuration classes.
-data_loader.py: Data ingestion and preprocessing.
-decision_tree_builder.py: Feature discovery via trees.
-statistical_validation.py: Validation suite.
-extract_subset.py: Utility for VCF subsetting.
-utils.py: Helper functions (e.g., config loading).
+- network_parser.py: Main orchestrator.
+- cli.py: Command-line interface.
+- config.py: Configuration classes.
+- data_loader.py: Data ingestion and preprocessing.
+- decision_tree_builder.py: Feature discovery via trees.
+- statistical_validation.py: Validation suite.
+- extract_subset.py: Utility for VCF subsetting.
+- utils.py: Helper functions (e.g., config loading).
 
 ## Troubleshooting
 
-bcftools/tabix missing: Install via conda install -c bioconda bcftools tabix.
-High memory usage: Set --memory-efficient in config.
-No features discovered: Relax thresholds (e.g., --significance-level 0.1).
-Sample ID mismatch: Verify metadata first column matches VCF sample IDs.
-VCF indexing errors: Ensure .tbi files exist; run tabix -p vcf file.vcf.gz.
-Slow performance: Increase --n-jobs or reduce --n-bootstrap.
+- bcftools/tabix missing: Install via conda install -c bioconda bcftools tabix.
+- High memory usage: Set --memory-efficient in config.
+- No features discovered: Relax thresholds (e.g., --significance-level 0.1).
+- Sample ID mismatch: Verify metadata first column matches VCF sample IDs.
+- VCF indexing errors: Ensure .tbi files exist; run tabix -p vcf file.vcf.gz.
+- Slow performance: Increase --n-jobs or reduce --n-bootstrap.
 
 For logs, check pipeline.log in the working directory.
 
 ## Contributing
-Fork the repository.
-Create a feature branch (git checkout -b feature/AmazingFeature).
-Commit changes (git commit -m 'Add some AmazingFeature').
-Push to the branch (git push origin feature/AmazingFeature).
-Open a Pull Request.
+- Fork the repository.
+- Create a feature branch (git checkout -b feature/AmazingFeature).
+- Commit changes (git commit -m 'Add some AmazingFeature').
+- Push to the branch (git push origin feature/AmazingFeature).
+- Open a Pull Request.
 
 Follow PEP8 style guidelines. Include tests for new features.
 
 ## License
 MIT License. See LICENSE for details.
-
-## Contact
-Nomlindelo Mfuphi
-Email: nomlindelow@gmail.com
-GitHub: https://github.com/Nomlie/network_parser

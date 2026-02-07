@@ -11,3 +11,5 @@ git pull --rebase origin master   # get latest before pushing
 git add .
 git commit -m "Your message"
 git push --set-upstream origin changesss
+
+git remote set-url origin https://github.com/Nomlie/network_parser.git
