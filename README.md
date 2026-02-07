@@ -222,6 +222,14 @@ python -m network_parser.cli \
 
 For logs, check pipeline.log in the working directory.
 
+## Troubleshooting
+
+bcftools missing → install via conda  
+Memory high → memory_efficient true  
+No features → relax thresholds  
+ID mismatch → verify metadata  
+VCF index → ensure .tbi exists  
+
 ## Contributing
 - Fork the repository.
 - Create a feature branch (git checkout -b feature/AmazingFeature).
@@ -233,3 +241,8 @@ Follow PEP8 style guidelines. Include tests for new features.
 
 ## License
 MIT License. See LICENSE for details.
+
+## Contact
+Nomlindelo Mfuphi
+Email: nomlindelow@gmail.com
+GitHub: https://github.com/Nomlie/network_parser
