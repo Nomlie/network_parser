@@ -26,7 +26,7 @@ Particularly valuable for:
 - End-to-end workflow:  
   Data loading → Feature discovery → Statistical validation → Network integration → Output generation  
 
-## Challenges Addressed
+**Challenges Addressed**
 
 - Overwhelm from noisy, high-dimensional genomic data (thousands of SNPs)  
 - Lack of interpretability in black-box machine learning models  
@@ -34,6 +34,7 @@ Particularly valuable for:
 
 ## Table of Contents
 
+- [Installation](#installation)
 - [Quick Start](#quick-start)
 - [Usage](#usage)
 - [Pipeline Stages](#pipeline-stages)
@@ -55,6 +56,7 @@ NetworkParser uses a Conda environment for full dependency reproducibility.
 
 - Conda (Miniconda or Anaconda)
 - Git
+- Python 3.8+
 
 ---
 
@@ -65,25 +67,22 @@ From the root of the repository:
 ```bash
 git clone https://github.com/Nomlie/network_parser.git
 cd network_parser
-```
-```bash
 conda env create -f networkparser.yaml
-```
-
-```bash
 conda activate networkparser
 ```
+
 **Install NetworkParser**
 ```bash
 pip install .
 ```
 
 **Verification**
-```bash python -m network_parser.cli --help
+```bash 
+python -m network_parser.cli --help
 ```
 If successful, this will display the CLI usage.
 
-Quick Start
+## Quick Start
 Command-line Example
 ```bash
 conda activate networkparser
@@ -96,158 +95,130 @@ python -m network_parser.cli \
   --output-dir results/
 ```
 
-Output
-The results/ directory will contain:
-
-Ranked genomic features
-
-Statistical validation tables
-
-Epistatic interaction networks
-
-ML-ready matrices
-**Execution with logging**
-
-```bash python -m network_parser.cli [args] 2>&1 | tee pipeline_run.log ```
-
 ## Usage
-Required arguments
+**Required Arguments**
 
---genomic – Genomic input matrix or VCF
+* --genomic: Genomic input (CSV/TSV matrix, VCF file, or directory of VCFs).
+* --label: Phenotype or group label column in metadata.
+* --output-dir: Directory for output files.
 
---label – Phenotype or group label column
+**Optional Arguments**
 
---output-dir – Output directory
+* --meta: Metadata CSV/TSV file (with sample IDs and labels).
+* --regions: Regions/targets for VCF processing (e.g., "NC_000962.3:1-1000000" or BED file).
+* --ref-fasta: Reference FASTA for consensus generation and normalization.
+* --config: JSON config file to override defaults.
+* --validate-statistics: Enable pre-tree statistical validation.
+* --validate-interactions: Enable post-tree interaction validation.
 
-Optional arguments
+For full options, run --help.
+**Output**
+The output-dir will contain:
 
---meta
-
---regions
-
---ref-fasta
-
---config
-
---validate-statistics
-
---validate-interactions
-
-**Programmatic Interface**
-```bash 
-from network_parser.network_parser import run_networkparser_analysis
-from network_parser.config import NetworkParserConfig
-
-config = NetworkParserConfig()
-
-results = run_networkparser_analysis(
-    genomic_path="input/example.csv",
-    meta_path="input/metadata.csv",
-    label_column="Group",
-    output_dir="results/",
-    config=config,
-    validate_statistics=True,
-    validate_interactions=True
-)
-```
+* Ranked genomic features
+* Statistical validation tables
+* Epistatic interaction networks
+* ML-ready matrices (e.g., for GNNs)
 
 ## Pipeline Stages
 
-Input Processing (data_loader.py)
-Loading, normalization, filtering, and alignment of genomic features and metadata.
+1. Input Processing (data_loader.py): Loads, normalizes, filters, and aligns genomic features and metadata.
+2. Feature Discovery (decision_tree_builder.py): Identifies discriminative features and hierarchical patterns using constrained decision trees.
+3. Statistical Validation (statistical_validation.py): Applies bootstrap resampling, permutation tests, and multiple-testing correction for robust inference.
+4. Network Integration (network_parser.py): Builds feature–feature and sample–feature interaction networks.
+5. Output Generation: Exports interpretable reports, JSON, GraphML, and matrices.
 
-Feature Discovery (decision_tree_builder.py)
-Identification of discriminative genomic features and hierarchical patterns using constrained decision trees.
+## Configuration
+Pipeline behavior is controlled via a centralized configuration in config.py, overrideable through CLI arguments or a JSON/YAML file (via --config).
+**Example CLI Configuration**
 
-Statistical Validation (statistical_validation.py)
-Robust inference via bootstrap resampling and permutation-based testing with multiple-testing correction.
+```bash
+python -m network_parser.cli \
+  --genomic data/genomic_matrix.csv \
+  --label Phenotype \
+  --output-dir results/ \
+  --max-depth 6 \
+  --min-group-size 5 \
+  --significance-level 0.05 \
+  --multiple-testing-method fdr_bh \
+  --n-bootstrap 1000 \
+  --n-permutations 500 \
+  --min-information-gain 0.001 \
+  --n-jobs -1 \
+  --random-state 42
+```
+For YAML/JSON config, see utils.py for loading details.
+## Input Formats
 
-Network Integration (network_parser.py)
-Construction of feature–feature and sample–feature interaction networks.
-
-Output Generation
-Export of interpretable artefacts and network representations.
-
-Configuration
-
-Pipeline behavior is controlled via a centralized configuration object, configurable through CLI arguments or JSON/YAML files.
-
-**Example configuration**
-analysis:
-  bootstrap_iterations: 500
-  fdr_threshold: 0.01
-
-processing:
-  max_workers: 4
-
-validation:
-  min_bootstrap_support: 0.7
-
-Input Formats
-Genomic inputs
-
-CSV / TSV binary feature matrices
-
-VCF (.vcf, .vcf.gz)
-
-FASTA (limited support)
-
-Metadata
-
-CSV / TSV files containing sample identifiers and phenotype or group labels
+* Genomic Data: CSV/TSV (binary matrix), VCF(.gz), or directory of VCFs.
+* Metadata: CSV/TSV with sample IDs (first column) and label column.
+* Known Markers (optional): CSV list for guided analysis.
+* Reference FASTA (optional): For VCF consensus and normalization.
 
 ## Output Files
 
-Representative outputs include:
-
-deduplicated_genomic_matrix.csv
-
-aligned_genomic_matrix.csv
-
-decision_tree_rules.txt
-
-feature_confidence.json
-
-bootstrap_results.json
-
-interaction_permutation_results.json
-
-network_graph.graphml
+* deduplicated_genomic_matrix.csv: Cleaned matrix.
+* decision_tree_rules.txt: Tree structure.
+* feature_confidence.json: Confidence scores.
+* epistatic_interactions.json: Detected interactions.
+* network_graph.graphml: Interaction graph (for Cytoscape).
+* networkparser_results_*.json: Comprehensive results.
 
 ## Examples
 
-CSV:
-
-  ```bash python -m network_parser.cli \
+**CSV Matrix Analysis**
+```bash
+ python -m network_parser.cli \
   --genomic input/example.csv \
   --meta input/metadata.csv \
   --label Group \
   --output-dir results/ \
   --validate-statistics \
-  --validate-interactions 
+  --validate-interactions
 ```
 
-VCF:
+**VCF Directory with Regions**
 
-  ```bash python -m network_parser.cli \
+```bash
+python -m network_parser.cli \
   --genomic data/vcfs/ \
   --regions "NC_000962.3:1-1000000" \
   --ref-fasta ref/MTB_H37Rv.fasta \
   --meta metadata.csv \
   --label AMR \
-  --output-dir results_amr/ 
+  --output-dir results_amr/
 ```
 
-## Scripts
-
-  ```bash network_parser.py  
-cli.py  
-data_loader.py  
-decision_tree_builder.py  
-statistical_validation.py  
-extract_subset.py  
-utils.py
+```bash
+Subset Extraction Script
+```bash ./scripts/extract_subset.py \
+  --vcf-dir data/vcfs/ \
+  --meta-file metadata.csv \
+  --output-dir subsets/ \
+  --n-samples 100
 ```
+
+## Scripts Overview
+
+network_parser.py: Main orchestrator.
+cli.py: Command-line interface.
+config.py: Configuration classes.
+data_loader.py: Data ingestion and preprocessing.
+decision_tree_builder.py: Feature discovery via trees.
+statistical_validation.py: Validation suite.
+extract_subset.py: Utility for VCF subsetting.
+utils.py: Helper functions (e.g., config loading).
+
+## Troubleshooting
+
+bcftools/tabix missing: Install via conda install -c bioconda bcftools tabix.
+High memory usage: Set --memory-efficient in config.
+No features discovered: Relax thresholds (e.g., --significance-level 0.1).
+Sample ID mismatch: Verify metadata first column matches VCF sample IDs.
+VCF indexing errors: Ensure .tbi files exist; run tabix -p vcf file.vcf.gz.
+Slow performance: Increase --n-jobs or reduce --n-bootstrap.
+
+For logs, check pipeline.log in the working directory.
 
 ## Troubleshooting
 
@@ -258,17 +229,18 @@ ID mismatch → verify metadata
 VCF index → ensure .tbi exists  
 
 ## Contributing
+Fork the repository.
+Create a feature branch (git checkout -b feature/AmazingFeature).
+Commit changes (git commit -m 'Add some AmazingFeature').
+Push to the branch (git push origin feature/AmazingFeature).
+Open a Pull Request.
 
-Fork → branch → commit → PR
-
-Follow PEP8.
+Follow PEP8 style guidelines. Include tests for new features.
 
 ## License
-
-MIT
+MIT License. See LICENSE for details.
 
 ## Contact
-
-Nomlindelo Mfuphi  
-https://github.com/Nomlie/network_parser
-
+Nomlindelo Mfuphi
+Email: nomlindelow@gmail.com
+GitHub: https://github.com/Nomlie/network_parser
