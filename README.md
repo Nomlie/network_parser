@@ -220,6 +220,14 @@ Slow performance: Increase --n-jobs or reduce --n-bootstrap.
 
 For logs, check pipeline.log in the working directory.
 
+## Troubleshooting
+
+bcftools missing → install via conda  
+Memory high → memory_efficient true  
+No features → relax thresholds  
+ID mismatch → verify metadata  
+VCF index → ensure .tbi exists  
+
 ## Contributing
 Fork the repository.
 Create a feature branch (git checkout -b feature/AmazingFeature).
