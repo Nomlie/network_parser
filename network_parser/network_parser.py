@@ -1,149 +1,142 @@
 # network_parser/network_parser.py
 import logging
-import pandas as pd
-import numpy as np
-import os
-import time
 from pathlib import Path
-import json
-import networkx as nx  # For graph creation
-from typing import Optional, Dict, List, Tuple
+from typing import Optional, Dict, Any
 
-from .config import NetworkParserConfig
-from .data_loader import DataLoader
-from .statistical_validation import StatisticalValidator
-from .decision_tree_builder import EnhancedDecisionTreeBuilder
+import pandas as pd
+
+from network_parser.config import NetworkParserConfig
+from network_parser.data_loader import DataLoader
+from network_parser.decision_tree_builder import EnhancedDecisionTreeBuilder
+from network_parser.statistical_validation import StatisticalValidator
+from network_parser.utils import save_json, ensure_dir, timestamp
 
 logger = logging.getLogger(__name__)
 
 
 class NetworkParser:
     """
-    Main orchestrator for NetworkParser pipeline.
+    Main orchestrator class for the NetworkParser pipeline.
     """
 
     def __init__(self, config: NetworkParserConfig):
         logger.info(f"Initializing NetworkParser with config: {vars(config)}")
         self.config = config
-        self.loader = DataLoader(vcf_config=config.vcf_processing)  # Uses config-driven VCF processing
-        self.tree_builder = EnhancedDecisionTreeBuilder(config)
+
+        # Data loading behavior (including folder-of-VCFs union-matrix mode) is driven via config
+        self.loader = DataLoader(config=config, n_jobs=config.n_jobs)  # Uses enhanced DataLoader with bcftools + FASTA support
+
         self.validator = StatisticalValidator(config)
+        self.tree_builder = EnhancedDecisionTreeBuilder(config)
 
     def run_pipeline(
         self,
         genomic_path: str,
-        meta_path: Optional[str] = None,
-        label_column: str = None,
-        known_markers_path: Optional[str] = None,
-        regions: Optional[str] = None,
-        output_dir: str = "results/",
-        validate_statistics: bool = True,
-        validate_interactions: bool = True,
-        ref_fasta: Optional[str] = None,
-    ) -> Dict:
+        meta_path: Optional[str],
+        label_column: str,
+        known_markers_path: Optional[str],
+        output_dir: str,
+        validate_statistics: bool = False,
+        validate_interactions: bool = False,
+        ref_fasta: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
-        Run full end-to-end pipeline.
-
-        Parameters
-        ----------
-        genomic_path : str
-            CSV matrix OR VCF file/folder.
-        meta_path : Optional[str]
-            Metadata file.
-        label_column : str
-            Label column to use as phenotype.
-        known_markers_path : Optional[str]
-            Optional known marker list.
-        regions : Optional[str]
-            Optional bcftools --regions/--targets string (e.g. "chrom:start-end" or BED file).
-        output_dir : str
-            Output directory.
-        validate_statistics : bool
-            Run pre-tree statistical validation (association testing + multiple testing correction).
-        validate_interactions : bool
-            Run post-tree interaction permutation validation.
-        ref_fasta : Optional[str]
-            Reference FASTA for consensus generation and reference-aware normalization.
+        Execute full NetworkParser pipeline.
         """
-
         output_dir_path = Path(output_dir)
-        output_dir_path.mkdir(parents=True, exist_ok=True)
+        ensure_dir(output_dir_path)
 
-        # Load genomic data → clean binary matrix (handles VCF filtering + consensus FASTA if ref_fasta given)
+        logger.info("Stage 1: Loading genomic matrix")
         genomic_df = self.loader.load_genomic_matrix(
-            file_path=genomic_path,          # ← FIXED: changed from genomic_path= to file_path=
+            file_path=genomic_path,
             output_dir=output_dir,
-            ref_fasta=ref_fasta,             # Triggers bcftools consensus for VCF inputs
-            regions=regions
+            ref_fasta=ref_fasta
         )
 
-        # Load optional metadata
+        logger.info(f"Loaded genomic matrix with shape: {genomic_df.shape}")
+
         meta_df = None
         if meta_path:
-            meta_df = pd.read_csv(meta_path, sep=None, engine="python")
-            if label_column not in meta_df.columns:
-                raise ValueError(f"Label column '{label_column}' not found in metadata columns: {list(meta_df.columns)}")
+            logger.info("Loading metadata")
+            meta_df = self.loader.load_metadata(meta_path, output_dir=output_dir)
+            logger.info(f"Loaded metadata with shape: {meta_df.shape}")
 
-        # Align samples
-        if meta_df is not None:
-            meta_df[label_column] = meta_df[label_column].astype(str)
-            meta_df.index = meta_df.iloc[:, 0].astype(str) if meta_df.index.name is None else meta_df.index.astype(str)
+        known_markers = None
+        if known_markers_path:
+            logger.info("Loading known markers")
+            known_markers = self.loader.load_known_markers(known_markers_path, output_dir=output_dir)
+            logger.info(f"Loaded {len(known_markers)} known markers")
 
-            common = genomic_df.index.intersection(meta_df.index)
-            if len(common) == 0:
-                raise ValueError("No overlapping sample IDs between genomic matrix and metadata.")
-            genomic_df = genomic_df.loc[common]
-            meta_df = meta_df.loc[common]
+        # Stage 2: Decision tree feature discovery
+        logger.info("Stage 2: Decision tree feature discovery")
+        discovery_results = self.tree_builder.run_feature_discovery(
+            genomic_df=genomic_df,
+            meta_df=meta_df,
+            label_column=label_column,
+            known_markers=known_markers,
+            output_dir=output_dir
+        )
 
-        # Extract labels
-        y = None
-        if meta_df is not None and label_column:
-            y = meta_df[label_column].values
-
-        # Stage 2: Feature discovery (pre-tree filtering happens inside tree builder)
-        tree_results = self.tree_builder.build_tree(genomic_df, y)
-
-        # Stage 3: Statistical validation
-        stats_results = {}
+        # Stage 3: Statistical validation (optional)
+        validation_results = {}
         if validate_statistics:
-            stats_results = self.validator.validate_features(genomic_df, y, tree_results)
+            logger.info("Stage 3: Statistical validation (features)")
+            validation_results["features"] = self.validator.validate_features(
+                genomic_df=genomic_df,
+                meta_df=meta_df,
+                label_column=label_column,
+                discovered_features=discovery_results.get("ranked_features", []),
+                output_dir=output_dir
+            )
 
-        interaction_results = {}
         if validate_interactions:
-            interaction_results = self.validator.validate_interactions(genomic_df, y, tree_results)
+            logger.info("Stage 3: Statistical validation (interactions)")
+            validation_results["interactions"] = self.validator.validate_interactions(
+                genomic_df=genomic_df,
+                meta_df=meta_df,
+                label_column=label_column,
+                interactions=discovery_results.get("epistatic_interactions", []),
+                output_dir=output_dir
+            )
 
-        # Stage 4: Integration and network creation
+        # Stage 4: Final synthesis / report writing
+        logger.info("Stage 4: Writing final results")
         results = {
-            "tree_results": tree_results,
-            "stats_results": stats_results,
-            "interaction_results": interaction_results,
+            "timestamp": timestamp(),
+            "config": vars(self.config),
+            "discovery": discovery_results,
+            "validation": validation_results
         }
 
-        # Save results JSON
-        out_json = output_dir_path / f"networkparser_results_{int(time.time())}.json"
-        with open(out_json, "w") as fh:
-            json.dump(results, fh, indent=2)
-        logger.info(f"Saved results: {out_json}")
+        results_path = output_dir_path / f"networkparser_results_{timestamp()}.json"
+        save_json(results, results_path)
+        logger.info(f"Saved final results: {results_path}")
 
         return results
 
 
-def run_networkparser_analysis(**kwargs):
+def run_networkparser_analysis(
+    genomic_path: str,
+    meta_path: Optional[str],
+    label_column: str,
+    known_markers_path: Optional[str],
+    output_dir: str,
+    config: NetworkParserConfig,
+    validate_statistics: bool = False,
+    validate_interactions: bool = False,
+    ref_fasta: Optional[str] = None
+) -> Dict[str, Any]:
     """
-    Entry-point function for pipeline execution (used by CLI).
+    Convenience wrapper to run the pipeline.
     """
-    logger.info("Initializing NetworkParser with provided configuration.")
-    config = kwargs.pop('config', NetworkParserConfig())
-    parser = NetworkParser(config=config)
-
-    try:
-        parser.run_pipeline(**kwargs)
-    finally:
-        # Clean up temporary files from DataLoader (e.g., intermediate VCFs)
-        if hasattr(parser.loader, 'cleanup'):
-            parser.loader.cleanup()
-
-
-if __name__ == "__main__":
-    import sys
-    raise SystemExit("This module is intended to be run via the CLI entrypoint.")
+    parser = NetworkParser(config)
+    return parser.run_pipeline(
+        genomic_path=genomic_path,
+        meta_path=meta_path,
+        label_column=label_column,
+        known_markers_path=known_markers_path,
+        output_dir=output_dir,
+        validate_statistics=validate_statistics,
+        validate_interactions=validate_interactions,
+        ref_fasta=ref_fasta
+    )
