@@ -5,33 +5,13 @@ Configuration module for NetworkParser.
 Defines configurable parameters controlling the behavior of the pipeline,
 including statistical thresholds, decision tree settings, parallelization,
 and validation options.
+
+Defaults are optimized for microbial SNP datasets (e.g., thousands of samples,
+tens to hundreds of thousands of variants).
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
-
-
-@dataclass
-class VCFProcessingConfig:
-    """Configuration for VCF → matrix preprocessing (bcftools-based)."""
-
-    # Variant-level filters
-    qual_min: float = 30.0
-    dp_min_variant: int = 10  # INFO/DP if present
-
-    # Genotype-level filters (FORMAT)
-    dp_min_genotype: int = 10
-    gq_min: int = 20
-
-    # Site-level filters (post-tags)
-    max_missing: float = 0.20  # uses F_MISSING if present
-    min_maf: Optional[float] = 0.01  # uses MAF if present (None disables)
-
-    # Normalization / representation
-    snp_gap_bp: int = 10
-    normalize: bool = True
-    remove_invariants: bool = True
-    keep_only_snps: bool = True
 
 
 @dataclass
@@ -47,7 +27,8 @@ class NetworkParserConfig:
     min_information_gain: float = 0.001
 
     # Legacy aliases for backward compatibility (used in older code)
-    min_group_size: int = 10  # legacy alias for min_samples_split
+    min_group_size: int = 10  # ← This fixes your error!
+    """Legacy alias for min_samples_split — kept for compatibility."""
 
     # Statistical Validation
     significance_level: float = 0.05
@@ -62,16 +43,20 @@ class NetworkParserConfig:
     random_state: int = 42
     memory_efficient: bool = False
 
-    # VCF Processing (passed into DataLoader)
-    vcf_processing: VCFProcessingConfig = field(default_factory=VCFProcessingConfig)
+    # VCF Filtering Parameters (used in DataLoader)
+    qual_threshold: float = 30.0
+    min_dp_per_sample: int = 10
+    min_gq_per_sample: int = 20
+    max_missing_fraction: float = 0.1
+    min_spacing_bp: int = 10
 
-    # --- Legacy VCF fields (kept so older CLI/configs don't break) ---
-    # These are mapped into vcf_processing in __post_init__.
-    qual_threshold: Optional[float] = None
-    min_dp_per_sample: Optional[int] = None
-    min_gq_per_sample: Optional[int] = None
-    max_missing_fraction: Optional[float] = None
-    min_spacing_bp: Optional[int] = None
+    # Folder-of-VCFs union-matrix mode (for large collections of single-sample ALT-only VCFs)
+    # - force_union_matrix: always use union-of-sites matrix when input is a directory of VCFs
+    # - union_matrix_threshold: automatically switch to union mode when >= this many VCFs are provided
+    # - union_dp_min: conservative DP gate (FORMAT/DP) when extracting sites in union mode
+    force_union_matrix: bool = False
+    union_matrix_threshold: int = 200
+    union_dp_min: int = 10
 
     # Output & FASTA Options
     generate_consensus_fasta: bool = True
@@ -83,19 +68,5 @@ class NetworkParserConfig:
             raise ValueError("multiple_testing_method must be 'fdr_bh' or 'bonferroni'")
         if self.consensus_fasta_type not in {"individual", "multi"}:
             raise ValueError("consensus_fasta_type must be 'individual' or 'multi'")
-
-        # Set legacy tree field to match new standard
+        # Set legacy field to match new standard
         self.min_group_size = self.min_samples_split
-
-        # Map legacy VCF fields (if provided) into the new VCFProcessingConfig
-        if self.qual_threshold is not None:
-            self.vcf_processing.qual_min = float(self.qual_threshold)
-        if self.min_dp_per_sample is not None:
-            self.vcf_processing.dp_min_genotype = int(self.min_dp_per_sample)
-            self.vcf_processing.dp_min_variant = int(self.min_dp_per_sample)
-        if self.min_gq_per_sample is not None:
-            self.vcf_processing.gq_min = int(self.min_gq_per_sample)
-        if self.max_missing_fraction is not None:
-            self.vcf_processing.max_missing = float(self.max_missing_fraction)
-        if self.min_spacing_bp is not None:
-            self.vcf_processing.snp_gap_bp = int(self.min_spacing_bp)

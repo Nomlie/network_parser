@@ -10,21 +10,24 @@ import json
 # Configure detailed logging with timestamps
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
+    format="%(asctime)s - %(levelname)s - %(message)s",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler('pipeline.log')
-    ]
+        logging.FileHandler("pipeline.log"),
+    ],
 )
 
 logger = logging.getLogger(__name__)
 
+# ✅ Correct imports for package execution.
+# Also includes a safe fallback for running the file directly (less recommended).
 try:
-    from config import NetworkParserConfig
-    from network_parser import run_networkparser_analysis
-except ImportError as e:
-    logger.error(f"Import error: {e}")
-    sys.exit(1)
+    from .config import NetworkParserConfig
+    from .network_parser import run_networkparser_analysis
+except ImportError:  # pragma: no cover
+    # Fallback for: python network_parser/cli.py
+    from network_parser.config import NetworkParserConfig
+    from network_parser.network_parser import run_networkparser_analysis
 
 
 def load_config(config_path: Optional[str], default_config: NetworkParserConfig) -> NetworkParserConfig:
@@ -58,36 +61,58 @@ def build_arg_parser() -> argparse.ArgumentParser:
         description="NetworkParser: VCF/Matrix → statistically validated features + interpretable networks"
     )
 
-    input_group = parser.add_argument_group('Input Files')
-    input_group.add_argument("--genomic", required=True, type=str,
-                             help="Genomic input: single file (CSV/TSV/VCF/FASTA) "
-                                  "or DIRECTORY containing multiple VCF(.gz) files")
-    input_group.add_argument("--regions", type=str, default=None,
-                             help="Optional regions/targets restriction for VCF processing. "
-                                  "Examples: 'chrom:start-end' (e.g. 'NC_000962.3:1-1000000') "
-                                  "or a BED file path supported by bcftools.")
-    input_group.add_argument("--meta", type=str, default=None,
-                             help="Metadata CSV/TSV with sample IDs and labels")
-    input_group.add_argument("--label", required=True, type=str,
-                             help="Metadata label column to use for phenotype (e.g. Lineage, AMR)")
-    input_group.add_argument("--known_markers", type=str, default=None,
-                             help="Optional known markers file path")
-    input_group.add_argument("--ref_fasta", type=str, default=None,
-                             help="Optional reference FASTA (enables bcftools consensus + reference-aware normalization)")
+    input_group = parser.add_argument_group("Input Files")
+    input_group.add_argument(
+        "--genomic",
+        required=True,
+        type=str,
+        help=(
+            "Genomic input: single file (CSV/TSV/VCF/FASTA) "
+            "or DIRECTORY containing multiple VCF(.gz) files"
+        ),
+    )
+    input_group.add_argument(
+        "--regions",
+        type=str,
+        default=None,
+        help=(
+            "Optional regions/targets restriction for VCF processing. "
+            "Examples: 'chrom:start-end' (e.g. 'NC_000962.3:1-1000000') "
+            "or a BED file path supported by bcftools."
+        ),
+    )
+    input_group.add_argument("--meta", type=str, default=None, help="Metadata CSV/TSV with sample IDs and labels")
+    input_group.add_argument(
+        "--label",
+        required=True,
+        type=str,
+        help="Metadata label column to use for phenotype (e.g. Lineage, AMR)",
+    )
+    input_group.add_argument("--known_markers", type=str, default=None, help="Optional known markers file path")
+    input_group.add_argument(
+        "--ref_fasta",
+        type=str,
+        default=None,
+        help="Optional reference FASTA (enables bcftools consensus + reference-aware normalization)",
+    )
 
-    output_group = parser.add_argument_group('Output')
-    output_group.add_argument("--output_dir", required=True, type=str,
-                              help="Output directory for results")
+    output_group = parser.add_argument_group("Output")
+    output_group.add_argument("--output_dir", required=True, type=str, help="Output directory for results")
 
-    cfg_group = parser.add_argument_group('Config')
-    cfg_group.add_argument("--config", type=str, default=None,
-                           help="Optional JSON config file to override defaults")
+    cfg_group = parser.add_argument_group("Config")
+    cfg_group.add_argument("--config", type=str, default=None, help="Optional JSON config file to override defaults")
 
-    flags_group = parser.add_argument_group('Validation Flags')
-    flags_group.add_argument("--validate_statistics", action="store_true",
-                             help="Run association testing + multiple testing correction (pre-tree)")
-    flags_group.add_argument("--validate_interactions", action="store_true",
-                             help="Run post-tree interaction permutation validation")
+    flags_group = parser.add_argument_group("Validation Flags")
+    flags_group.add_argument(
+        "--validate_statistics",
+        action="store_true",
+        help="Run association testing + multiple testing correction (pre-tree)",
+    )
+    flags_group.add_argument(
+        "--validate_interactions",
+        action="store_true",
+        help="Run post-tree interaction permutation validation",
+    )
 
     return parser
 
@@ -127,14 +152,14 @@ def main():
 
     # Logging summary
     logger.info("Starting NetworkParser pipeline")
-    logger.info(f"Genomic input:   {genomic_path.resolve()}")
-    logger.info(f"Metadata:        {meta_path.resolve() if meta_path else 'None'}")
-    logger.info(f"Label column:    {args.label}")
+    logger.info(f"Genomic input:    {genomic_path.resolve()}")
+    logger.info(f"Metadata:         {meta_path.resolve() if meta_path else 'None'}")
+    logger.info(f"Label column:     {args.label}")
     logger.info(f"Output directory: {Path(args.output_dir).resolve()}")
     if ref_fasta_path:
-        logger.info(f"Reference FASTA: {ref_fasta_path.resolve()}")
+        logger.info(f"Reference FASTA:  {ref_fasta_path.resolve()}")
     if args.regions:
-        logger.info(f"Regions/targets: {args.regions}")
+        logger.info(f"Regions/targets:  {args.regions}")
 
     try:
         start_time = time.time()
@@ -147,8 +172,8 @@ def main():
             config=config,
             validate_statistics=args.validate_statistics,
             validate_interactions=args.validate_interactions,
-            ref_fasta=str(ref_fasta_path) if ref_fasta_path else None,  # pass ref_fasta if provided
-            regions=args.regions
+            ref_fasta=str(ref_fasta_path) if ref_fasta_path else None,
+            regions=args.regions,
         )
         elapsed_time = time.time() - start_time
         logger.info(f"NetworkParser pipeline completed successfully in {elapsed_time:.2f} seconds")
