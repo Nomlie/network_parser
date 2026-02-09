@@ -1,0 +1,115 @@
+digraph VCF_to_ML_Matrix_Vertical_Union {
+  rankdir=TB;
+  labelloc="t";
+  fontsize=20;
+  fontname="Helvetica,Arial,sans-serif";
+  label="VCF (variant-centric) → ML feature matrix (sample-centric)\nModern union-of-sites path for large cohorts";
+
+  node [shape=box, style="rounded,filled", fontname="Helvetica,Arial,sans-serif", fontsize=11, penwidth=1.1];
+  edge [fontname="Helvetica,Arial,sans-serif", fontsize=10, penwidth=1.2, arrowsize=0.9];
+
+  // ───────────────────────────────────────────────
+  //               INPUT
+  // ───────────────────────────────────────────────
+  vcf_input [label=<
+    <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="5">
+      <TR><TD COLSPAN="2"><B>Input: Folder of single-sample VCFs</B></TD></TR>
+      <TR><TD>Typical use-case</TD><TD>Many ALT-only VCFs (bacterial/viral)</TD></TR>
+      <TR><TD>Each file</TD><TD>1 sample + only called variants</TD></TR>
+    </TABLE>
+  >, fillcolor="#e8f0ff", width=3.2];
+
+  // ───────────────────────────────────────────────
+  //               DECISION POINT
+  // ───────────────────────────────────────────────
+  decision [label=<
+    <B>Decision: Use union-of-sites mode?</B><BR/>
+    • force_union_matrix = true<BR/>
+    • number of VCFs ≥ threshold (default 200)<BR/>
+    → avoids slow bcftools merge
+  >, fillcolor="#fffacd", shape=diamond, fontsize=12];
+
+  // ───────────────────────────────────────────────
+  //               UNION PATH
+  // ───────────────────────────────────────────────
+  pass1 [label=<
+    <B>Pass 1: Build global variant universe + cache</B><BR/>
+    For each VCF:<BR/>
+    • extract biallelic SNPs (CHROM:POS:REF:ALT)<BR/>
+    • apply filters (biallelic, SNP-only, DP≥min, ...)<BR/>
+    • assign integer column ID (optional)<BR/>
+    • cache per-sample present columns
+  >, fillcolor="#d4f4dd"];
+
+  large_universe [label=<
+    <TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4">
+      <TR><TD ALIGN="LEFT"><B>Large universe warning</B></TD></TR>
+      <TR><TD ALIGN="LEFT">• &gt; 1×10⁶ variants → warning</TD></TR>
+      <TR><TD ALIGN="LEFT">• &gt; 2×10⁶ variants → strong warning</TD></TR>
+    </TABLE>
+  >, fillcolor="#ffcccc", shape=note];
+
+  lookup [label=<
+    <B>Optional: variant_lookup.csv</B><BR/>
+    integer_id → CHROM:POS:REF:ALT<BR/>
+    (when use_integer_variant_ids = true)
+  >, fillcolor="#e0ffe0", shape=note];
+
+  pass2 [label=<
+    <B>Pass 2: Populate matrix from cache</B><BR/>
+    • No second VCF read!<BR/>
+    • Build coordinate list (rows, cols, values=1)<BR/>
+    • Use sparse.csr_matrix if scipy available<BR/>
+    • Otherwise dense fallback (warn)
+  >, fillcolor="#cce5ff"];
+
+  // ───────────────────────────────────────────────
+  //               CLASSIC MERGE PATH (fallback)
+  // ───────────────────────────────────────────────
+  merge_path [label=<
+    <B>Classic: bcftools merge</B><BR/>
+    → merged.vcf.gz<BR/>
+    → multi-step filtering &amp; cleaning<BR/>
+    → streaming GT extraction
+  >, fillcolor="#f0e8ff", style=dashed];
+
+  // ───────────────────────────────────────────────
+  //               FINAL MATRIX (shared)
+  // ───────────────────────────────────────────────
+  final_matrix [label=<
+    <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="5">
+      <TR><TD COLSPAN="4"><B>Final ML-ready matrix</B></TD></TR>
+      <TR><TD></TD><TD><B>var1</B></TD><TD><B>var2</B></TD><TD><B>varN</B></TD></TR>
+      <TR><TD><B>S1</B></TD><TD>1</TD><TD>0</TD><TD>NaN</TD></TR>
+      <TR><TD><B>S2</B></TD><TD>0</TD><TD>1</TD><TD>1</TD></TR>
+      <TR><TD><B>...</B></TD><TD>...</TD><TD>...</TD><TD>...</TD></TR>
+    </TABLE>
+  >, fillcolor="#e0ffe0"];
+
+  downstream [label=<
+    <B>Downstream usage</B><BR/><BR/>
+    • Statistical validation<BR/>
+    • Decision tree / epistasis detection<BR/>
+    • GNN / network analysis
+  >, fillcolor="#f0f8ff"];
+
+  // ─── Flow ──────────────────────────────────────────────
+  vcf_input   -> decision;
+  decision    -> pass1      [label="union mode\n(large cohort)"];
+  decision    -> merge_path [label="small/medium\nclassic merge", style=dashed];
+
+  pass1       -> large_universe [style=dotted, color=gray];
+  pass1       -> lookup         [style=dotted, color=gray, label="if enabled"];
+  pass1       -> pass2;
+
+  pass2       -> final_matrix;
+  merge_path  -> final_matrix   [style=dashed, color="#777777"];
+
+  final_matrix -> downstream;
+
+  // Layout hints
+  { rank=same; vcf_input; decision; }
+  { rank=same; pass1; large_universe; lookup; }
+  { rank=same; pass2; merge_path; }
+  { rank=same; final_matrix; }
+}
