@@ -71,16 +71,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "or DIRECTORY containing multiple VCF(.gz) files"
         ),
     )
-    input_group.add_argument(
-        "--regions",
-        type=str,
-        default=None,
-        help=(
-            "Optional regions/targets restriction for VCF processing. "
-            "Examples: 'chrom:start-end' (e.g. 'NC_000962.3:1-1000000') "
-            "or a BED file path supported by bcftools."
-        ),
-    )
     input_group.add_argument("--meta", type=str, default=None, help="Metadata CSV/TSV with sample IDs and labels")
     input_group.add_argument(
         "--label",
@@ -158,8 +148,6 @@ def main():
     logger.info(f"Output directory: {Path(args.output_dir).resolve()}")
     if ref_fasta_path:
         logger.info(f"Reference FASTA:  {ref_fasta_path.resolve()}")
-    if args.regions:
-        logger.info(f"Regions/targets:  {args.regions}")
 
     try:
         start_time = time.time()
@@ -173,7 +161,6 @@ def main():
             validate_statistics=args.validate_statistics,
             validate_interactions=args.validate_interactions,
             ref_fasta=str(ref_fasta_path) if ref_fasta_path else None,
-            regions=args.regions,
         )
         elapsed_time = time.time() - start_time
         logger.info(f"NetworkParser pipeline completed successfully in {elapsed_time:.2f} seconds")

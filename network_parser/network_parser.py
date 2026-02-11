@@ -50,7 +50,7 @@ class NetworkParser:
         genomic_df = self.loader.load_genomic_matrix(
             file_path=genomic_path,
             output_dir=output_dir,
-            ref_fasta=ref_fasta
+            ref_fasta=ref_fasta,
         )
 
         logger.info(f"Loaded genomic matrix with shape: {genomic_df.shape}")
@@ -69,12 +69,11 @@ class NetworkParser:
 
         # Stage 2: Decision tree feature discovery
         logger.info("Stage 2: Decision tree feature discovery")
-        discovery_results = self.tree_builder.run_feature_discovery(
-            genomic_df=genomic_df,
-            meta_df=meta_df,
-            label_column=label_column,
-            known_markers=known_markers,
-            output_dir=output_dir
+        discovery_results = self.tree_builder.discover_features(
+        data=genomic_df,
+        labels=meta_df[label_column],               # ← extract labels here
+        all_features=genomic_df.columns.tolist(),   # or the filtered list you want
+        output_dir=output_dir
         )
 
         # Stage 3: Statistical validation (optional)
@@ -124,7 +123,7 @@ def run_networkparser_analysis(
     config: NetworkParserConfig,
     validate_statistics: bool = False,
     validate_interactions: bool = False,
-    ref_fasta: Optional[str] = None
+    ref_fasta: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Convenience wrapper to run the pipeline.
@@ -138,5 +137,5 @@ def run_networkparser_analysis(
         output_dir=output_dir,
         validate_statistics=validate_statistics,
         validate_interactions=validate_interactions,
-        ref_fasta=ref_fasta
+        ref_fasta=ref_fasta,
     )
