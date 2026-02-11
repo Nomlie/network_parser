@@ -114,6 +114,7 @@ Folder-of-VCFs behavior is controlled by NetworkParserConfig:
         self,
         file_path: str,
         output_dir: Optional[str] = None,
+        regions: Optional[str] = None,
         ref_fasta: Optional[str] = None,
         label_column: Optional[str] = None,  # kept for compatibility; not used here
     ) -> pd.DataFrame:
@@ -154,6 +155,98 @@ Folder-of-VCFs behavior is controlled by NetworkParserConfig:
             return self._fasta_to_matrix(path)
 
         raise ValueError(f"Unsupported genomic input: {path}")
+     # -------------------------------------------------------------------------
+    # 2b) Public helpers: metadata + known markers
+    # -------------------------------------------------------------------------
+    def load_metadata(self, meta_path: str, output_dir: Optional[str] = None) -> pd.DataFrame:
+        """
+        Load sample metadata table.
+
+        Expected:
+            - CSV/TSV with at least one column that identifies samples.
+            - If a column named 'Sample' exists, we use it as the index.
+            - Otherwise we assume the FIRST column is the sample identifier.
+
+        Output:
+            - DataFrame indexed by sample ID (string)
+        """
+        path = Path(meta_path)
+        if not path.exists():
+            raise FileNotFoundError(f"Metadata file not found: {path}")
+
+        sep = "\t" if path.suffix.lower() in {".tsv", ".tab"} else ","
+        df = pd.read_csv(path, sep=sep)
+
+        if df.shape[1] < 2:
+            raise ValueError(f"Metadata file looks invalid (needs ≥2 columns): {path} (shape={df.shape})")
+
+        idx_col = "Sample" if "Sample" in df.columns else df.columns[0]
+        df[idx_col] = df[idx_col].astype(str)
+        df = df.set_index(idx_col, drop=True)
+        df.index.name = "Sample"
+
+        # Save a normalized copy for reproducibility/debugging
+        if output_dir:
+            outdir = Path(output_dir)
+            outdir.mkdir(parents=True, exist_ok=True)
+            out_path = outdir / "metadata.normalized.csv"
+            df.to_csv(out_path)
+            logger.info(f"Saved normalized metadata copy: {out_path}")
+
+        return df
+
+    def load_known_markers(self, known_markers_path: str, output_dir: Optional[str] = None) -> List[str]:
+        """
+        Load a list of known markers/features to prioritize or annotate.
+
+        Supported inputs:
+            - .txt : one marker per line (comments allowed with '#')
+            - .csv/.tsv : expects a column named 'marker' or uses the first column
+
+        Returns:
+            - list of unique marker strings (order preserved)
+        """
+        path = Path(known_markers_path)
+        if not path.exists():
+            raise FileNotFoundError(f"Known markers file not found: {path}")
+
+        suffix = "".join(path.suffixes).lower()
+
+        markers: List[str] = []
+        if suffix.endswith(".txt"):
+            with open(path, "r", encoding="utf-8") as fh:
+                for line in fh:
+                    m = line.strip()
+                    if m and not m.startswith("#"):
+                        markers.append(m)
+
+        elif suffix.endswith(".csv") or suffix.endswith(".tsv") or suffix.endswith(".tab"):
+            sep = "\t" if (suffix.endswith(".tsv") or suffix.endswith(".tab")) else ","
+            df = pd.read_csv(path, sep=sep)
+            if not df.empty:
+                col = "marker" if "marker" in df.columns else df.columns[0]
+                markers = [str(x).strip() for x in df[col].tolist() if str(x).strip()]
+
+        else:
+            raise ValueError(f"Unsupported known markers format: {path}")
+
+        # de-duplicate while preserving order
+        seen: Set[str] = set()
+        uniq: List[str] = []
+        for m in markers:
+            if m not in seen:
+                seen.add(m)
+                uniq.append(m)
+
+        if output_dir:
+            outdir = Path(output_dir)
+            outdir.mkdir(parents=True, exist_ok=True)
+            out_path = outdir / "known_markers.normalized.txt"
+            with open(out_path, "w", encoding="utf-8") as fh:
+                fh.write("\n".join(uniq) + ("\n" if uniq else ""))
+            logger.info(f"Saved normalized known markers copy: {out_path}")
+
+        return uniq
 
     # -------------------------------------------------------------------------
     # 3) CSV/TSV matrix load

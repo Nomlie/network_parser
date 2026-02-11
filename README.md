@@ -71,11 +71,6 @@ conda env create -f networkparser.yaml
 conda activate networkparser
 ```
 
-**Install NetworkParser**
-```bash
-pip install .
-```
-
 **Verification**
 ```bash 
 python -m network_parser.cli --help

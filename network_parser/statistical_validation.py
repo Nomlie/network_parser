@@ -45,7 +45,7 @@ class StatisticalValidator:
             contingency = pd.crosstab(data[feature], labels)
             if contingency.shape[0] < 2 or contingency.shape[1] < 2:
                 return feature, None
-            if contingency.values.min() < 5:
+            if contingency.values.min() < self.config.chi2_min_expected:
                 _, p_value = fisher_exact(contingency.values)
                 statistic = None
                 dof = None
