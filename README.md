@@ -84,10 +84,11 @@ conda activate networkparser
 ```
 
 ```bash
-python -m network_parser.cli \
-  --genomic input/example.csv \
-  --label Group \
-  --output-dir results/
+python -m network_parser.cli 
+--genomic /Users/nmfuphicsir.co.za/Documents/data/AFRO_TB/AFRO_TB_ANNOTATION_VCF/AFRO_TB_500_VCFs/ 
+--meta /Users/nmfuphicsir.co.za/Documents/data/AFRO_TB/AFRO_dataset_meta.csv 
+--label Lineage 
+--output_dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/AFRO_TB_500
 ```
 
 ## Usage

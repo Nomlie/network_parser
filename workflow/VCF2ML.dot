@@ -1,9 +1,9 @@
-digraph VCF_to_ML_Matrix_Vertical_Union {
+digraph VCF_to_ML_Matrix_Vertical_AlignedToDataLoader {
   rankdir=TB;
   labelloc="t";
   fontsize=20;
   fontname="Helvetica,Arial,sans-serif";
-  label="VCF (variant-centric) → ML feature matrix (sample-centric)\nModern union-of-sites path for large cohorts";
+  label="VCF (variant-centric) → ML feature matrix (sample-centric)\nDataLoader path: per-sample parse → cohort merge → baseline → binary encode";
 
   node [shape=box, style="rounded,filled", fontname="Helvetica,Arial,sans-serif", fontsize=11, penwidth=1.1];
   edge [fontname="Helvetica,Arial,sans-serif", fontsize=10, penwidth=1.2, arrowsize=0.9];
@@ -13,103 +13,147 @@ digraph VCF_to_ML_Matrix_Vertical_Union {
   // ───────────────────────────────────────────────
   vcf_input [label=<
     <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="5">
-      <TR><TD COLSPAN="2"><B>Input: Folder of single-sample VCFs</B></TD></TR>
-      <TR><TD>Typical use-case</TD><TD>Many ALT-only VCFs (bacterial/viral)</TD></TR>
-      <TR><TD>Each file</TD><TD>1 sample + only called variants</TD></TR>
+      <TR><TD COLSPAN="2"><B>Input: Folder of per-sample VCFs</B></TD></TR>
+      <TR><TD>Each file</TD><TD>1 sample (called records may be ALT-only)</TD></TR>
+      <TR><TD>Goal</TD><TD>Binary matrix: samples × variants (0/1)</TD></TR>
     </TABLE>
-  >, fillcolor="#e8f0ff", width=3.2];
+  >, fillcolor="#e8f0ff", width=3.4];
 
   // ───────────────────────────────────────────────
-  //               DECISION POINT
+  //               PARALLEL PARSING
   // ───────────────────────────────────────────────
-  decision [label=<
-    <B>Decision: Use union-of-sites mode?</B><BR/>
-    • force_union_matrix = true<BR/>
-    • number of VCFs ≥ threshold (default 200)<BR/>
-    → avoids slow bcftools merge
-  >, fillcolor="#fffacd", shape=diamond, fontsize=12];
+  parallel [label=<
+    <B>Parallel parse per-sample VCFs</B><BR/>
+    • n_jobs workers (joblib/parallel)<BR/>
+    • stream records (no bcftools merge)<BR/>
+    • output per-sample call map
+  >, fillcolor="#ffd48a", shape=ellipse];
+
+  per_vcf [label=<
+    <B>iter_sample_calls()</B><BR ALIGN="LEFT"/>
+    For each record:<BR ALIGN="LEFT"/>
+    • is_snp_like? (single base; optional biallelic-only)<BR ALIGN="LEFT"/>
+    • parse INFO<BR ALIGN="LEFT"/>
+    • passes_info_qc? (QUAL / DP / MQ / MQ0F)<BR ALIGN="LEFT"/>
+    • choose_called_allele() (GT-aware when possible)<BR ALIGN="LEFT"/>
+    • store (chrom,pos) → (ref, called)
+  >, fillcolor="#fff7db"];
+
+  discard [label="discard record", fillcolor="#e9e9e9", fontcolor="gray35"];
+
+  // Decision diamonds inside parse stage
+  gate_snp [label="SNP-like?\n(single base; biallelic)" shape=diamond fillcolor="#fffacd"];
+  gate_qc  [label="INFO QC pass?\n(QUAL/DP/MQ/MQ0F)" shape=diamond fillcolor="#fffacd"];
+
+  // Wire parse internals (kept simple, readable)
+  per_vcf -> gate_snp;
+  gate_snp -> discard [label="no", style=dashed, color="#777777"];
+  gate_snp -> gate_qc [label="yes"];
+  gate_qc  -> discard [label="no", style=dashed, color="#777777"];
 
   // ───────────────────────────────────────────────
-  //               UNION PATH
+  //               COHORT MERGE + FILTERS
   // ───────────────────────────────────────────────
-  pass1 [label=<
-    <B>Pass 1: Build global variant universe + cache</B><BR/>
-    For each VCF:<BR/>
-    • extract biallelic SNPs (CHROM:POS:REF:ALT)<BR/>
-    • apply filters (biallelic, SNP-only, DP≥min, ...)<BR/>
-    • assign integer column ID (optional)<BR/>
-    • cache per-sample present columns
+  cohort_merge [label=<
+    <B>Cohort merge (across samples)</B><BR ALIGN="LEFT"/>
+    • merge all per-sample call maps<BR ALIGN="LEFT"/>
+    • count carriers only when called ≠ ref<BR ALIGN="LEFT"/>
+    • (optional) enforce consistent ALT per site (biallelic-only)
+  >, fillcolor="#d9f0ff"];
+
+  presence [label=<
+    <B>Cohort presence filter</B><BR/>
+    keep site if carrier_count ≥ min_sample_presence
+  >, fillcolor="#d9f0ff", shape=diamond];
+
+  sort_sites [label="Sort retained sites\n(chrom, pos)", fillcolor="#d9f0ff"];
+
+  // ───────────────────────────────────────────────
+  //               BASELINE + ENCODING
+  // ───────────────────────────────────────────────
+  build_alleles [label=<
+    <B>Build allele strings</B><BR ALIGN="LEFT"/>
+    • ref_line = join REF bases (ordered sites)<BR ALIGN="LEFT"/>
+    • per sample: allele_string (called else REF)<BR ALIGN="LEFT"/>
+    • track per-position base counts (Counter)
   >, fillcolor="#d4f4dd"];
 
-  large_universe [label=<
-    <TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4">
-      <TR><TD ALIGN="LEFT"><B>Large universe warning</B></TD></TR>
-      <TR><TD ALIGN="LEFT">• &gt; 1×10⁶ variants → warning</TD></TR>
-      <TR><TD ALIGN="LEFT">• &gt; 2×10⁶ variants → strong warning</TD></TR>
-    </TABLE>
-  >, fillcolor="#ffcccc", shape=note];
+  baseline_choice [label=<
+    <B>Choose baseline</B><BR/>
+    ancestral_allele == 'Y' ? REF : MODE
+  >, fillcolor="#e0ffe0", shape=diamond];
 
-  lookup [label=<
-    <B>Optional: variant_lookup.csv</B><BR/>
-    integer_id → CHROM:POS:REF:ALT<BR/>
-    (when use_integer_variant_ids = true)
-  >, fillcolor="#e0ffe0", shape=note];
+  baseline_ref [label="Baseline = REF (ref_line)", fillcolor="#e0ffe0"];
+  baseline_mode [label="Baseline = MODE (majority base per site)", fillcolor="#e0ffe0"];
 
-  pass2 [label=<
-    <B>Pass 2: Populate matrix from cache</B><BR/>
-    • No second VCF read!<BR/>
-    • Build coordinate list (rows, cols, values=1)<BR/>
-    • Use sparse.csr_matrix if scipy available<BR/>
-    • Otherwise dense fallback (warn)
+  encode [label=<
+    <B>Binary encode</B><BR/>
+    0 = matches baseline<BR/>
+    1 = differs
+  >, fillcolor="#cce5ff"];
+
+  variant_ids [label=<
+    <B>Variant IDs</B><BR/>
+    CHROM:POS:REF:ALT
   >, fillcolor="#cce5ff"];
 
   // ───────────────────────────────────────────────
-  //               CLASSIC MERGE PATH (fallback)
-  // ───────────────────────────────────────────────
-  merge_path [label=<
-    <B>Classic: bcftools merge</B><BR/>
-    → merged.vcf.gz<BR/>
-    → multi-step filtering &amp; cleaning<BR/>
-    → streaming GT extraction
-  >, fillcolor="#f0e8ff", style=dashed];
-
-  // ───────────────────────────────────────────────
-  //               FINAL MATRIX (shared)
+  //               FINAL MATRIX
   // ───────────────────────────────────────────────
   final_matrix [label=<
     <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="5">
       <TR><TD COLSPAN="4"><B>Final ML-ready matrix</B></TD></TR>
       <TR><TD></TD><TD><B>var1</B></TD><TD><B>var2</B></TD><TD><B>varN</B></TD></TR>
-      <TR><TD><B>S1</B></TD><TD>1</TD><TD>0</TD><TD>NaN</TD></TR>
+      <TR><TD><B>S1</B></TD><TD>1</TD><TD>0</TD><TD>0</TD></TR>
       <TR><TD><B>S2</B></TD><TD>0</TD><TD>1</TD><TD>1</TD></TR>
       <TR><TD><B>...</B></TD><TD>...</TD><TD>...</TD><TD>...</TD></TR>
     </TABLE>
   >, fillcolor="#e0ffe0"];
 
+  preprocess [label=<
+    <B>Light preprocessing (DataLoader only)</B><BR ALIGN="LEFT"/>
+    • drop invariant cols (all 0 / all 1) [optional]<BR ALIGN="LEFT"/>
+    • min_minor_count filter [optional]<BR ALIGN="LEFT"/>
+    • optional compact IDs (v0, v1, …) + lookup
+  >, fillcolor="#f0e8ff"];
+
+  artifacts [label=<
+    <B>Optional artifacts (if output_dir)</B><BR ALIGN="LEFT"/>
+    • SNP table (minimal or annotated)<BR ALIGN="LEFT"/>
+    • alleles.fasta + binary.fasta<BR ALIGN="LEFT"/>
+    • filtered.tsv (+ optional context)<BR ALIGN="LEFT"/>
+    • matrices/* derivatives + config snapshot
+  >, fillcolor="#ffe6cc"];
+
   downstream [label=<
     <B>Downstream usage</B><BR/><BR/>
-    • Statistical validation<BR/>
-    • Decision tree / epistasis detection<BR/>
-    • GNN / network analysis
+    • Statistical validation (χ²/Fisher + FDR)<BR/>
+    • Decision tree + epistasis mining<BR/>
+    • GNN / network analysis outputs
   >, fillcolor="#f0f8ff"];
 
   // ─── Flow ──────────────────────────────────────────────
-  vcf_input   -> decision;
-  decision    -> pass1      [label="union mode\n(large cohort)"];
-  decision    -> merge_path [label="small/medium\nclassic merge", style=dashed];
+  vcf_input    -> parallel;
+  parallel     -> per_vcf [label="each sample VCF"];
+  gate_qc      -> cohort_merge [label="store calls\n(per sample)"];
 
-  pass1       -> large_universe [style=dotted, color=gray];
-  pass1       -> lookup         [style=dotted, color=gray, label="if enabled"];
-  pass1       -> pass2;
-
-  pass2       -> final_matrix;
-  merge_path  -> final_matrix   [style=dashed, color="#777777"];
-
-  final_matrix -> downstream;
+  cohort_merge -> presence;
+  presence     -> sort_sites [label="kept"];
+  sort_sites   -> build_alleles;
+  build_alleles -> baseline_choice;
+  baseline_choice -> baseline_ref [label="REF"];
+  baseline_choice -> baseline_mode [label="MODE"];
+  baseline_ref  -> encode;
+  baseline_mode -> encode;
+  encode       -> variant_ids -> final_matrix;
+  final_matrix -> preprocess -> artifacts [style=dashed, label="if output_dir"];
+  preprocess   -> downstream;
 
   // Layout hints
-  { rank=same; vcf_input; decision; }
-  { rank=same; pass1; large_universe; lookup; }
-  { rank=same; pass2; merge_path; }
+  { rank=same; vcf_input; }
+  { rank=same; parallel; }
+  { rank=same; per_vcf; }
+  { rank=same; cohort_merge; presence; }
+  { rank=same; build_alleles; baseline_choice; }
   { rank=same; final_matrix; }
 }

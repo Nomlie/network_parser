@@ -1,7 +1,0 @@
-2026-01-15 13:48:00,678 - INFO - Attempting to import run_networkparser_analysis and NetworkParserConfig
-2026-01-15 13:48:00,678 - INFO - Running cli.py from: /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/network_parser/cli.py
-2026-01-15 13:48:00,678 - INFO - Starting NetworkParser pipeline
-2026-01-15 13:48:00,678 - INFO - Genomic data: /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/data/polymorphic_genetic_loci.csv
-2026-01-15 13:48:00,678 - INFO - Label column: Labels
-2026-01-15 13:48:00,678 - INFO - Output directory: /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/results
-2026-01-15 13:48:00,678 - ERROR - Pipeline failed: name 'meta_path' is not defined

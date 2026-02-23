@@ -1,175 +1,718 @@
-# data_loader.py
 """
-NetworkParser — DataLoader
+network_parser.data_loader
 
-This module is responsible for one job only:
-    Input genomic data  →  sample × variant matrix (0/1)
+Build a **sample × variant** binary matrix (0/1) from per-sample VCF files.
 
-It does NOT do:
-    - statistical filtering (χ² / Fisher + FDR happens later)
-    - decision tree building (happens later)
-    - bootstrapping / confidence scoring (post-tree)
+Core responsibilities:
+  - Parse per-sample VCF/VCF.GZ files.
+  - Apply INFO/QUAL QC (QUAL/DP/MQ/MQ0F).
+  - Enforce a cohort-level presence threshold (minimum #samples with the SNP).
+  - Build an allelic matrix (REF + per-sample alleles) and a binary matrix (0/1)
+    using a configurable baseline:
+      * ancestral_allele='Y' → baseline = reference allele
+      * ancestral_allele='N' → baseline = cohort mode allele (most common base)
 
-Why this separation matters:
-    You want a clean, auditable conversion from genomic evidence → ML-ready matrix,
-    before any inference steps.
+Artifact responsibilities (when output_dir is provided):
+  - Write outputs matching the three legacy scripts:
+      vcf_counts/all_snp.txt
+      fasta/<generic>_alleles.fasta
+      fasta/<generic>_binary.fasta
+      fasta/<generic>_filtered.tsv      (+ optional Context_±40)
+      matrices/<generic>_alleles.tsv
+      matrices/<generic>_binary.tsv
+      matrices/<generic>_alleles.fasta
+      matrices/<generic>_binary.fasta
+      matrices/<generic>_filtered.tsv
+
+Non-responsibilities:
+  - Statistical validation (χ² / Fisher + FDR) must happen BEFORE tree construction
+  - Decision tree building
+  - Post-tree bootstrapping / confidence scoring
+
+Returned value:
+  - pandas.DataFrame: rows = samples, columns = variants, values ∈ {0,1}
 """
 
+from __future__ import annotations
+
+import csv
+import gzip
+import json
 import logging
-import os
-import subprocess
-import tempfile
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import Counter, OrderedDict, defaultdict
+from dataclasses import asdict
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
-
+from typing import Dict, List, Optional, Tuple
+from joblib import Parallel, delayed
 import pandas as pd
-
-# Optional: sparse matrices are a major win when the matrix is huge + sparse
-# (typical for variant presence/absence across many samples).
-try:
-    import numpy as np
-    from scipy import sparse
-except Exception:  # pragma: no cover
-    np = None
-    sparse = None
 
 logger = logging.getLogger(__name__)
 
+try:
+    from Bio import SeqIO
+    from Bio.Seq import Seq
+
+    HAVE_BIO = True
+except Exception:  # pragma: no cover
+    HAVE_BIO = False
+
+
+# ──────────────────────────────────────────────────────────────
+# Basic file + VCF parsing helpers
+# ──────────────────────────────────────────────────────────────
+
+
+def open_any(path: Path):
+    """Open plain-text or gzipped text files in read-text mode."""
+    p = str(path)
+    return gzip.open(p, "rt") if p.endswith(".gz") else open(p, "r", encoding="utf-8", errors="replace")
+
+
+def parse_info_field(info_str: str) -> Dict[str, str]:
+    """Parse the VCF INFO column into a dictionary of string values."""
+    info: Dict[str, str] = {}
+    if not info_str:
+        return info
+    for token in info_str.split(";"):
+        if "=" in token:
+            k, v = token.split("=", 1)
+            info[k] = v
+    return info
+
+
+def is_snp_like(ref: str, alt_field: str, biallelic_only: bool = True) -> bool:
+    """Return True if the record looks like a SNP (single-base REF and ALT(s))."""
+    if not ref or not alt_field:
+        return False
+    if ref == "." or alt_field == ".":
+        return False
+    alts = alt_field.split(",")
+    if biallelic_only and len(alts) != 1:
+        return False
+    if len(ref) != 1:
+        return False
+    if any(len(a) != 1 for a in alts):
+        return False
+    return True
+
+
+def passes_info_qc(
+    qual_str: str,
+    info: Dict[str, str],
+    qual_thresh: float,
+    dp_thresh: int,
+    mq_thresh: float,
+    mq0f_thresh: float,
+) -> bool:
+    """Apply INFO/QUAL filters (QUAL, DP, MQ, MQ0F)."""
+    try:
+        qual = float(qual_str) if qual_str != "." else 0.0
+    except Exception:
+        qual = 0.0
+    if qual < qual_thresh:
+        return False
+
+    # DP can appear as float depending on caller; cast defensively
+    try:
+        dp = int(float(info.get("DP", "0")))
+    except Exception:
+        dp = 0
+    try:
+        mq = float(info.get("MQ", "0"))
+    except Exception:
+        mq = 0.0
+    try:
+        mq0f = float(info.get("MQ0F", "0"))
+    except Exception:
+        mq0f = 0.0
+
+    if dp < dp_thresh:
+        return False
+    if mq < mq_thresh:
+        return False
+    if mq0f > mq0f_thresh:
+        return False
+    return True
+
+
+def choose_called_allele(ref: str, alts: List[str], fmt: Optional[str], sample_field: Optional[str]) -> str:
+    """Determine the allele for a sample at a site.
+
+    Strategy:
+      - If FORMAT/sample fields exist and include GT, interpret GT:
+          * if any allele index > 0 appears → use that ALT (1→ALT0, 2→ALT1, ...)
+          * else (0/0 or missing) → REF
+      - If no GT is available → assume ALT[0] for presence-based calls
+    """
+    if not fmt or not sample_field:
+        return alts[0] if alts else ref
+
+    fmt_keys = fmt.split(":")
+    smp_vals = sample_field.split(":")
+    fmt_map = {k: v for k, v in zip(fmt_keys, smp_vals)}
+    gt = fmt_map.get("GT", "")
+
+    if not gt:
+        return alts[0] if alts else ref
+
+    sep = "/" if "/" in gt else ("|" if "|" in gt else None)
+    tokens = gt.split(sep) if sep else [gt]
+
+    allele_idx: Optional[int] = None
+    for tok in tokens:
+        tok = tok.strip()
+        if tok in (".", ""):
+            continue
+        try:
+            idx = int(tok)
+        except ValueError:
+            continue
+        if idx > 0:
+            allele_idx = idx
+            break
+
+    if allele_idx is None:
+        return ref
+
+    if 1 <= allele_idx <= len(alts):
+        return alts[allele_idx - 1]
+    return alts[0] if alts else ref
+
+
+def iter_sample_calls(
+    vcf_path: Path,
+    qual_thresh: float,
+    dp_thresh: int,
+    mq_thresh: float,
+    mq0f_thresh: float,
+    biallelic_only: bool = True,
+) -> Dict[Tuple[str, int], Tuple[str, str]]:
+    """Extract per-sample SNP calls after QC.
+
+    Returns:
+      dict keyed by (chrom, pos) -> (ref_base, called_base)
+    """
+    calls: Dict[Tuple[str, int], Tuple[str, str]] = {}
+    with open_any(vcf_path) as f:
+        for line in f:
+            if not line or line.startswith("#"):
+                continue
+
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) < 8:
+                continue
+
+            chrom = parts[0]
+            try:
+                pos = int(parts[1])
+            except Exception:
+                continue
+
+            ref = parts[3].upper()
+            alt_field = parts[4].upper()
+
+            if not is_snp_like(ref, alt_field, biallelic_only=biallelic_only):
+                continue
+
+            info = parse_info_field(parts[7])
+            if not passes_info_qc(parts[5], info, qual_thresh, dp_thresh, mq_thresh, mq0f_thresh):
+                continue
+
+            alts = [a.strip().upper() for a in alt_field.split(",") if a.strip()]
+            fmt = parts[8] if len(parts) >= 9 else None
+            sample_field = parts[9] if len(parts) >= 10 else None
+
+            called = choose_called_allele(ref, alts, fmt, sample_field).upper()
+            if len(called) != 1:
+                continue
+
+            calls[(chrom, pos)] = (ref, called)
+
+    return calls
+
+
+# ──────────────────────────────────────────────────────────────
+# Reference + context helpers (used for filtered TSV context column)
+# ──────────────────────────────────────────────────────────────
+
+
+def load_reference_sequence(ref_path: Path) -> Optional[str]:
+    """Load reference sequence from FASTA or GenBank.
+
+    If multiple records exist, sequences are concatenated in file order.
+    Requires Biopython.
+    """
+    if not ref_path.exists():
+        return None
+    if not HAVE_BIO:
+        raise RuntimeError("Biopython is required for reference sequence loading but is not available.")
+
+    lower = ref_path.name.lower()
+    fmt = "fasta" if lower.endswith((".fa", ".fna", ".fasta", ".fas")) else None
+    if lower.endswith((".gb", ".gbk", ".gbff")):
+        fmt = "genbank"
+
+    seqs: List[str] = []
+    if fmt:
+        for rec in SeqIO.parse(str(ref_path), fmt):
+            seqs.append(str(rec.seq).upper())
+    else:
+        # Try FASTA then GenBank
+        try:
+            for rec in SeqIO.parse(str(ref_path), "fasta"):
+                seqs.append(str(rec.seq).upper())
+        except Exception:
+            seqs = []
+        if not seqs:
+            for rec in SeqIO.parse(str(ref_path), "genbank"):
+                seqs.append(str(rec.seq).upper())
+
+    if not seqs:
+        return None
+    return "".join(seqs).upper()
+
+
+def context_around(pos_1based: int, genome: str, flank: int = 40) -> str:
+    """Extract circular ±flank context around a 1-based position."""
+    n = len(genome)
+    if n == 0:
+        return ""
+    i = (pos_1based - 1) % n
+    out = []
+    for off in range(-flank, flank + 1):
+        out.append(genome[(i + off) % n])
+    return "".join(out)
+
+
+# ──────────────────────────────────────────────────────────────
+# Optional GenBank annotation table (all_snp.txt with annotation columns)
+# ──────────────────────────────────────────────────────────────
+
+
+def annotate_snps_genbank(
+    snp_details: Dict[Tuple[str, int], Tuple[int, str, str]],
+    ref_gbk_path: Path,
+) -> List[Dict[str, str]]:
+    """Annotate SNPs using a GenBank reference sequence.
+
+    Input:
+      snp_details: (chrom,pos) -> (count, ref_nt, alt_nt)
+
+    Output:
+      list of row dicts with columns used by the annotation table.
+    """
+    if not HAVE_BIO:
+        raise RuntimeError("Biopython is required for GenBank annotation but is not available.")
+
+    record = SeqIO.read(str(ref_gbk_path), "genbank")
+    sequence = record.seq
+    features = [f for f in record.features if f.type == "CDS"]
+
+    rows: List[Dict[str, str]] = []
+
+    for (chrom, pos) in sorted(snp_details.keys(), key=lambda x: (x[0], x[1])):
+        count, ref_nt, alt_nt = snp_details[(chrom, pos)]
+        pos0 = pos - 1
+        coding_found = False
+
+        closest = None
+        min_dist = float("inf")
+
+        for feature in features:
+            start = int(feature.location.start)
+            end = int(feature.location.end)
+            strand = feature.location.strand
+            locus_tag = feature.qualifiers.get("locus_tag", ["."])[0]
+            gene = feature.qualifiers.get("gene", ["."])[0]
+            product = feature.qualifiers.get("product", ["."])[0]
+            label = f"{'+' if strand == 1 else '-'}{locus_tag} | {gene} | {product} | [{start+1}..{end}]"
+
+            if start <= pos0 < end:
+                coding_found = True
+                rel_pos = (pos0 - start) if strand == 1 else (end - pos0 - 1)
+                codon_number = rel_pos // 3 + 1
+
+                if strand == 1:
+                    codon_start = start + (rel_pos // 3) * 3
+                    codon_seq = sequence[codon_start : codon_start + 3]
+                else:
+                    codon_start = end - ((rel_pos // 3 + 1) * 3)
+                    codon_seq = sequence[codon_start : codon_start + 3].reverse_complement()
+
+                ref_codon = str(codon_seq).upper()
+                snp_pos_in_codon = rel_pos % 3
+                codon_list = list(ref_codon)
+                codon_list[snp_pos_in_codon] = alt_nt.upper()
+                mut_codon = "".join(codon_list)
+
+                ref_aa = str(Seq(ref_codon).translate())
+                alt_aa = str(Seq(mut_codon).translate())
+
+                rows.append(
+                    {
+                        "Position": str(pos),
+                        "Count": str(count),
+                        "Sequence": chrom,
+                        "Region_type": "coding",
+                        "Relative_pos": str(rel_pos + 1),
+                        "Codon_number": str(codon_number),
+                        "Nucleotide_change": f"{ref_nt}|{alt_nt}",
+                        "Amino_acid_change": f"{ref_aa}|{alt_aa}",
+                        "Gene_annotation": label,
+                    }
+                )
+                break
+
+            dist = min(abs(pos0 - start), abs(pos0 - end))
+            if dist < min_dist:
+                min_dist = dist
+                closest = (start, strand, locus_tag, gene, product)
+
+        if not coding_found:
+            if closest is not None:
+                start, strand, locus_tag, gene, product = closest
+                label = f"{'+' if strand == 1 else '-'}{locus_tag} | {gene} | {product} | [{start+1}..{start+1}]"
+                rel = -int(min_dist) if min_dist != float("inf") else -1
+            else:
+                label = ". | . | . | [.]"
+                rel = -1
+
+            rows.append(
+                {
+                    "Position": str(pos),
+                    "Count": str(count),
+                    "Sequence": chrom,
+                    "Region_type": "non-coding",
+                    "Relative_pos": str(rel),
+                    "Codon_number": "0",
+                    "Nucleotide_change": f"{ref_nt}|{alt_nt}",
+                    "Amino_acid_change": "NA",
+                    "Gene_annotation": label,
+                }
+            )
+
+    return rows
+
+
+# ──────────────────────────────────────────────────────────────
+# FASTA matrix I/O (for allele/binary matrices)
+# ──────────────────────────────────────────────────────────────
+
+
+def write_fasta_matrix(path: Path, ref_seq: str, sample_map: Dict[str, str], ref_name: str = "REF") -> None:
+    """Write a REF + sample sequences FASTA that represents a column-aligned matrix."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as out:
+        out.write(f">{ref_name}\n{ref_seq}\n")
+        for name in sorted(sample_map):
+            out.write(f">{name}\n{sample_map[name]}\n")
+
+
+def read_fasta_matrix(path: Path) -> OrderedDict:
+    """Read a FASTA matrix into an OrderedDict[name] -> list(chars)."""
+    records: OrderedDict = OrderedDict()
+    with open(path, "r", encoding="utf-8") as f:
+        name = None
+        seq_chunks: List[str] = []
+        for line in f:
+            line = line.rstrip("\n")
+            if not line:
+                continue
+            if line.startswith(">"):
+                if name is not None:
+                    records[name] = list("".join(seq_chunks))
+                name = line[1:].strip()
+                seq_chunks = []
+            else:
+                seq_chunks.append(line.strip())
+        if name is not None:
+            records[name] = list("".join(seq_chunks))
+
+    if not records:
+        raise ValueError(f"FASTA file appears empty: {path}")
+
+    lengths = {len(v) for v in records.values()}
+    if len(lengths) != 1:
+        raise ValueError(f"Sequences in {path} have different lengths: {sorted(lengths)}")
+
+    return records
+
+
+def write_fasta_matrix_wrapped(path: Path, matrix: OrderedDict, line_width: int = 80) -> None:
+    """Write FASTA from OrderedDict[name]->list(chars) with wrapping."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as out:
+        for gid, chars in matrix.items():
+            out.write(f">{gid}\n")
+            seq = "".join(chars)
+            for i in range(0, len(seq), line_width):
+                out.write(seq[i : i + line_width] + "\n")
+
+
+# ──────────────────────────────────────────────────────────────
+# Matrix conversion + filtering utilities (for matrices/* outputs)
+# ──────────────────────────────────────────────────────────────
+
+
+def transpose_rows_to_columns(matrix: OrderedDict) -> Tuple[List[str], List[List[str]]]:
+    """Convert row-oriented FASTA matrix to a column list for per-marker filtering."""
+    genomes = list(matrix.keys())
+    if not genomes:
+        raise ValueError("Empty FASTA matrix.")
+    row_len = len(next(iter(matrix.values())))
+    cols = [[] for _ in range(row_len)]
+    for gid in genomes:
+        row = matrix[gid]
+        if len(row) != row_len:
+            raise ValueError("Row lengths differ in FASTA matrix.")
+        for j, ch in enumerate(row):
+            cols[j].append(ch)
+    return genomes, cols
+
+
+def minor_count_filter(binary_cols: List[List[str]], min_count: int) -> List[bool]:
+    """Keep column j only if min(count_0, count_1) >= min_count."""
+    keep: List[bool] = []
+    for col in binary_cols:
+        c0 = sum(1 for x in col if x == "0")
+        c1 = sum(1 for x in col if x == "1")
+        keep.append(min(c0, c1) >= min_count)
+    return keep
+
+
+def type_filter(annotation_rows: List[Dict[str, str]], typ: str) -> List[bool]:
+    """Filter mask by annotation type: all | coding | sense-mutations."""
+    if typ == "all":
+        return [True] * len(annotation_rows)
+
+    def is_coding(r: Dict[str, str]) -> bool:
+        return (r.get("Region_type", "") or "").strip().lower() == "coding"
+
+    def aa_changed(r: Dict[str, str]) -> bool:
+        field = (r.get("Amino_acid_change", "") or "").strip()
+        if "|" in field:
+            left, right = [x.strip() for x in field.split("|", 1)]
+            if left and right and left != "-" and right != "-":
+                return left != right
+        return False
+
+    if typ == "coding":
+        return [is_coding(r) for r in annotation_rows]
+    if typ == "sense-mutations":
+        return [is_coding(r) and aa_changed(r) for r in annotation_rows]
+    raise ValueError(f"Unknown type filter: {typ}")
+
+
+def combine_masks(*masks: List[bool]) -> List[bool]:
+    """Combine same-length boolean masks via AND."""
+    if not masks:
+        return []
+    mlen = len(masks[0])
+    for m in masks:
+        if len(m) != mlen:
+            raise ValueError("Mask lengths differ.")
+    return [all(m[i] for m in masks) for i in range(mlen)]
+
+
+def even_pick_indices(sorted_indices: List[int], k: int) -> List[int]:
+    """Pick k indices spaced across the sorted list."""
+    n = len(sorted_indices)
+    if k == 0 or k >= n:
+        return sorted_indices[:]
+    if k == 1:
+        return [sorted_indices[n // 2]]
+    chosen = set()
+    for i in range(k):
+        pos = round(i * (n - 1) / (k - 1))
+        chosen.add(pos)
+    return [sorted_indices[i] for i in sorted(chosen)]
+
+
+def group_and_reduce_by_pattern(
+    binary_cols: List[List[str]],
+    annotation_rows: List[Dict[str, str]],
+    repeat_number: int,
+) -> List[bool]:
+    """Group identical 0/1 patterns and keep up to repeat_number columns per pattern."""
+    groups: Dict[Tuple[str, ...], List[int]] = defaultdict(list)
+    for j, col in enumerate(binary_cols):
+        groups[tuple(col)].append(j)
+
+    positions: List[Optional[int]] = []
+    for r in annotation_rows:
+        pos_raw = (r.get("Position", "") or "").strip()
+        try:
+            positions.append(int(pos_raw))
+        except ValueError:
+            try:
+                positions.append(int(float(pos_raw)))
+            except Exception:
+                positions.append(None)
+
+    keep = [False] * len(binary_cols)
+    for cols in groups.values():
+        cols_sorted = sorted(
+            cols,
+            key=lambda idx: (positions[idx] is None, positions[idx] if positions[idx] is not None else idx),
+        )
+        picked = even_pick_indices(cols_sorted, repeat_number)
+        for idx in picked:
+            keep[idx] = True
+    return keep
+
+
+def parse_fix_positions(fix_arg: str, total_cols: int) -> Tuple[List[int], List[str]]:
+    """Parse comma/space-separated 1-based positions; return (0-based indices, warnings)."""
+    if not fix_arg:
+        return [], []
+    raw = fix_arg.replace(",", " ").split()
+    vals: List[int] = []
+    warnings: List[str] = []
+    seen = set()
+    for token in raw:
+        try:
+            v = int(token)
+        except ValueError:
+            warnings.append(f"Ignored non-integer token in --fix: '{token}'")
+            continue
+        if v <= 0:
+            warnings.append(f"Ignored non-positive position in --fix: {v}")
+            continue
+        if v > total_cols:
+            warnings.append(f"Ignored out-of-range position in --fix: {v} (max {total_cols})")
+            continue
+        if v in seen:
+            continue
+        seen.add(v)
+        vals.append(v - 1)
+    vals.sort()
+    return vals, warnings
+
+
+def apply_mask_to_char_rows(matrix: OrderedDict, mask: List[bool]) -> OrderedDict:
+    """Apply a column mask to every sequence row in a FASTA matrix."""
+    out = OrderedDict()
+    for gid, chars in matrix.items():
+        out[gid] = [ch for ch, k in zip(chars, mask) if k]
+    return out
+
+
+def read_annotation_tsv(path: Path) -> Tuple[List[Dict[str, str]], List[str]]:
+    """Read a tab-separated annotation TSV into rows + header (robust encodings)."""
+    encodings_to_try = ["utf-8", "utf-8-sig", "cp1251", "cp1252", "latin-1"]
+    last_error = None
+    rows: List[Dict[str, str]] = []
+    header: List[str] = []
+
+    for enc in encodings_to_try:
+        try:
+            with open(path, "r", encoding=enc, newline="") as f:
+                reader = csv.DictReader(f, delimiter="\t")
+                header = reader.fieldnames or []
+                rows = list(reader)
+            break
+        except UnicodeDecodeError as e:
+            last_error = e
+            continue
+
+    if not rows and last_error is not None:
+        raise UnicodeError(f"Failed to decode annotation file {path}. Last error: {last_error}")
+
+    return rows, header
+
+
+def write_annotation_tsv(path: Path, rows: List[Dict[str, str]], header: List[str]) -> None:
+    """Write annotation TSV in a fixed header order."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="") as out:
+        writer = csv.DictWriter(out, fieldnames=header, delimiter="\t", lineterminator="\n")
+        writer.writeheader()
+        for r in rows:
+            writer.writerow(r)
+
+
+def write_matrix_tsv(path: Path, genomes: List[str], positions: List[str], data_cols: List[List[str]]) -> None:
+    """Write a matrix TSV: Genome + positions header, one row per genome."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="") as out:
+        writer = csv.writer(out, delimiter="\t", lineterminator="\n")
+        writer.writerow(["Genome"] + positions)
+        for i, gid in enumerate(genomes):
+            row = [gid] + [col[i] for col in data_cols]
+            writer.writerow(row)
+
+
+# ──────────────────────────────────────────────────────────────
+# DataLoader
+# ──────────────────────────────────────────────────────────────
+
 
 class DataLoader:
-    """
-    Produces a sample × variant matrix from:
-        - a folder of single-sample VCFs  (.vcf.gz)
-        - a single VCF                  (.vcf / .vcf.gz)
-        - a prebuilt matrix             (.csv / .tsv)
+    """Build a clean binary feature matrix from per-sample VCFs."""
 
-Core outputs:
-    - genomic_matrix.csv  (rows=samples, columns=variants, values ∈ {0,1} or sparse)
+    def __init__(self, config=None, n_jobs: Optional[int] = None):
+        self.config = config
+        self.n_jobs = n_jobs
 
-Folder-of-VCFs behavior is controlled by NetworkParserConfig:
-    - force_union_matrix (bool): always use union-of-sites mode for directories
-    - union_matrix_threshold (int): automatically use union-of-sites if >= this many VCFs
-    - union_dp_min (int): conservative FORMAT/DP gating in union mode
-    - use_integer_variant_ids (bool): use integer column IDs + save lookup table
-    """
-
-    def __init__(
-        self,
-        use_bcftools: bool = True,
-        temp_dir: Optional[str] = None,
-        n_jobs: Optional[int] = None,
-        config=None,
-    ):
-        # Whether we try to use bcftools/tabix workflow
-        self.use_bcftools = use_bcftools
-
-        # Temp workspace (used for intermediate outputs / folder workflows)
-        self.temp_dir = Path(temp_dir or tempfile.mkdtemp(prefix="networkparser_"))
-        self.temp_dir.mkdir(exist_ok=True)
-
-        # Parallelism for I/O-heavy subprocess steps (tabix indexing mainly)
-        cpu = os.cpu_count() or 1
-        self.n_jobs = int(n_jobs) if (n_jobs is not None and int(n_jobs) > 0) else max(1, cpu - 1)
-
-        # Folder union-matrix mode settings (wired via NetworkParserConfig)
-        self.force_union_matrix = getattr(config, "force_union_matrix", False) if config else False
-        self.union_matrix_threshold = int(getattr(config, "union_matrix_threshold", 200)) if config else 200
-        self.union_dp_min = int(getattr(config, "union_dp_min", 10)) if config else 10
-
-        # Optional: avoid huge string column headers by using integer IDs + saving a lookup table
-        self.use_integer_variant_ids = getattr(config, "use_integer_variant_ids", False) if config else False
-
-        # Optional: if config provides genotype/variant QC thresholds for single-VCF pipeline
+        # INFO-level site QC thresholds
         self.qual_threshold = float(getattr(config, "qual_threshold", 30.0)) if config else 30.0
-        self.min_dp_per_sample = int(getattr(config, "min_dp_per_sample", 10)) if config else 10
-        self.min_gq_per_sample = int(getattr(config, "min_gq_per_sample", 20)) if config else 20
-        self.min_spacing_bp = int(getattr(config, "min_spacing_bp", 10)) if config else 10
+        self.dp_threshold = int(getattr(config, "min_dp_per_sample", 10)) if config else 10
+        self.mq_threshold = float(getattr(config, "mq_threshold", 40.0)) if config else 40.0
+        self.mq0f_threshold = float(getattr(config, "mq0f_threshold", 0.1)) if config else 0.1
 
-        self._check_bcftools()
+        # Cohort-level presence threshold (minimum number of samples that must contain the SNP)
+        self.min_sample_presence = int(getattr(config, "min_sample_presence", 3)) if config else 3
 
-    # -------------------------------------------------------------------------
-    # 1) External tool availability checks
-    # -------------------------------------------------------------------------
-    def _check_bcftools(self) -> None:
-        """
-        Purpose:
-            Confirm bcftools/tabix are available.
-        Why:
-            - Folder-of-VCFs workflows depend on bcftools query + tabix indexing.
-            - Single-VCF pipeline uses bcftools for filtering steps.
-        """
-        try:
-            subprocess.run(["bcftools", "--version"], check=True, capture_output=True)
-            subprocess.run(["tabix", "--version"], check=True, capture_output=True)
-            logger.info("✅ bcftools + tabix detected - VCF workflows enabled")
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            logger.warning("⚠️ bcftools/tabix not found - VCF parsing will be limited")
-            self.use_bcftools = False
+        # Binary baseline strategy: 'Y' (reference) or 'N' (cohort mode)
+        self.ancestral_allele = str(getattr(config, "ancestral_allele", "Y")) if config else "Y"
 
-    # -------------------------------------------------------------------------
-    # 2) Public entrypoint: load genomic matrix
-    # -------------------------------------------------------------------------
+        # Variant scope
+        self.biallelic_only = bool(getattr(config, "biallelic_only", True)) if config else True
+
+        # DataLoader lightweight preprocessing (kept separate from statistical validation)
+        self.remove_invariant = bool(getattr(config, "remove_invariant", True)) if config else True
+        self.min_minor_count = int(getattr(config, "min_minor_count", 0)) if config else 0
+
+        # Output naming (kept consistent across artifacts)
+        self.generic_name = str(getattr(config, "generic_name", "matrix")) if config else "matrix"
+
+        # Fasta2matrices-style filter knobs for matrices/* outputs
+        self.matrices_min_count = int(getattr(config, "matrices_min_count", 3)) if config else 3
+        self.matrices_repeat_number = int(getattr(config, "matrices_repeat_number", 5)) if config else 5
+        self.matrices_type = str(getattr(config, "matrices_type", "all")) if config else "all"
+        self.matrices_fix = str(getattr(config, "matrices_fix", "")) if config else ""
+
+        # Optional: shrink column names in returned DataFrame (not affecting artifacts)
+        self.use_integer_variant_ids = bool(getattr(config, "use_integer_variant_ids", False)) if config else False
+
     def load_genomic_matrix(
         self,
         file_path: str,
         output_dir: Optional[str] = None,
-        regions: Optional[str] = None,
         ref_fasta: Optional[str] = None,
-        label_column: Optional[str] = None,  # kept for compatibility; not used here
+        label_column: Optional[str] = None,
     ) -> pd.DataFrame:
-        """
-        Purpose:
-            Route input to the correct loader based on path type / suffix.
-
-        Inputs:
-            - Directory: treated as folder-of-VCFs
-            - .vcf / .vcf.gz: single VCF workflow
-            - .csv / .tsv: already-built matrix
-            - .fa/.fasta: (not implemented in this version)
-
-        Output:
-            - DataFrame indexed by sample ID
-            - Columns are variant IDs (string CHROM:POS:REF:ALT OR integer IDs)
-        """
+        """Load genomic features from a VCF directory or a prebuilt matrix file."""
+        _ = label_column
         path = Path(file_path)
-        logger.info(f"Loading genomic data from: {path}")
+        if not path.exists():
+            raise FileNotFoundError(f"Genomic input not found: {path}")
 
         if path.is_dir():
-            return self._load_vcf_folder(path, output_dir=output_dir, ref_fasta=ref_fasta)
+            return self._load_vcf_directory(path, output_dir=output_dir, ref_path=ref_fasta)
 
         suffix = "".join(path.suffixes).lower()
-        if suffix.endswith(".vcf") or suffix.endswith(".vcf.gz"):
-            if not self.use_bcftools:
-                raise RuntimeError("bcftools/tabix required for VCF input in this build.")
-            return self._vcf_bcftools_pipeline(
-                vcf_path=path,
-                output_dir=output_dir or str(self.temp_dir),
-                ref_fasta=ref_fasta,
-            )
+        if suffix.endswith((".csv", ".tsv", ".tab")):
+            return self._load_matrix_file(path)
 
-        if suffix.endswith(".csv") or suffix.endswith(".tsv"):
-            return self._load_csv_matrix(path)
+        raise ValueError(
+            "This DataLoader expects either a directory of per-sample VCF/VCF.GZ files "
+            "or a prebuilt matrix (.csv/.tsv). "
+            f"Got: {path}"
+        )
 
-        if suffix.endswith(".fa") or suffix.endswith(".fasta"):
-            return self._fasta_to_matrix(path)
-
-        raise ValueError(f"Unsupported genomic input: {path}")
-     # -------------------------------------------------------------------------
-    # 2b) Public helpers: metadata + known markers
-    # -------------------------------------------------------------------------
     def load_metadata(self, meta_path: str, output_dir: Optional[str] = None) -> pd.DataFrame:
-        """
-        Load sample metadata table.
-
-        Expected:
-            - CSV/TSV with at least one column that identifies samples.
-            - If a column named 'Sample' exists, we use it as the index.
-            - Otherwise we assume the FIRST column is the sample identifier.
-
-        Output:
-            - DataFrame indexed by sample ID (string)
-        """
+        """Load a metadata table and index it by sample identifier."""
         path = Path(meta_path)
         if not path.exists():
             raise FileNotFoundError(f"Metadata file not found: {path}")
@@ -185,777 +728,536 @@ Folder-of-VCFs behavior is controlled by NetworkParserConfig:
         df = df.set_index(idx_col, drop=True)
         df.index.name = "Sample"
 
-        # Save a normalized copy for reproducibility/debugging
         if output_dir:
             outdir = Path(output_dir)
             outdir.mkdir(parents=True, exist_ok=True)
-            out_path = outdir / "metadata.normalized.csv"
-            df.to_csv(out_path)
-            logger.info(f"Saved normalized metadata copy: {out_path}")
+            df.to_csv(outdir / "metadata.normalized.csv")
 
         return df
 
     def load_known_markers(self, known_markers_path: str, output_dir: Optional[str] = None) -> List[str]:
-        """
-        Load a list of known markers/features to prioritize or annotate.
-
-        Supported inputs:
-            - .txt : one marker per line (comments allowed with '#')
-            - .csv/.tsv : expects a column named 'marker' or uses the first column
-
-        Returns:
-            - list of unique marker strings (order preserved)
-        """
+        """Load a list of marker identifiers from a .txt or .csv/.tsv file."""
         path = Path(known_markers_path)
         if not path.exists():
+            logger.error("Known markers file not found: %s", path)
             raise FileNotFoundError(f"Known markers file not found: {path}")
 
+        logger.info("Loading known markers from: %s", path)
+
         suffix = "".join(path.suffixes).lower()
-
         markers: List[str] = []
-        if suffix.endswith(".txt"):
-            with open(path, "r", encoding="utf-8") as fh:
-                for line in fh:
-                    m = line.strip()
-                    if m and not m.startswith("#"):
-                        markers.append(m)
 
-        elif suffix.endswith(".csv") or suffix.endswith(".tsv") or suffix.endswith(".tab"):
-            sep = "\t" if (suffix.endswith(".tsv") or suffix.endswith(".tab")) else ","
+        if suffix.endswith(".txt"):
+            logger.info("Detected plain text file (.txt) – reading line by line")
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    markers.append(line)
+
+        elif suffix.endswith((".csv", ".tsv", ".tab")):
+            sep = "\t" if suffix.endswith((".tsv", ".tab")) else ","
+            logger.info("Detected tabular file (%s) – reading from first column or 'marker' column", suffix)
             df = pd.read_csv(path, sep=sep)
-            if not df.empty:
-                col = "marker" if "marker" in df.columns else df.columns[0]
-                markers = [str(x).strip() for x in df[col].tolist() if str(x).strip()]
+            col = "marker" if "marker" in df.columns else df.columns[0]
+            markers = [str(x).strip() for x in df[col].tolist() if str(x).strip()]
 
         else:
-            raise ValueError(f"Unsupported known markers format: {path}")
+            logger.error("Unsupported known markers file format: %s", suffix)
+            raise ValueError(f"Unsupported known markers file type: {path}")
 
-        # de-duplicate while preserving order
-        seen: Set[str] = set()
-        uniq: List[str] = []
+        # Deduplicate while preserving order
+        seen = set()
+        uniq_markers: List[str] = []
         for m in markers:
             if m not in seen:
+                uniq_markers.append(m)
                 seen.add(m)
-                uniq.append(m)
+
+        removed = len(markers) - len(uniq_markers)
+        if removed > 0:
+            logger.info("Removed %d duplicate markers (total unique: %d)", removed, len(uniq_markers))
+        else:
+            logger.info("Loaded %d unique markers (no duplicates found)", len(uniq_markers))
 
         if output_dir:
             outdir = Path(output_dir)
             outdir.mkdir(parents=True, exist_ok=True)
             out_path = outdir / "known_markers.normalized.txt"
-            with open(out_path, "w", encoding="utf-8") as fh:
-                fh.write("\n".join(uniq) + ("\n" if uniq else ""))
-            logger.info(f"Saved normalized known markers copy: {out_path}")
+            with open(out_path, "w", encoding="utf-8") as f:
+                for m in uniq_markers:
+                    f.write(m + "\n")
+            logger.info("Saved normalized known markers list to: %s", out_path)
 
-        return uniq
+        return uniq_markers
 
-    # -------------------------------------------------------------------------
-    # 3) CSV/TSV matrix load
-    # -------------------------------------------------------------------------
-    def _load_csv_matrix(self, path: Path) -> pd.DataFrame:
-        """
-        Purpose:
-            Load a pre-built sample × variant matrix.
+    # ──────────────────────────────────────────────────────────
+    # VCF directory → allele + binary matrices → returned DataFrame
+    # ──────────────────────────────────────────────────────────
 
-        Assumptions:
-            - First column is sample ID index
-            - Remaining columns are variant features (already encoded)
-        """
-        sep = "\t" if path.suffix.lower() == ".tsv" else ","
-        df = pd.read_csv(path, sep=sep, index_col=0)
-        df.index = df.index.astype(str)
-        return df
-
-    def _fasta_to_matrix(self, path: Path) -> pd.DataFrame:
-        """
-        Placeholder.
-        FASTA→matrix is intentionally not provided in this stripped build because it can
-        encourage mixing alignment/variant-calling with ML encoding in one step.
-        """
-        raise NotImplementedError("FASTA → matrix not implemented in this version.")
-
-    # -------------------------------------------------------------------------
-    # 4) Tabix indexing helpers (parallel-safe)
-    # -------------------------------------------------------------------------
-    @staticmethod
-    def _tbi_path(vcf_gz: Path) -> Path:
-        """
-        Purpose:
-            Standard tabix index name for bgzip VCF.
-        """
-        return vcf_gz.with_name(vcf_gz.name + ".tbi")
-
-    @staticmethod
-    def _needs_reindex(vcf_gz: Path) -> bool:
-        """
-        Purpose:
-            Only index if missing or outdated (VCF newer than .tbi).
-        """
-        tbi = DataLoader._tbi_path(vcf_gz)
-        if not tbi.exists():
-            return True
-        return tbi.stat().st_mtime < vcf_gz.stat().st_mtime
-
-    @staticmethod
-    def _run_tabix_index(vcf_gz: Path) -> None:
-        """
-        Purpose:
-            Create/overwrite the tabix index.
-        Why force (-f):
-            Deterministic end state even if partial index exists.
-        """
-        subprocess.run(["tabix", "-f", "-p", "vcf", str(vcf_gz)], check=True)
-
-    def _index_vcfs_parallel(self, vcf_paths: List[Path]) -> None:
-        """
-        Purpose:
-            Index many VCF.gz files efficiently.
-
-        Safety:
-            - Uses threads because the heavy work is external (tabix subprocess),
-              and thread scheduling won’t change output (index depends only on file).
-        """
-        to_index = [p for p in vcf_paths if self._needs_reindex(p)]
-        if not to_index:
-            return
-
-        logger.info(f"Indexing {len(to_index)} VCFs with tabix (n_jobs={self.n_jobs}) ...")
-        max_workers = min(self.n_jobs, len(to_index))
-
-        with ThreadPoolExecutor(max_workers=max_workers) as ex:
-            futures = {ex.submit(self._run_tabix_index, p): p for p in to_index}
-            for fut in as_completed(futures):
-                p = futures[fut]
-                try:
-                    fut.result()
-                except Exception as e:
-                    raise RuntimeError(f"Failed to tabix-index: {p}") from e
-
-    # -------------------------------------------------------------------------
-    # 5) Folder-of-VCFs handling
-    # -------------------------------------------------------------------------
-    def _load_vcf_folder(
-        self,
-        folder_path: Path,
-        output_dir: Optional[str] = None,
-        ref_fasta: Optional[str] = None,
-    ) -> pd.DataFrame:
-        """
-        Purpose:
-            Turn a folder of single-sample VCFs into one cohort matrix.
-
-        Two modes:
-        (A) UNION-OF-SITES MATRIX  (recommended for large collections, ALT-only VCF lists)
-            - Build the global feature space as the union of all biallelic SNP sites across samples.
-            - Encode per sample:
-                  present in sample VCF => 1
-                  absent from sample VCF => 0 (implicit reference)
-            - Avoids bcftools merge (which becomes extremely heavy at large N).
-
-        (B) MERGE-THEN-PARSE  (reasonable for small collections / true multi-sample consolidation)
-            - bcftools merge → multi-sample VCF
-            - then run the standard single-VCF pipeline on the merged file
-
-        """
-        if not self.use_bcftools:
-            raise RuntimeError("bcftools/tabix required for folder-of-VCFs input.")
-
-        output_dir_path = Path(output_dir) if output_dir else self.temp_dir
-        output_dir_path.mkdir(parents=True, exist_ok=True)
-
-        vcfs = sorted(folder_path.glob("*.vcf.gz"))
+    # ──────────────────────────────────────────────────────────────
+    # Helper to process one VCF file (used in parallel)
+    # ──────────────────────────────────────────────────────────────
+    def _load_vcf_directory(self, vcf_dir: Path, output_dir: Optional[str], ref_path: Optional[str]) -> pd.DataFrame:
+        """Scan a directory of per-sample VCFs and build allele/binary matrices."""
+        vcfs = sorted([p for p in vcf_dir.iterdir() if p.name.endswith((".vcf", ".vcf.gz"))])
         if not vcfs:
-            raise FileNotFoundError(f"No .vcf.gz files found in: {folder_path}")
+            raise ValueError(f"No .vcf/.vcf.gz files found in: {vcf_dir}")
 
-        # Ensure tabix indexes exist before any bcftools query calls
-        self._index_vcfs_parallel(vcfs)
+        # Helper for parallel processing
+        def process_vcf(vcf_path: Path) -> tuple[str, dict]:
+            sample = vcf_path.name
+            if sample.endswith(".vcf.gz"):
+                sample = sample[:-7]
+            elif sample.endswith(".vcf"):
+                sample = sample[:-4]
 
-        # Decide union vs merge using config-driven logic
-        use_union = self.force_union_matrix or (len(vcfs) >= self.union_matrix_threshold)
-        if use_union:
-            logger.info(
-                f"Folder mode: UNION-OF-SITES (n_files={len(vcfs)}, "
-                f"threshold={self.union_matrix_threshold}, force={self.force_union_matrix})"
+            calls = iter_sample_calls(
+                vcf_path,
+                qual_thresh=self.qual_threshold,
+                dp_thresh=self.dp_threshold,
+                mq_thresh=self.mq_threshold,
+                mq0f_thresh=self.mq0f_threshold,
+                biallelic_only=self.biallelic_only,
             )
-            return self._vcf_folder_union_matrix(vcfs, str(output_dir_path))
+            return sample, calls
 
-        logger.info(f"Folder mode: MERGE-THEN-PARSE (n_files={len(vcfs)})")
+        # Parallel parsing
+        n_jobs = getattr(self, 'n_jobs', -1)
+        logger.info("Starting parallel VCF parsing with n_jobs=%s", n_jobs if n_jobs > 0 else "all cores")
 
-        # Merge path (small collections only)
-        merged_vcf = output_dir_path / "merged.vcf.gz"
-
-        merge_cmd = ["bcftools", "merge", "-Oz", "-o", str(merged_vcf)]
-        # A sane thread clamp (bcftools supports --threads for some commands; merge can benefit too)
-        merge_cmd += ["--threads", str(max(1, min(self.n_jobs, 32)))]
-        merge_cmd += [str(v) for v in vcfs]
-
-        try:
-            subprocess.run(merge_cmd, check=True)
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(
-                "bcftools merge failed. This usually indicates inconsistent contigs/reference "
-                "or incompatible VCF headers across files."
-            ) from e
-
-        # Index merged output for downstream steps
-        subprocess.run(["tabix", "-f", "-p", "vcf", str(merged_vcf)], check=True)
-
-        # Now treat the merged multi-sample VCF like any single VCF input
-        return self._vcf_bcftools_pipeline(merged_vcf, str(output_dir_path), ref_fasta)
-
-    # -------------------------------------------------------------------------
-    # 6) Union-of-sites matrix (optimized for many single-sample ALT-only VCFs)
-    # -------------------------------------------------------------------------
-    def _vcf_folder_union_matrix(self, vcf_files: List[Path], output_dir: str) -> pd.DataFrame:
-        """
-        Purpose:
-            Build a cohort matrix directly from many single-sample VCFs, without merging.
-
-        What each step does:
-            1) Read sample IDs from VCF headers (bcftools query -l)
-            2) PASS 1: Build the global feature universe (union of biallelic SNP sites)
-               - Each feature is CHROM:POS:REF:ALT
-               - Assign a stable integer column index as features are discovered
-               - Record, per sample, which column indices are present
-            3) PASS 2: Build a sparse matrix from the cached per-sample presence sets
-               - No need to re-read VCFs a second time
-            4) Decide column naming:
-               - if use_integer_variant_ids: columns are 0..N-1 and a lookup CSV is saved
-               - else: columns are the CHROM:POS:REF:ALT strings
-
-        Why this is the correct representation for ALT-only variant-list VCFs:
-            - These VCFs list only ALT-present sites for each sample
-            - Absence of a record implies reference (0), not missing
-            - This produces a statistically defensible, interpretable binary matrix
-        """
-        outdir = Path(output_dir)
-        outdir.mkdir(parents=True, exist_ok=True)
-
-        vcf_files = sorted([Path(v) for v in vcf_files])
-
-        # 1) Extract single-sample IDs (from headers, not filenames)
-        sample_ids: List[str] = []
-        for v in vcf_files:
-            sample_ids.append(self._extract_single_sample_id(v))
-
-        if len(set(sample_ids)) != len(sample_ids):
-            raise ValueError("Duplicate sample IDs detected in VCF headers (must be unique).")
-
-        logger.info(f"Union-matrix mode: {len(sample_ids)} samples detected")
-
-        # 2) PASS 1: Build universe + per-sample presence cache
-        # universe_map maps variant_string -> column_index
-        universe_map: Dict[str, int] = {}
-        # variant_by_index preserves the exact discovery order of features so indices stay consistent
-        variant_by_index: List[str] = []
-        # per-sample cache: set of integer column indices present in each sample
-        per_sample_present: List[Set[int]] = [set() for _ in sample_ids]
-
-        logger.info("Union-matrix mode: PASS 1/2 (build universe + cache presence)...")
-        for i, vcf_path in enumerate(vcf_files):
-            for vid in self._iter_biallelic_snp_variant_ids(vcf_path):
-                if vid not in universe_map:
-                    universe_map[vid] = len(variant_by_index)
-                    variant_by_index.append(vid)
-                per_sample_present[i].add(universe_map[vid])
-
-            if (i + 1) % 250 == 0:
-                logger.info(
-                    f"Scanned {i+1}/{len(vcf_files)} VCFs | feature universe size: {len(variant_by_index)}"
-                )
-
-        n_variants = len(variant_by_index)
-        if n_variants == 0:
-            logger.warning("Union-matrix mode: no variants found after filters — returning empty matrix.")
-            df_empty = pd.DataFrame(index=sample_ids)
-            df_empty.index.name = "Sample"
-            df_empty.to_csv(outdir / "genomic_matrix.csv")
-            return df_empty
-
-        # Optional warnings on extremely large universes (helps users anticipate memory use)
-        if n_variants > 2_000_000:
-            logger.warning(f"VERY LARGE feature universe: {n_variants:,} variants — expect high memory usage.")
-        elif n_variants > 1_000_000:
-            logger.warning(f"Large feature universe: {n_variants:,} variants.")
-
-        # 3) If integer IDs requested, write lookup mapping
-        # (keeps the matrix columns small and consistent, and saves interpretability separately)
-        if self.use_integer_variant_ids:
-            lookup_path = outdir / "variant_lookup.csv"
-            # Split “CHROM:POS:REF:ALT” into columns. POS kept as string to avoid accidental coercion.
-            lookup_rows = [v.split(":", 3) for v in variant_by_index]
-            lookup_df = pd.DataFrame(lookup_rows, columns=["CHROM", "POS", "REF", "ALT"])
-            lookup_df.index.name = "variant_id"  # integer row index corresponds to column ID
-            lookup_df.to_csv(lookup_path)
-            logger.info(f"Saved variant lookup table: {lookup_path} ({n_variants:,} variants)")
-
-        # 4) PASS 2: Build sparse coordinate lists from cache (no VCF re-reading)
-        logger.info("Union-matrix mode: PASS 2/2 (build matrix from cached presence)...")
-        rows: List[int] = []
-        cols: List[int] = []
-        vals: List[int] = []
-
-        for r, present_cols in enumerate(per_sample_present):
-            for c in present_cols:
-                rows.append(r)
-                cols.append(c)
-                vals.append(1)
-
-            if (r + 1) % 250 == 0:
-                logger.info(f"Populated {r+1}/{len(sample_ids)} samples into matrix")
-
-        # 5) Construct matrix
-        if np is not None and sparse is not None:
-            mat = sparse.csr_matrix(
-                (vals, (rows, cols)),
-                shape=(len(sample_ids), n_variants),
-                dtype=np.int8,
-            )
-
-            if self.use_integer_variant_ids:
-                col_names = [str(i) for i in range(n_variants)]
-            else:
-                col_names = variant_by_index
-
-            df = pd.DataFrame.sparse.from_spmatrix(mat, index=sample_ids, columns=col_names)
-        else:
-            # Dense fallback is only safe for small feature spaces.
-            logger.warning("scipy.sparse unavailable → building dense matrix (can be memory-intensive).")
-
-            if self.use_integer_variant_ids:
-                col_names = [str(i) for i in range(n_variants)]
-            else:
-                col_names = variant_by_index
-
-            df = pd.DataFrame(0, index=sample_ids, columns=col_names, dtype="int8")
-            for rr, cc in zip(rows, cols):
-                df.iat[rr, cc] = 1
-
-        df.index.name = "Sample"
-        df.columns.name = "Variant"
-
-        matrix_csv = outdir / "genomic_matrix.csv"
-        df.to_csv(matrix_csv)
-        logger.info(f"Union-of-sites matrix saved: {matrix_csv} (shape {df.shape})")
-
-        # Explicit cleanup (helps large runs)
-        del rows, cols, vals, per_sample_present, universe_map
-
-        return df
-
-    # -------------------------------------------------------------------------
-    # 7) Header helpers + per-record iterators
-    # -------------------------------------------------------------------------
-    def _extract_single_sample_id(self, vcf_path: Path) -> str:
-        """
-        Purpose:
-            Determine the sample ID embedded in a single-sample VCF.
-
-        Why:
-            - Avoid using filenames as sample IDs (they can be inconsistent)
-            - Use the authoritative header identity for alignment with metadata
-        """
-        cmd = ["bcftools", "query", "-l", str(vcf_path)]
-        out = subprocess.run(cmd, capture_output=True, text=True, check=True).stdout.splitlines()
-        out = [x.strip() for x in out if x.strip()]
-        if len(out) != 1:
-            raise ValueError(
-                f"Expected exactly 1 sample in {vcf_path.name}, found {len(out)}. "
-                "Union mode requires single-sample VCFs."
-            )
-        return out[0]
-
-    def _iter_biallelic_snp_variant_ids(self, vcf_path: Path):
-        """
-        Purpose:
-            Stream biallelic SNP feature IDs from a VCF as "CHROM:POS:REF:ALT".
-
-        What filters are applied (and why):
-            - Skip missing GT (explicit ./.)              → avoid uncertain calls
-            - Skip multiallelic ALT (contains ',')        → stay in biallelic SNP space (current scope)
-            - Skip non-SNPs (len(REF)!=1 or len(ALT)!=1)  → keep encoding simple and interpretable
-            - Skip non-ACGT bases                         → defensive against ambiguous symbols
-            - Optional DP gate (FORMAT/DP)                → drop low-support calls conservatively
-
-        Note:
-            For ALT-only variant-list VCFs, this iterator effectively enumerates
-            the ALT-present sites for that sample.
-        """
-        cmd = [
-            "bcftools",
-            "query",
-            "-f",
-            "%CHROM\t%POS\t%REF\t%ALT\t[%GT]\t[%DP]\n",
-            str(vcf_path),
-        ]
-
-        proc = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1
+        results = Parallel(n_jobs=n_jobs)(
+            delayed(process_vcf)(vcf) for vcf in vcfs
         )
-        assert proc.stdout is not None
 
-        for line in proc.stdout:
-            line = line.rstrip("\n")
-            if not line:
-                continue
+        logger.info("Parallel parsing finished — %d files processed successfully", len(results))
 
-            parts = line.split("\t")
-            if len(parts) < 4:
-                continue
+        # Merge parsed results
+        per_sample_calls: Dict[str, Dict[Tuple[str, int], Tuple[str, str]]] = {}
+        site_counts: Dict[Tuple[str, int], List] = {}
 
-            chrom, pos, ref, alt = parts[0], parts[1], parts[2], parts[3]
-            gt = parts[4].strip() if len(parts) > 4 else ""
-            dp = parts[5].strip() if len(parts) > 5 else ""
-
-            # 1) Must have a genotype call (skip explicit missing)
-            if gt in {"", ".", "./.", ".|."}:
-                continue
-
-            # 2) Enforce biallelic ALT only
-            if "," in alt:
-                continue
-
-            # 3) SNP-only
-            if len(ref) != 1 or len(alt) != 1:
-                continue
-
-            # 4) Canonical bases only
-            if ref not in {"A", "C", "G", "T"} or alt not in {"A", "C", "G", "T"}:
-                continue
-
-            # 5) Conservative DP gating if DP is present and parseable
-            if dp and dp != ".":
-                try:
-                    if int(float(dp)) < self.union_dp_min:
+        for sample, calls in results:
+            per_sample_calls[sample] = calls
+            for key, (ref, called) in calls.items():
+                if called == ref:
+                    continue
+                if key not in site_counts:
+                    site_counts[key] = [0, ref, called]
+                else:
+                    if self.biallelic_only and called != site_counts[key][2]:
                         continue
-                except Exception:
-                    # If DP is malformed, we do not over-filter by default.
-                    pass
+                site_counts[key][0] += 1
 
-            yield f"{chrom}:{pos}:{ref}:{alt}"
-
-        _, stderr = proc.communicate()
-        if proc.returncode != 0:
-            raise RuntimeError(
-                f"bcftools query failed for {vcf_path.name}: {stderr.strip()[:500]}"
-            )
-
-    # -------------------------------------------------------------------------
-    # 8) Single VCF → preprocessing → matrix
-    # -------------------------------------------------------------------------
-    def _vcf_bcftools_pipeline(
-        self,
-        vcf_path: Path,
-        output_dir: str,
-        ref_fasta: Optional[str] = None,
-    ) -> pd.DataFrame:
-        """
-        Purpose:
-            Standard single-VCF pipeline:
-                VCF → (optional normalize) → biallelic SNPs → QC → matrix extraction
-
-        Important:
-            - This pipeline is best when you already have a multi-sample VCF
-              or a small merged VCF.
-            - For huge folders of ALT-only single-sample VCFs, prefer union mode.
-
-        Steps (high-level):
-            1) (Optional) Normalize against reference FASTA (if provided)
-            2) Filter biallelic SNPs
-            3) Variant-level QC (QUAL and/or INFO/DP if present)
-            4) Genotype-level QC (mask low-quality genotypes to missing if GQ/DP tags exist)
-            5) Remove invariant sites (multi-sample contexts)
-            6) Remove SNPs near indels/gaps (SnpGap)
-            7) Extract GT into sample × variant 0/1 matrix
-        """
-        outdir = Path(output_dir)
-        outdir.mkdir(parents=True, exist_ok=True)
-
-        prefix = outdir / vcf_path.stem
-
-        # Intermediate filenames are numbered for readability and reproducibility
-        files = {
-            "norm": prefix.with_name(prefix.name + ".01.norm.vcf.gz"),
-            "snps": prefix.with_name(prefix.name + ".02.biallelic_snps.vcf.gz"),
-            "var_qc": prefix.with_name(prefix.name + ".03.variant_qc.vcf.gz"),
-            "gt_qc": prefix.with_name(prefix.name + ".04.genotype_qc.vcf.gz"),
-            "variable": prefix.with_name(prefix.name + ".05.variable.vcf.gz"),
-            "nogap": prefix.with_name(prefix.name + ".06.no_indel_gap.vcf.gz"),
-            "final": prefix.with_name(prefix.name + ".07.final_cleaned.vcf.gz"),
+        # Cohort-level filtering
+        kept_sites: Dict[Tuple[str, int], Tuple[int, str, str]] = {
+            key: (cnt, ref, alt) for key, (cnt, ref, alt) in site_counts.items()
+            if cnt >= self.min_sample_presence
         }
-        matrix_csv = prefix.with_name(prefix.name + ".genomic_matrix.csv")
 
-        def run_step(cmd: List[str], output_file: Path, desc: str) -> None:
-            """
-            Helper:
-                - Runs bcftools command producing output_file
-                - Tabix-indexes the output
-                - Skips if output already exists and looks valid
-            """
-            if output_file.exists() and output_file.stat().st_size > 100:
-                logger.info(f"[SKIP] {desc} (exists): {output_file.name}")
-                return
-
-            logger.info(f"[RUN] {desc}")
-            subprocess.run(cmd, check=True)
-
-            # Index step outputs (VCF.gz)
-            subprocess.run(["tabix", "-f", "-p", "vcf", str(output_file)], check=True)
-
-            if (not output_file.exists()) or output_file.stat().st_size < 100:
-                raise RuntimeError(f"{desc} failed: output missing or empty: {output_file}")
-
-        # 1) Normalize if reference FASTA exists
-        if ref_fasta and Path(ref_fasta).exists():
-            run_step(
-                [
-                    "bcftools",
-                    "norm",
-                    "-f",
-                    ref_fasta,
-                    "-m-",
-                    "-any",
-                    "-Oz",
-                    "-o",
-                    str(files["norm"]),
-                    str(vcf_path),
-                ],
-                files["norm"],
-                "Normalize (left-align + split multiallelic if present)",
+        if not kept_sites:
+            raise ValueError(
+                "No polymorphic sites retained after QC + min-sample-presence filter. "
+                "Consider relaxing thresholds."
             )
-            source_vcf = files["norm"]
+
+        # Sort sites deterministically
+        ordered_keys = sorted(kept_sites.keys(), key=lambda x: (x[0], x[1]))
+        ref_bases = [kept_sites[k][1] for k in ordered_keys]
+        alt_bases = [kept_sites[k][2] for k in ordered_keys]
+
+        samples_sorted = sorted(per_sample_calls.keys())
+        per_pos_counts = [Counter() for _ in ordered_keys]
+        sample_allele_strings: Dict[str, str] = {}
+
+        ref_line = "".join(ref_bases)
+
+        for sample in samples_sorted:
+            calls = per_sample_calls[sample]
+            alleles = []
+            for j, key in enumerate(ordered_keys):
+                ref = ref_bases[j]
+                alt = alt_bases[j]
+                _, called = calls.get(key, (ref, ref))
+                base = called if called in {ref, alt} else ref
+                alleles.append(base)
+                per_pos_counts[j][base] += 1
+            sample_allele_strings[sample] = "".join(alleles)
+
+        # Baseline selection
+        if self.ancestral_allele.upper() == "Y":
+            baseline = list(ref_line)
         else:
-            # If no FASTA, keep source as-is (still valid, just less normalized)
-            logger.info("[SKIP] Normalization (no reference FASTA provided)")
-            source_vcf = vcf_path
+            baseline = [
+                per_pos_counts[j].most_common(1)[0][0] if per_pos_counts[j] else ref_bases[j]
+                for j in range(len(ordered_keys))
+            ]
 
-        # 2) Filter to biallelic SNPs
-        run_step(
-            [
-                "bcftools",
-                "view",
-                "-m2",
-                "-M2",
-                "-v",
-                "snps",
-                "-Oz",
-                "-o",
-                str(files["snps"]),
-                str(source_vcf),
-            ],
-            files["snps"],
-            "Filter to biallelic SNPs",
-        )
+        # Binary encoding
+        ref_binary = "".join("0" if ref_line[i] == baseline[i] else "1" for i in range(len(ref_line)))
+        sample_binary_strings = {
+            s: "".join("0" if seq[i] == baseline[i] else "1" for i in range(len(seq)))
+            for s, seq in sample_allele_strings.items()
+        }
 
-        # 3) Variant-level QC (QUAL + INFO/DP if present)
-        header = subprocess.run(
-            ["bcftools", "view", "-h", str(files["snps"])],
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout
-        has_dp_info = "INFO=<ID=DP" in header
+        # Final matrix
+        variant_ids = [f"{c}:{p}:{r}:{a}" for (c, p), r, a in zip(ordered_keys, ref_bases, alt_bases)]
+        data_bin = [[int(ch) for ch in sample_binary_strings[s]] for s in samples_sorted]
+        df = pd.DataFrame(data_bin, index=samples_sorted, columns=variant_ids, dtype=int)
+        df.index.name = "Sample"
 
-        expr = f"QUAL < {self.qual_threshold}"
-        if has_dp_info:
-            expr += f" || INFO/DP < {self.min_dp_per_sample}"
+        # Preprocessing (remove invariant + min minor allele filter)
+        df = self._preprocess_binary_matrix(df)
 
-        run_step(
-            [
-                "bcftools",
-                "filter",
-                "-e",
-                expr,
-                "-Oz",
-                "-o",
-                str(files["var_qc"]),
-                str(files["snps"]),
-            ],
-            files["var_qc"],
-            "Variant-level QC (QUAL/DP)",
-        )
+        # Optional compact IDs
+        lookup = None
+        if self.use_integer_variant_ids:
+            df, lookup = self._convert_to_integer_variant_ids(df)
 
-        # 4) Genotype-level QC: mask low-quality genotypes to missing (.)
-        header = subprocess.run(
-            ["bcftools", "view", "-h", str(files["var_qc"])],
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout
-        has_gq = "FORMAT=<ID=GQ" in header
-        has_dp_fmt = "FORMAT=<ID=DP" in header
-
-        gt_filter = ""
-        if has_gq and has_dp_fmt:
-            gt_filter = f"FMT/GQ < {self.min_gq_per_sample} || FMT/DP < {self.min_dp_per_sample}"
-        elif has_gq:
-            gt_filter = f"FMT/GQ < {self.min_gq_per_sample}"
-        elif has_dp_fmt:
-            gt_filter = f"FMT/DP < {self.min_dp_per_sample}"
-
-        if gt_filter:
-            run_step(
-                [
-                    "bcftools",
-                    "filter",
-                    "-S",
-                    ".",
-                    "-e",
-                    gt_filter,
-                    "-Oz",
-                    "-o",
-                    str(files["gt_qc"]),
-                    str(files["var_qc"]),
-                ],
-                files["gt_qc"],
-                "Genotype-level QC (mask low-quality GT to missing)",
+        # Artifact output
+        if output_dir:
+            out = Path(output_dir)
+            self._write_all_artifacts(
+                out_root=out,
+                kept_sites=kept_sites,
+                ordered_keys=ordered_keys,
+                positions_1based=[p for _, p in ordered_keys],
+                ref_line=ref_line,
+                sample_allele_strings=sample_allele_strings,
+                ref_binary=ref_binary,
+                sample_binary_strings=sample_binary_strings,
+                ref_path=Path(ref_path) if ref_path else None,
+                integer_id_lookup=lookup,
             )
-            qc_vcf = files["gt_qc"]
-        else:
-            logger.info("[SKIP] Genotype QC (no GQ/DP FORMAT tags found)")
-            qc_vcf = files["var_qc"]
 
-        # 5) Remove invariant sites (only meaningful in multi-sample VCFs)
-        # MAX(AC)>0 keeps sites where an ALT allele appears in at least one sample.
-        run_step(
-            [
-                "bcftools",
-                "view",
-                "-i",
-                "MAX(AC)>0",
-                "-Oz",
-                "-o",
-                str(files["variable"]),
-                str(qc_vcf),
-            ],
-            files["variable"],
-            "Remove invariant sites (MAX(AC)>0)",
-        )
+            if self.config is not None:
+                cfg_path = out / "dataloader_config.snapshot.json"
+                payload = asdict(self.config) if hasattr(self.config, "__dataclass_fields__") else vars(self.config)
+                with open(cfg_path, "w", encoding="utf-8") as f:
+                    json.dump(payload, f, indent=2)
 
-        # 6) Remove SNPs near indels/gaps (reduces alignment/context artefacts)
-        run_step(
-            [
-                "bcftools",
-                "filter",
-                "--SnpGap",
-                str(self.min_spacing_bp),
-                "-Oz",
-                "-o",
-                str(files["nogap"]),
-                str(files["variable"]),
-            ],
-            files["nogap"],
-            f"Remove SNPs within {self.min_spacing_bp}bp of indels/gaps",
-        )
-
-        # Final file
-        files["final"] = files["nogap"]
-
-        # 7) Extract genotypes into a 0/1 matrix
-        logger.info("Extracting GT → 0/1 matrix (streaming bcftools query)")
-
-        # a) sample IDs
-        samples = subprocess.run(
-            ["bcftools", "query", "-l", str(files["final"])],
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.splitlines()
-        samples = [s.strip() for s in samples if s.strip()]
-        if len(set(samples)) != len(samples):
-            raise ValueError("Duplicate sample IDs in VCF header — sample IDs must be unique.")
-
-        # b) genotype encoding helper
-        def gt_to_binary(gt: str):
-            """
-            Convert GT to binary ALT presence.
-
-            - Haploid calls: "0" or "1"
-            - Diploid calls: "0/0", "0/1", "1/1" (or phased with '|')
-            - Missing: "./." or "."
-            """
-            gt = (gt or "").strip()
-            if not gt or gt in {".", "./.", ".|."}:
-                return float("nan")
-
-            # Haploid
-            if gt == "0":
-                return 0
-            if gt == "1":
-                return 1
-
-            # Diploid
-            sep = "/" if "/" in gt else ("|" if "|" in gt else None)
-            if sep is None:
-                return float("nan")
-            alleles = gt.split(sep)
-            if any(a == "." for a in alleles):
-                return float("nan")
-            return 1 if any(a == "1" for a in alleles) else 0
-
-        # c) streaming query: variant_id + per-sample GT list
-        # Use CHROM:POS:REF:ALT to keep IDs collision-resistant.
-        cmd = ["bcftools", "query", "-f", "%CHROM:%POS:%REF:%ALT\t[%GT\t]\n", str(files["final"])]
-
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
-        assert proc.stdout is not None
-
-        data: Dict[str, List[float]] = {s: [] for s in samples}
-        variant_ids: List[str] = []
-
-        skipped = 0
-        for line in proc.stdout:
-            line = line.rstrip("\n")
-            if not line:
-                continue
-
-            fields = line.split("\t")
-            if len(fields) < 2:
-                skipped += 1
-                continue
-
-            vid = fields[0]
-            gts = fields[1:]
-
-            # bcftools pattern "[%GT\t]" often leaves a trailing empty field; strip it
-            if gts and gts[-1] == "":
-                gts = gts[:-1]
-
-            if len(gts) != len(samples):
-                skipped += 1
-                continue
-
-            variant_ids.append(vid)
-            for i, gt in enumerate(gts):
-                data[samples[i]].append(gt_to_binary(gt))
-
-        _, stderr = proc.communicate()
-        if proc.returncode != 0:
-            raise RuntimeError(f"bcftools query failed: {stderr.strip()[:500]}")
-
-        if not variant_ids:
-            logger.warning("No variants extracted — returning empty matrix.")
-            df = pd.DataFrame(index=samples)
-            df.index.name = "Sample"
-            df.to_csv(matrix_csv)
+        return df  
+    
+    def _preprocess_binary_matrix(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Apply lightweight, non-statistical preprocessing to the binary matrix.
+        
+        Removes invariant columns and (optionally) filters low minor-allele-count variants.
+        This step is NOT a substitute for proper statistical filtering (χ²/Fisher + FDR).
+        """
+        if df.empty:
             return df
 
-        df = pd.DataFrame.from_dict(data, orient="index", columns=variant_ids)
-        df.index.name = "Sample"
-        df.columns.name = "Variant"
+        # Remove invariant features (all 0 or all 1)
+        if self.remove_invariant:
+            nunique = df.nunique(axis=0, dropna=False)
+            df = df.loc[:, nunique > 1]
+            if df.empty:
+                raise ValueError(
+                    "All polymorphic sites were removed during invariant filtering. "
+                    "Check input data or relax remove_invariant setting."
+                )
 
-        df.to_csv(matrix_csv)
-        logger.info(f"Saved matrix: {matrix_csv} (shape {df.shape}, skipped_lines={skipped})")
+        # Optional: enforce minimum minor allele count per site
+        if self.min_minor_count > 0:
+            keep_mask = []
+            for col in df.columns:
+                vc = df[col].value_counts(dropna=False)
+                count_0 = vc.get(0, 0)
+                count_1 = vc.get(1, 0)
+                keep_mask.append(min(count_0, count_1) >= self.min_minor_count)
+
+            df = df.loc[:, keep_mask]
+            if df.empty:
+                raise ValueError(
+                    "All sites removed by minor allele count filter. "
+                    f"Try lowering min_minor_count (current: {self.min_minor_count}) "
+                    "or verify binary encoding."
+                )
 
         return df
+    
+    def _convert_to_integer_variant_ids(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, str]]:
+        """Replace long variant IDs with compact IDs and return a lookup."""
+        lookup: Dict[str, str] = {}
+        new_cols: List[str] = []
+        for i, col in enumerate(df.columns):
+            vid = f"v{i}"
+            new_cols.append(vid)
+            lookup[vid] = col
+        df2 = df.copy()
+        df2.columns = new_cols
+        return df2, lookup
 
-    # -------------------------------------------------------------------------
-    # 9) Python fallback placeholder
-    # -------------------------------------------------------------------------
-    def _vcf_python_fallback(self, path: Path, output_dir: str, ref_fasta: Optional[str] = None) -> pd.DataFrame:
-        """
-        Purpose:
-            In restricted environments without bcftools, you could implement a pure-python VCF reader.
-        Note:
-            Not implemented here because it’s slower and often less robust than bcftools for large VCFs.
-        """
-        raise NotImplementedError("Pure Python VCF fallback not implemented.")
+    # ──────────────────────────────────────────────────────────
+    # Artifact generation (all 3 scripts’ outputs)
+    # ──────────────────────────────────────────────────────────
+
+    def _write_all_artifacts(
+        self,
+        out_root: Path,
+        kept_sites: Dict[Tuple[str, int], Tuple[int, str, str]],
+        ordered_keys: List[Tuple[str, int]],
+        positions_1based: List[int],
+        ref_line: str,
+        sample_allele_strings: Dict[str, str],
+        ref_binary: str,
+        sample_binary_strings: Dict[str, str],
+        ref_path: Optional[Path],
+        integer_id_lookup: Optional[Dict[str, str]],
+    ) -> None:
+        """Write vcf_counts/*, fasta/*, and matrices/* outputs."""
+        out_root.mkdir(parents=True, exist_ok=True)
+
+        vcf_counts_dir = out_root / "vcf_counts"
+        fasta_dir = out_root / "fasta"
+        matrices_dir = out_root / "matrices"
+
+        vcf_counts_dir.mkdir(parents=True, exist_ok=True)
+        fasta_dir.mkdir(parents=True, exist_ok=True)
+        matrices_dir.mkdir(parents=True, exist_ok=True)
+
+        # 1) vcf_counts/all_snp.txt
+        all_snp_path = vcf_counts_dir / "all_snp.txt"
+        all_snp_rows, all_snp_header = self._write_all_snp_table(
+            path=all_snp_path,
+            kept_sites=kept_sites,
+            ref_path=ref_path,
+        )
+
+        # 2) fasta/<generic>_{alleles,binary}.fasta
+        alleles_fa = fasta_dir / f"{self.generic_name}_alleles.fasta"
+        binary_fa = fasta_dir / f"{self.generic_name}_binary.fasta"
+        write_fasta_matrix(alleles_fa, ref_line, sample_allele_strings, ref_name="REF")
+        write_fasta_matrix(binary_fa, ref_binary, sample_binary_strings, ref_name="REF")
+
+        # 3) fasta/<generic>_filtered.tsv (filtered copy of all_snp.txt; optional Context_±40)
+        filtered_tsv = fasta_dir / f"{self.generic_name}_filtered.tsv"
+        self._write_filtered_copy_with_context(
+            input_rows=all_snp_rows,
+            input_header=all_snp_header,
+            output_path=filtered_tsv,
+            kept_positions=set(positions_1based),
+            ref_path=ref_path,
+        )
+
+        # 4) matrices/* outputs produced by filtering (minor-count + type + redundancy + fix)
+        self._write_matrices_outputs(
+            fasta_alleles=alleles_fa,
+            fasta_binary=binary_fa,
+            annotation_tsv=filtered_tsv,
+            out_dir=matrices_dir,
+        )
+
+        # 5) optional lookup used by returned df
+        if integer_id_lookup is not None:
+            with open(out_root / "variant_id_lookup.json", "w", encoding="utf-8") as f:
+                json.dump(integer_id_lookup, f, indent=2)
+
+    def _write_all_snp_table(
+        self,
+        path: Path,
+        kept_sites: Dict[Tuple[str, int], Tuple[int, str, str]],
+        ref_path: Optional[Path],
+    ) -> Tuple[List[Dict[str, str]], List[str]]:
+        """Write the SNP summary table, with annotation columns if GenBank is provided."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        header_annot = [
+            "Position",
+            "Count",
+            "Sequence",
+            "Region_type",
+            "Relative_pos",
+            "Codon_number",
+            "Nucleotide_change",
+            "Amino_acid_change",
+            "Gene_annotation",
+        ]
+
+        # Decide whether to annotate (GenBank) or write minimal table (Position, Count).
+        do_annotate = False
+        if ref_path and ref_path.exists():
+            lower = ref_path.name.lower()
+            if lower.endswith((".gb", ".gbk", ".gbff")):
+                do_annotate = True
+
+        if do_annotate:
+            rows = annotate_snps_genbank(kept_sites, ref_path)  # type: ignore[arg-type]
+            with open(path, "w", encoding="utf-8", newline="") as out:
+                w = csv.DictWriter(out, fieldnames=header_annot, delimiter="\t", lineterminator="\n")
+                w.writeheader()
+                for r in rows:
+                    w.writerow(r)
+            return rows, header_annot
+
+        # Minimal output (Position, Count) still matches the script behavior when no ref is given.
+        header_min = ["Position", "Count"]
+        rows_min: List[Dict[str, str]] = []
+        for (chrom, pos) in sorted(kept_sites.keys(), key=lambda x: (x[0], x[1])):
+            count, _, _ = kept_sites[(chrom, pos)]
+            rows_min.append({"Position": str(pos), "Count": str(count)})
+
+        with open(path, "w", encoding="utf-8", newline="") as out:
+            w = csv.DictWriter(out, fieldnames=header_min, delimiter="\t", lineterminator="\n")
+            w.writeheader()
+            for r in rows_min:
+                w.writerow(r)
+
+        return rows_min, header_min
+
+    def _write_filtered_copy_with_context(
+        self,
+        input_rows: List[Dict[str, str]],
+        input_header: List[str],
+        output_path: Path,
+        kept_positions: set,
+        ref_path: Optional[Path],
+    ) -> None:
+        """Write a filtered copy of the SNP table, optionally appending Context_±40."""
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # If we can load reference sequence, we append context column.
+        ref_seq: Optional[str] = None
+        if ref_path and ref_path.exists():
+            lower = ref_path.name.lower()
+            if lower.endswith((".fa", ".fna", ".fasta", ".fas", ".gb", ".gbk", ".gbff")):
+                try:
+                    ref_seq = load_reference_sequence(ref_path)
+                except Exception as e:
+                    logger.warning(f"Reference loading failed; context column skipped. Reason: {e}")
+                    ref_seq = None
+
+        out_header = list(input_header)
+        add_context = ref_seq is not None and "Position" in input_header
+        if add_context:
+            out_header.append("Context_±40")
+
+        with open(output_path, "w", encoding="utf-8", newline="") as out:
+            w = csv.writer(out, delimiter="\t", lineterminator="\n")
+            w.writerow(out_header)
+
+            for r in input_rows:
+                try:
+                    pos = int(str(r.get("Position", "")).strip())
+                except Exception:
+                    continue
+                if pos not in kept_positions:
+                    continue
+
+                row_vals = [str(r.get(col, "")) for col in input_header]
+                if add_context and ref_seq is not None:
+                    row_vals.append(context_around(pos, ref_seq, flank=40))
+                w.writerow(row_vals)
+
+    def _write_matrices_outputs(
+        self,
+        fasta_alleles: Path,
+        fasta_binary: Path,
+        annotation_tsv: Path,
+        out_dir: Path,
+    ) -> None:
+        """Generate matrices outputs: TSV matrices + filtered FASTA + filtered annotation TSV."""
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        alleles = read_fasta_matrix(fasta_alleles)
+        binary = read_fasta_matrix(fasta_binary)
+        annot_rows, annot_header = read_annotation_tsv(annotation_tsv)
+
+        if list(alleles.keys()) != list(binary.keys()):
+            raise ValueError("Genome order differs between alleles and binary FASTA files.")
+
+        genomes = list(alleles.keys())
+        S = len(next(iter(alleles.values())))
+        if len(next(iter(binary.values()))) != S:
+            raise ValueError("Alleles and binary FASTA have different number of columns (markers).")
+
+        # If annotation rows length doesn’t match, we can’t apply type-filter reliably.
+        # We still proceed with minor-count/redundancy only by synthesizing positions.
+        annotation_matches = len(annot_rows) == S
+
+        # Prepare column views
+        genomes_order, allele_cols = transpose_rows_to_columns(alleles)
+        _, binary_cols = transpose_rows_to_columns(binary)
+
+        # 1) minor-count filter
+        mask_minor = minor_count_filter(binary_cols, self.matrices_min_count)
+
+        # 2) type filter (only if annotation matches and has required fields)
+        if annotation_matches and annot_header:
+            mask_type = type_filter(annot_rows, self.matrices_type)
+        else:
+            mask_type = [True] * S
+
+        mask_12 = combine_masks(mask_minor, mask_type)
+
+        # Apply mask_12 for grouping stage
+        idx12 = [i for i, k in enumerate(mask_12) if k]
+        allele_cols_12 = [c for c, k in zip(allele_cols, mask_12) if k]
+        binary_cols_12 = [c for c, k in zip(binary_cols, mask_12) if k]
+        annot_rows_12 = [r for r, k in zip(annot_rows, mask_12) if k] if annotation_matches else []
+
+        # 3) redundancy filter by identical pattern
+        if binary_cols_12:
+            if annotation_matches:
+                mask_group = group_and_reduce_by_pattern(binary_cols_12, annot_rows_12, self.matrices_repeat_number)
+            else:
+                # If no annotation, group without using positions (stable order)
+                dummy_rows = [{"Position": str(i + 1)} for i in range(len(binary_cols_12))]
+                mask_group = group_and_reduce_by_pattern(binary_cols_12, dummy_rows, self.matrices_repeat_number)
+        else:
+            mask_group = []
+
+        # Final mask relative to original columns
+        mask_final = [False] * S
+        for kept_flag, original_idx in zip(mask_group, idx12):
+            if kept_flag:
+                mask_final[original_idx] = True
+
+        # 4) force-keep positions
+        fix_idx0, _warnings = parse_fix_positions(self.matrices_fix, S)
+        for idx in fix_idx0:
+            mask_final[idx] = True
+
+        # Apply final mask
+        alleles_filt = apply_mask_to_char_rows(alleles, mask_final)
+        binary_filt = apply_mask_to_char_rows(binary, mask_final)
+
+        # Filter annotation rows if possible; otherwise write the original filtered.tsv unchanged
+        if annotation_matches:
+            annot_filt = [r for r, k in zip(annot_rows, mask_final) if k]
+        else:
+            annot_filt = annot_rows
+
+        # Prepare columns + positions for TSV
+        _, allele_cols_f = transpose_rows_to_columns(alleles_filt)
+        _, binary_cols_f = transpose_rows_to_columns(binary_filt)
+
+        if annotation_matches:
+            positions_f = [(r.get("Position", "") or "").strip() for r in annot_filt]
+        else:
+            positions_f = [str(i + 1) for i in range(len(allele_cols_f))]
+
+        base = self.generic_name
+        write_matrix_tsv(out_dir / f"{base}_alleles.tsv", genomes_order, positions_f, allele_cols_f)
+        write_matrix_tsv(out_dir / f"{base}_binary.tsv", genomes_order, positions_f, binary_cols_f)
+        write_fasta_matrix_wrapped(out_dir / f"{base}_alleles.fasta", alleles_filt)
+        write_fasta_matrix_wrapped(out_dir / f"{base}_binary.fasta", binary_filt)
+
+        if annotation_matches and annot_header:
+            write_annotation_tsv(out_dir / f"{base}_filtered.tsv", annot_filt, annot_header)
+        else:
+            # Fallback: copy the TSV as-is
+            out_path = out_dir / f"{base}_filtered.tsv"
+            out_path.write_text(annotation_tsv.read_text(encoding="utf-8", errors="replace"), encoding="utf-8")
+
+    # ──────────────────────────────────────────────────────────
+    # Prebuilt matrix loader
+    # ──────────────────────────────────────────────────────────
+
+    def _load_matrix_file(self, path: Path) -> pd.DataFrame:
+        """Load a prebuilt matrix from CSV/TSV with row index in the first column."""
+        sep = "\t" if path.suffix.lower() in {".tsv", ".tab"} else ","
+        df = pd.read_csv(path, sep=sep, index_col=0)
+        df.index = df.index.astype(str)
+        df.index.name = "Sample"
+        return df
