@@ -1,15 +1,16 @@
 digraph NetworkParser_Flow_Detailed {
   // ─────────────────────────────────────────────────────────────
-  // NetworkParser — very detailed, script-faithful pipeline flow
-  // Matches the narrative: CLI → DataLoader → pre-tree filtering → tree
-  // → post-tree confidence + epistasis → optional validation → final JSON.
+  // NetworkParser — detailed, script-faithful pipeline flow
+  // Updated: replaces UNION-of-matrix logic + bcftools-merge logic
+  // with DataLoader's per-sample parse → cohort merge → baseline → encode
+  // (i.e., the DataLoader_Flow_AlignedToCode design).
   // ─────────────────────────────────────────────────────────────
 
   rankdir=TB;
   labelloc="t";
   fontsize=20;
   fontname="Helvetica,Arial,sans-serif";
-  label="NetworkParser — Detailed Pipeline Flow (script-faithful)\nInput → Matrix construction → Pre-tree statistical filtering → Decision tree → Post-tree confidence + epistasis → Optional validation → Final JSON";
+  label="NetworkParser — Detailed Pipeline Flow \nInput → Matrix construction → Pre-tree statistical filtering → Decision tree → Post-tree confidence + epistasis → Optional validation → Final JSON";
 
   graph [splines=ortho, nodesep=0.45, ranksep=0.7];
   node  [shape=box, style="rounded,filled", fontname="Helvetica,Arial,sans-serif", fontsize=10, penwidth=1.15, fillcolor="#eef5ff"];
@@ -31,7 +32,7 @@ digraph NetworkParser_Flow_Detailed {
       • --meta: optional metadata table (CSV/TSV)<BR ALIGN="LEFT"/>
       • --label: metadata column for phenotype / group<BR ALIGN="LEFT"/>
       • --known_markers: optional marker list<BR ALIGN="LEFT"/>
-      • --ref_fasta: optional FASTA for normalization<BR ALIGN="LEFT"/>
+      • --ref_fasta: optional FASTA for normalization (optional / context)<BR ALIGN="LEFT"/>
       • --config: JSON overrides<BR ALIGN="LEFT"/>
       • --validate_statistics / --validate_interactions flags
     >];
@@ -39,7 +40,7 @@ digraph NetworkParser_Flow_Detailed {
     cli_cfg [label=<
       <B>Load config</B><BR ALIGN="LEFT"/>
       NetworkParserConfig() defaults<BR ALIGN="LEFT"/>
-      Apply JSON overrides (shallow field update)
+      Apply JSON overrides
     >];
 
     cli_call [label=<
@@ -69,7 +70,7 @@ digraph NetworkParser_Flow_Detailed {
 
     np_run [label=<
       <B>run_pipeline()</B><BR ALIGN="LEFT"/>
-      1) Build genomic matrix<BR ALIGN="LEFT"/>
+      1) Build genomic matrix (DataLoader)<BR ALIGN="LEFT"/>
       2) Load metadata + labels<BR ALIGN="LEFT"/>
       3) Discover features + interactions (tree-based)<BR ALIGN="LEFT"/>
       4) Optional validation (if flags)<BR ALIGN="LEFT"/>
@@ -80,10 +81,10 @@ digraph NetworkParser_Flow_Detailed {
   }
 
   // ─────────────────────────────────────────────────────────────
-  // STAGE 1 — DATA LOADER
+  // STAGE 1 — DATA LOADER (UPDATED)
   // ─────────────────────────────────────────────────────────────
   subgraph cluster_loader {
-    label="Stage 1 — Matrix construction (data_loader.py)";
+    label="Stage 1 — Matrix construction (data_loader.py) — per-sample parse → cohort merge → baseline → encode";
     labelloc="t";
     fontsize=14;
     style="rounded";
@@ -93,159 +94,210 @@ digraph NetworkParser_Flow_Detailed {
       <B>load_genomic_matrix(genomic_path)</B><BR ALIGN="LEFT"/>
       Route by input type:<BR ALIGN="LEFT"/>
       • directory → folder-of-VCFs mode<BR ALIGN="LEFT"/>
-      • .vcf / .vcf.gz → single-VCF mode<BR ALIGN="LEFT"/>
+      • .vcf / .vcf.gz → single-VCF mode (treated as single-sample or already-cohort VCF)<BR ALIGN="LEFT"/>
       • .csv / .tsv → prebuilt matrix mode<BR ALIGN="LEFT"/>
-      • FASTA → not implemented
     >];
 
-    // Directory branch
+    // Directory mode: no VCF merge, no UNION-of-sites
     dl_dir [label=<
       <B>Directory input</B><BR ALIGN="LEFT"/>
-      Collect *.vcf.gz<BR ALIGN="LEFT"/>
-      Ensure each has tabix index (*.tbi)<BR ALIGN="LEFT"/>
-      Parallel threads: ThreadPoolExecutor
+      Collect *.vcf / *.vcf.gz<BR ALIGN="LEFT"/>
+      (no bcftools merge; no union-of-sites pass)
     >];
 
-    dl_choose [label=<
-      <B>Choose directory strategy</B><BR ALIGN="LEFT"/>
-      • UNION-of-sites mode (large cohorts / ALT-only VCFs)<BR ALIGN="LEFT"/>
-      • MERGE-then-PARSE mode (smaller cohorts)
+    dl_par [label=<
+      <B>Parallel per-sample parsing</B><BR ALIGN="LEFT"/>
+      Parallel(n_jobs): parse each VCF independently<BR ALIGN="LEFT"/>
+      Output per sample: {(chrom,pos) → (ref, called)}
+    > shape=ellipse fillcolor="#FFD48A"];
+
+    iter0 [label=<
+      <B>iter_sample_calls()</B><BR ALIGN="LEFT"/>
+      stream records from a single sample VCF<BR ALIGN="LEFT"/>
+      apply record-level gates + choose allele
+    > fillcolor="#fff7db"];
+
+    gate_snp [label=<
+      <B>is_snp_like?</B><BR ALIGN="LEFT"/>
+      single-base REF &amp; ALT<BR ALIGN="LEFT"/>
+      (optionally enforce biallelic-only)
+    > shape=diamond fillcolor="#fff7db"];
+
+    gate_info [label=<
+      <B>passes_info_qc?</B><BR ALIGN="LEFT"/>
+      QUAL + INFO(DP, MQ, MQ0F) thresholds<BR ALIGN="LEFT"/>
+      (config-driven)
+    > shape=diamond fillcolor="#fff7db"];
+
+    choose0 [label=<
+      <B>choose_called_allele()</B><BR ALIGN="LEFT"/>
+      Prefer GT when available (FORMAT)<BR ALIGN="LEFT"/>
+      Else treat ALT presence as called<BR ALIGN="LEFT"/>
+      Fallback to REF when needed
     >];
 
-    // UNION-of-sites details
-    union0 [label=<
-      <B>UNION mode — PASS 0 (sample IDs)</B><BR ALIGN="LEFT"/>
-      bcftools query -l per VCF<BR ALIGN="LEFT"/>
-      Build ordered sample list (don’t trust filenames)
+    store0 [label=<
+      <B>Store sample calls</B><BR ALIGN="LEFT"/>
+      (chrom,pos) → (ref, called)
     >];
 
-    union1 [label=<
-      <B>UNION mode — PASS 1 (global feature universe)</B><BR ALIGN="LEFT"/>
-      For each sample VCF, stream variants via bcftools query:<BR ALIGN="LEFT"/>
-      • Fields: CHROM, POS, REF, ALT, GT, DP<BR ALIGN="LEFT"/>
-      Hard filters while streaming:<BR ALIGN="LEFT"/>
-      • Skip missing GT<BR ALIGN="LEFT"/>
-      • Skip multiallelic ALT (',' in ALT)<BR ALIGN="LEFT"/>
-      • SNP-only: len(REF)==1 &amp; len(ALT)==1<BR ALIGN="LEFT"/>
-      • Canonical bases A/C/G/T only<BR ALIGN="LEFT"/>
-      • Optional DP gate in union mode (union_dp_min)<BR ALIGN="LEFT"/>
-      Output:<BR ALIGN="LEFT"/>
-      • variant_string → column_index map<BR ALIGN="LEFT"/>
-      • per-sample set of present variant indices
-    >];
+    discard [label="discard record" fillcolor="#E9E9E9" fontcolor="gray35"];
 
-    union2 [label=<
-      <B>UNION mode — PASS 2 (matrix build)</B><BR ALIGN="LEFT"/>
-      If scipy.sparse available → build CSR matrix<BR ALIGN="LEFT"/>
-      Else → dense fallback (small only)<BR ALIGN="LEFT"/>
-      Optional: integer feature IDs + lookup table<BR ALIGN="LEFT"/>
-      Save genomic_matrix.csv
-    >];
+    // Cohort merge (within DataLoader)
+    merge_calls [label=<
+      <B>Cohort merge + carrier counts</B><BR ALIGN="LEFT"/>
+      Merge all per-sample call maps<BR ALIGN="LEFT"/>
+      Count carriers only where called ≠ ref
+    > fillcolor="#E7F2FF"];
 
-    union_sem [label=<
-      <B>UNION mode semantic assumption</B><BR ALIGN="LEFT"/>
-      ALT-only single-sample VCF absent record ⇒ encode as reference (0)<BR ALIGN="LEFT"/>
-      Not treated as missing
-    > fillcolor="#fff2cc"];
+    bial_cons [label=<
+      <B>Optional ALT consistency gate</B><BR ALIGN="LEFT"/>
+      If biallelic-only, enforce consistent ALT per site<BR ALIGN="LEFT"/>
+      (discard conflicting ALT)
+    > shape=diamond fillcolor="#F2FAFF"];
 
-    // MERGE-then-PARSE details
-    merge0 [label=<
-      <B>MERGE-then-PARSE</B><BR ALIGN="LEFT"/>
-      bcftools merge -Oz --threads … → merged.vcf.gz<BR ALIGN="LEFT"/>
-      tabix -p vcf merged.vcf.gz<BR ALIGN="LEFT"/>
-      Then run single-VCF pipeline on merged file
-    >];
+    pres [label=<
+      <B>Cohort presence filter</B><BR ALIGN="LEFT"/>
+      keep sites where carrier_count ≥ min_sample_presence
+    > shape=diamond fillcolor="#F2FAFF"];
 
-    // Single VCF bcftools pipeline details
-    vcf0 [label=<
-      <B>Single VCF mode</B><BR ALIGN="LEFT"/>
-      Work in temp directory<BR ALIGN="LEFT"/>
-      Use bcftools (+ tabix for bgzip output)
-    >];
+    sort_sites [label=<
+      <B>Sort retained sites</B><BR ALIGN="LEFT"/>
+      sort by chrom, pos
+    > fillcolor="#E7F2FF"];
 
-    vcf1 [label=<
-      <B>(Optional) Normalize</B><BR ALIGN="LEFT"/>
-      If --ref_fasta provided:<BR ALIGN="LEFT"/>
-      bcftools norm -f ref.fa -m- -any<BR ALIGN="LEFT"/>
-      (left align + split multiallelic representations)
-    >];
+    // Baseline + encoding
+    refline [label=<
+      <B>Build ref_line</B><BR ALIGN="LEFT"/>
+      join REF bases across ordered sites
+    > fillcolor="#D7F7D7"];
 
-    vcf2 [label=<
-      <B>Filter biallelic SNPs</B><BR ALIGN="LEFT"/>
-      bcftools view -m2 -M2 -v snps
-    >];
+    alleles [label=<
+      <B>Build per-sample allele strings</B><BR ALIGN="LEFT"/>
+      called if valid else fallback REF<BR ALIGN="LEFT"/>
+      also collect per-position base counts (Counter)
+    > fillcolor="#D7F7D7"];
 
-    vcf3 [label=<
-      <B>Variant-level QC</B><BR ALIGN="LEFT"/>
-      bcftools filter -e &quot;QUAL&lt;min_qual || INFO/DP&lt;min_dp&quot;<BR ALIGN="LEFT"/>
-      (DP clause applied only if INFO/DP exists)
-    >];
+    baseQ [label=<
+      <B>Choose baseline</B><BR ALIGN="LEFT"/>
+      ancestral_allele == 'Y' ? REF : MODE
+    > shape=diamond fillcolor="#ECFFEC"];
 
-    vcf4 [label=<
-      <B>Genotype-level QC masking</B><BR ALIGN="LEFT"/>
-      If FORMAT tags exist (GQ/DP):<BR ALIGN="LEFT"/>
-      bcftools filter -S . -e &quot;FMT/GQ&lt;min_gq || FMT/DP&lt;min_fmt_dp&quot;<BR ALIGN="LEFT"/>
-      Low-quality genotypes → set to missing (.)
-    >];
+    base_ref [label="baseline = ref_line" fillcolor="#D7F7D7"];
+    base_mode [label="baseline = per-position mode base" fillcolor="#D7F7D7"];
 
-    vcf5 [label=<
-      <B>Remove invariant sites</B><BR ALIGN="LEFT"/>
-      bcftools view -i &quot;MAX(AC)&gt;0&quot;
-    >];
+    encode [label=<
+      <B>Binary encode</B><BR ALIGN="LEFT"/>
+      0 = matches baseline<BR ALIGN="LEFT"/>
+      1 = differs
+    > fillcolor="#CFF7F7"];
 
-    vcf6 [label=<
-      <B>Remove SNPs near indels/gaps</B><BR ALIGN="LEFT"/>
-      bcftools filter --SnpGap min_spacing_bp
-    >];
+    varids [label=<
+      <B>Variant IDs</B><BR ALIGN="LEFT"/>
+      CHROM:POS:REF:ALT
+    > fillcolor="#CFF7F7"];
 
-    vcf7 [label=<
-      <B>Extract GT → 0/1 matrix</B><BR ALIGN="LEFT"/>
-      bcftools query -f &quot;%CHROM:%POS:%REF:%ALT\\t[%GT\\t]\\n&quot;<BR ALIGN="LEFT"/>
-      Encode:<BR ALIGN="LEFT"/>
-      • missing GT → NaN<BR ALIGN="LEFT"/>
-      • any ALT allele present (contains '1') → 1<BR ALIGN="LEFT"/>
-      • else → 0<BR ALIGN="LEFT"/>
-      Save &lt;prefix&gt;.genomic_matrix.csv
-    >];
+    build_df [label=<
+      <B>Build DataFrame</B><BR ALIGN="LEFT"/>
+      rows = samples<BR ALIGN="LEFT"/>
+      cols = variant IDs<BR ALIGN="LEFT"/>
+      values ∈ {0,1}
+    > fillcolor="#CFF7F7"];
 
-    // Prebuilt matrix branch
+    // Light preprocessing (DataLoader only)
+    pre0 [label=<
+      <B>_preprocess_binary_matrix()</B><BR ALIGN="LEFT"/>
+      optional: drop invariant cols (all 0 / all 1)<BR ALIGN="LEFT"/>
+      optional: min_minor_count filter
+    > fillcolor="#FFE0F0"];
+
+    compactQ [label="use_integer_variant_ids?" shape=diamond fillcolor="#EDEDED"];
+    compactY [label="rename → v0,v1,... + save lookup" fillcolor="#EDEDED"];
+    compactN [label="keep full variant IDs" fillcolor="#EDEDED"];
+
+    outQ [label="output_dir provided?" shape=diamond fillcolor="#FFE7E0"];
+    write_all [label=<
+      <B>_write_all_artifacts()</B><BR ALIGN="LEFT"/>
+      • SNP table (minimal or annotated if ref/gbk available)<BR ALIGN="LEFT"/>
+      • alleles.fasta + binary.fasta<BR ALIGN="LEFT"/>
+      • filtered.tsv (+ optional context)<BR ALIGN="LEFT"/>
+      • matrices/* (filtered derivatives)<BR ALIGN="LEFT"/>
+      • config snapshot
+    > fillcolor="#FFD6C9"];
+
+    dl_return [label="Return binary DataFrame\n(samples × variants, 0/1)" shape=ellipse fillcolor="#D7F7D7"];
+
+    // Wiring (Stage 1)
+    np_run -> dl_route;
+
+    dl_route -> dl_dir [label="if directory"];
+    dl_dir -> dl_par;
+    dl_par -> iter0 [label="for each sample VCF"];
+    iter0 -> gate_snp;
+    gate_snp -> discard [label="no" style=dashed color="gray50"];
+    gate_snp -> gate_info [label="yes"];
+    gate_info -> discard [label="no" style=dashed color="gray50"];
+    gate_info -> choose0 [label="yes"];
+    choose0 -> store0;
+
+    store0 -> merge_calls [label="all samples done"];
+    merge_calls -> bial_cons;
+    bial_cons -> pres [label="ok"];
+
+    pres -> sort_sites [label="kept"];
+    pres -> discard [label="none left" style=dashed color="gray50"];
+
+    sort_sites -> refline -> alleles -> baseQ;
+    baseQ -> base_ref [label="Y"];
+    baseQ -> base_mode [label="mode"];
+    base_ref -> encode;
+    base_mode -> encode;
+    encode -> varids -> build_df -> pre0;
+
+    pre0 -> compactQ;
+    compactQ -> compactY [label="yes"];
+    compactQ -> compactN [label="no"];
+
+    compactY -> outQ;
+    compactN -> outQ;
+
+    outQ -> write_all [label="yes"];
+    outQ -> dl_return [label="no"];
+    write_all -> dl_return;
+
+    // Single-VCF mode: reuses the same parse→encode logic (no merge-VCFs step)
+    dl_single [label=<
+      <B>Single VCF input</B><BR ALIGN="LEFT"/>
+      Treat as a single-sample VCF (or already-cohort VCF parsed similarly)<BR ALIGN="LEFT"/>
+      Reuse iter_sample_calls() → encode pipeline
+    > fillcolor="#FFF1C9"];
+
+    dl_route -> dl_single [label="if .vcf/.vcf.gz"];
+    dl_single -> iter0;
+
+    // Prebuilt matrix mode
     mat0 [label=<
       <B>CSV/TSV matrix mode</B><BR ALIGN="LEFT"/>
       Load sample × feature matrix as-is<BR ALIGN="LEFT"/>
-      (Assumes already numeric/binary)
+      (assumes already numeric/binary)
     >];
+
+    dl_route -> mat0 [label="if .csv/.tsv"];
 
     // Metadata + known markers
     meta0 [label=<
       <B>load_metadata(meta_path)</B><BR ALIGN="LEFT"/>
       Read CSV/TSV<BR ALIGN="LEFT"/>
-      Index = &quot;Sample&quot; column if present else first column<BR ALIGN="LEFT"/>
+      Index = "Sample" column if present else first column<BR ALIGN="LEFT"/>
       Save metadata.normalized.csv
     > fillcolor="#e9fff2"];
 
     km0 [label=<
       <B>load_known_markers(known_markers_path)</B><BR ALIGN="LEFT"/>
       Accept .txt (one per line) OR .csv/.tsv<BR ALIGN="LEFT"/>
-      Column &quot;marker&quot; or first column<BR ALIGN="LEFT"/>
+      Column "marker" or first column<BR ALIGN="LEFT"/>
       Save known_markers.normalized.txt
     > fillcolor="#e9fff2"];
-
-    // Wire loader stage
-    np_run -> dl_route;
-
-    dl_route -> dl_dir [label="if directory"];
-    dl_dir -> dl_choose;
-
-    dl_choose -> union0 [label="UNION-of-sites"];
-    union0 -> union1 -> union2 -> union_sem;
-
-    dl_choose -> merge0 [label="MERGE-then-PARSE"];
-    merge0 -> vcf0;
-
-    dl_route -> vcf0 [label="if .vcf/.vcf.gz"];
-    vcf0 -> vcf1 -> vcf2 -> vcf3 -> vcf4 -> vcf5 -> vcf6 -> vcf7;
-
-    dl_route -> mat0 [label="if .csv/.tsv"];
 
     dl_route -> meta0 [style=dashed, label="if --meta"];
     dl_route -> km0   [style=dashed, label="if --known_markers"];
@@ -268,7 +320,7 @@ digraph NetworkParser_Flow_Detailed {
       • all_features = matrix columns
     >];
 
-    pre0 [label=<
+    pre1 [label=<
       <B>Pre-tree filtering (statistically defensible)</B><BR ALIGN="LEFT"/>
       1) Missingness gate: keep features with sufficient non-missing fraction<BR ALIGN="LEFT"/>
       2) MAF gate: keep features with MAF ≥ threshold<BR ALIGN="LEFT"/>
@@ -281,13 +333,12 @@ digraph NetworkParser_Flow_Detailed {
     misslog [label=<
       <B>Missingness reporting</B><BR ALIGN="LEFT"/>
       Compute per-feature NaN fraction<BR ALIGN="LEFT"/>
-      Log count of features above threshold<BR ALIGN="LEFT"/>
-      (avoid printing thousands of names)
+      Log counts only (avoid printing thousands)
     > fillcolor="#fff2cc"];
 
     impute0 [label=<
       <B>Impute missing for tree fit</B><BR ALIGN="LEFT"/>
-      NaN → 0 (treat missing as reference)<BR ALIGN="LEFT"/>
+      NaN → 0 (treat missing as baseline)<BR ALIGN="LEFT"/>
       Drop near-monomorphic after imputation
     >];
 
@@ -332,12 +383,11 @@ digraph NetworkParser_Flow_Detailed {
     > fillcolor="#e9fff2"];
 
     // connect discovery
-    vcf7 -> disc_in [label="matrix"];
-    union2 -> disc_in [label="matrix"];
+    dl_return -> disc_in [label="matrix"];
     mat0 -> disc_in [label="matrix"];
     meta0 -> disc_in [style=dashed, label="labels from meta[label_column]"];
 
-    disc_in -> pre0 -> misslog -> impute0 -> tree0 -> rule0 -> conf0 -> epi0 -> files0;
+    disc_in -> pre1 -> misslog -> impute0 -> tree0 -> rule0 -> conf0 -> epi0 -> files0;
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -438,26 +488,19 @@ digraph NetworkParser_Flow_Detailed {
     style="rounded";
     color="#e2e2e2";
 
-    dep_tools [label=<
-      <B>External tools</B><BR ALIGN="LEFT"/>
-      • bcftools: norm, view, filter, merge, query<BR ALIGN="LEFT"/>
-      • tabix: index .vcf.gz
-    > fillcolor="#f4f4f4"];
-
     dep_py [label=<
       <B>Python</B><BR ALIGN="LEFT"/>
       • pandas, numpy<BR ALIGN="LEFT"/>
-      • scipy.sparse (optional, for union mode scale)<BR ALIGN="LEFT"/>
       • scikit-learn (DecisionTreeClassifier, LabelEncoder, MI)<BR ALIGN="LEFT"/>
       • scipy.stats, statsmodels (FDR-BH etc.)<BR ALIGN="LEFT"/>
       • joblib (parallel validation)<BR ALIGN="LEFT"/>
-      • concurrent.futures (threaded indexing)
+      • optional: Biopython (SNP annotation / context if enabled)
     > fillcolor="#f4f4f4"];
   }
 
   // connect deps lightly
-  vcf0 -> dep_tools [style=dotted];
-  union1 -> dep_tools [style=dotted];
-  pre0 -> dep_py [style=dotted];
+  dl_par -> dep_py [style=dotted];
+  pre1 -> dep_py [style=dotted];
   v_assoc -> dep_py [style=dotted];
+  write_all -> dep_py [style=dotted];
 }

@@ -1,0 +1,217 @@
+digraph DataLoader_Flow_AlignedToCode {
+  rankdir=TB;
+  splines=ortho;
+  bgcolor="white";
+  labelloc="t";
+  fontsize=20;
+  fontname="Helvetica,Arial,sans-serif";
+  label="DataLoader (VCF dir) → Sample×Variant Binary Matrix\n(INFO/QC → cohort presence → baseline → encode → light preprocessing → optional artifacts)";
+
+  node [shape=box, style="rounded,filled", fontname="Helvetica,Arial,sans-serif", fontsize=11, penwidth=1.2];
+  edge [fontname="Helvetica,Arial,sans-serif", fontsize=10, penwidth=1.1, arrowsize=0.9];
+
+  // ───────────────────────────────────────────────
+  // INPUT + DISCOVERY
+  // ───────────────────────────────────────────────
+  subgraph cluster_input {
+    label="Input Discovery";
+    color="#CFE8FF";
+    style="rounded";
+
+    Start [label="Start\n(directory of per-sample VCFs)", fillcolor="#D7F7D7"];
+    FindVCFs [label="Scan directory\ncollect *.vcf / *.vcf.gz", fillcolor="#E7F2FF"];
+    NoVCFs [label="Error\nno VCFs found", fillcolor="#F5D0D0"];
+
+    Start -> FindVCFs;
+    FindVCFs -> NoVCFs [label="none", style=dashed, color="gray50"];
+  }
+
+  // ───────────────────────────────────────────────
+  // PARALLEL PER-SAMPLE PARSE (iter_sample_calls)
+  // ───────────────────────────────────────────────
+  subgraph cluster_parse {
+    label="Parallel per-sample parsing (iter_sample_calls)";
+    color="#FFE6B3";
+    style="rounded";
+
+    Parallel [label="Parallel parse VCFs\n(joblib Parallel; n_jobs)", shape=ellipse, fillcolor="#FFD48A"];
+    PerVCF [label="For each sample VCF\nopen_any() + iterate records", fillcolor="#FFF1C9"];
+
+    IsHeader [label="Skip header lines\n(#...)", shape=diamond, fillcolor="#FFF7DB"];
+    IsSNP [label="is_snp_like?\n(single-base REF & ALT;\noptionally biallelic-only)", shape=diamond, fillcolor="#FFF7DB"];
+    ParseINFO [label="parse_info_field(INFO)\n→ dict", fillcolor="#FFF1C9"];
+    InfoQC [label="passes_info_qc?\nQUAL + INFO(DP,MQ,MQ0F)\n(thresholds from config)", shape=diamond, fillcolor="#FFF7DB"];
+    ChooseAllele [label="choose_called_allele()\nGT-aware when FORMAT present\nelse presence-based ALT", fillcolor="#FFF1C9"];
+    StoreCall [label="Store per-sample call\n(chrom,pos) → (ref, called)", fillcolor="#FFF1C9"];
+
+    Discard [label="Discard record", fillcolor="#E9E9E9", fontcolor="gray35"];
+
+    FindVCFs -> Parallel;
+    Parallel -> PerVCF [label="for each VCF"];
+    PerVCF -> IsHeader;
+    IsHeader -> Discard [label="yes", style=dashed, color="gray50"];
+    IsHeader -> IsSNP [label="no"];
+    IsSNP -> Discard [label="no", style=dashed, color="gray50"];
+    IsSNP -> ParseINFO [label="yes"];
+    ParseINFO -> InfoQC;
+    InfoQC -> Discard [label="no", style=dashed, color="gray50"];
+    InfoQC -> ChooseAllele [label="yes"];
+    ChooseAllele -> StoreCall;
+  }
+
+  // ───────────────────────────────────────────────
+  // MERGE ACROSS SAMPLES + COHORT FILTER
+  // ───────────────────────────────────────────────
+  subgraph cluster_merge {
+    label="Cohort merge + presence filtering";
+    color="#D9F0FF";
+    style="rounded";
+
+    Gather [label="Collect results\nper_sample_calls[sample] = calls", fillcolor="#E7F2FF"];
+
+    CountCarriers [label="Build site_counts\ncount carriers where called ≠ ref\n+ track ref & ALT", fillcolor="#E7F2FF"];
+    BiallelicCons [label="biallelic_only?\nALT must be consistent across samples\n(other ALT discarded)", shape=diamond, fillcolor="#F2FAFF"];
+
+    Presence [label="Filter sites:\ncount ≥ min_sample_presence", shape=diamond, fillcolor="#F2FAFF"];
+    NoSites [label="Error\nno sites remain\n(after QC + presence)", fillcolor="#F5D0D0"];
+
+    SortSites [label="Sort retained sites\nby (chrom, pos)", fillcolor="#E7F2FF"];
+
+    StoreCall -> Gather [label="all samples done"];
+    Gather -> CountCarriers;
+    CountCarriers -> BiallelicCons;
+    BiallelicCons -> CountCarriers [label="continue", style=dashed, color="gray50"];
+    BiallelicCons -> Presence [label="done"];
+    Presence -> NoSites [label="none", style=dashed, color="gray50"];
+    Presence -> SortSites [label="kept"];
+  }
+
+  // ───────────────────────────────────────────────
+  // BUILD ALLELE STRINGS + BASELINE
+  // ───────────────────────────────────────────────
+  subgraph cluster_baseline {
+    label="Allele matrix + baseline selection";
+    color="#E6FFE6";
+    style="rounded";
+
+    RefLine [label="ref_line = join REF bases\n(ordered sites)", fillcolor="#D7F7D7"];
+    SampleAlleles [label="For each sample:\nallele_string[j] = called if in {REF,ALT}\nelse fallback REF\n(+ per-position Counter)", fillcolor="#D7F7D7"];
+
+    BaselineChoice [label="ancestral_allele?", shape=diamond, fillcolor="#ECFFEC"];
+    BaselineREF [label="Baseline = REF (ref_line)\n(ancestral_allele='Y')", fillcolor="#D7F7D7"];
+    BaselineMODE [label="Baseline = cohort mode base\nper position\n(ancestral_allele!='Y')", fillcolor="#D7F7D7"];
+
+    SortSites -> RefLine;
+    RefLine -> SampleAlleles;
+    SampleAlleles -> BaselineChoice;
+    BaselineChoice -> BaselineREF [label="Y"];
+    BaselineChoice -> BaselineMODE [label="mode"];
+  }
+
+  // ───────────────────────────────────────────────
+  // BINARY ENCODING + DATAFRAME
+  // ───────────────────────────────────────────────
+  subgraph cluster_encode {
+    label="Binary encoding + DataFrame";
+    color="#CFF7F7";
+    style="rounded";
+
+    Encode [label="Binary encode per site:\n0 = matches baseline\n1 = differs", fillcolor="#CFF7F7"];
+    VariantIDs [label="Variant IDs:\nCHROM:POS:REF:ALT", fillcolor="#CFF7F7"];
+    BuildDF [label="Build DataFrame\nrows=samples, cols=variant IDs\nvalues ∈ {0,1}", fillcolor="#CFF7F7"];
+
+    BaselineREF -> Encode;
+    BaselineMODE -> Encode;
+    Encode -> VariantIDs;
+    VariantIDs -> BuildDF;
+  }
+
+  // ───────────────────────────────────────────────
+  // LIGHT PREPROCESSING (NOT statistical validation)
+  // ───────────────────────────────────────────────
+  subgraph cluster_pre {
+    label="Light preprocessing (DataLoader only)";
+    color="#FFE0F0";
+    style="rounded";
+
+    Preprocess [label="_preprocess_binary_matrix()", fillcolor="#FFE0F0"];
+    Invariant [label="remove_invariant?\ndrop columns all-0 or all-1", shape=diamond, fillcolor="#FFF0F8"];
+    Minor [label="min_minor_count > 0?\nkeep if min(count0,count1) ≥ threshold", shape=diamond, fillcolor="#FFF0F8"];
+    PreDone [label="Preprocessed binary matrix", fillcolor="#FFE0F0"];
+
+    BuildDF -> Preprocess;
+    Preprocess -> Invariant;
+    Invariant -> Minor [label="done"];
+    Minor -> PreDone [label="done"];
+  }
+
+  // ───────────────────────────────────────────────
+  // OPTIONAL COMPACT IDS
+  // ───────────────────────────────────────────────
+  CompactQ [label="use_integer_variant_ids?", shape=diamond, fillcolor="#EDEDED"];
+  CompactYes [label="Rename columns → v0,v1,...\nSave lookup (variant_id_lookup.json)", fillcolor="#EDEDED"];
+  CompactNo [label="Keep full variant IDs", fillcolor="#EDEDED"];
+
+  PreDone -> CompactQ;
+  CompactQ -> CompactYes [label="yes"];
+  CompactQ -> CompactNo [label="no"];
+
+  // ───────────────────────────────────────────────
+  // OPTIONAL ARTIFACT OUTPUT (matches legacy script outputs)
+  // ───────────────────────────────────────────────
+  subgraph cluster_artifacts {
+    label="Optional artifact output (when output_dir is provided)";
+    color="#FFD6C9";
+    style="rounded";
+
+    OutDirQ [label="output_dir provided?", shape=diamond, fillcolor="#FFE7E0"];
+    WriteAll [label="_write_all_artifacts()", fillcolor="#FFD6C9"];
+
+    AllSNP [label="vcf_counts/all_snp.txt\n(minimal or annotated)", fillcolor="#FFD6C9"];
+    SNPAnnotQ [label="GenBank ref provided\n& Biopython available?", shape=diamond, fillcolor="#FFE7E0"];
+    Annotate [label="annotate_snps_genbank()\nadds region/codon/AA change\ngene annotation", fillcolor="#FFD6C9"];
+    Minimal [label="minimal table\n(Position, Count)", fillcolor="#FFD6C9"];
+
+    FastaA [label="fasta/<generic>_alleles.fasta\nREF + sample allele strings", fillcolor="#FFD6C9"];
+    FastaB [label="fasta/<generic>_binary.fasta\nREF + sample binary strings", fillcolor="#FFD6C9"];
+
+    FilteredTSV [label="fasta/<generic>_filtered.tsv\n(filtered copy of SNP table)", fillcolor="#FFD6C9"];
+    ContextQ [label="Reference sequence loadable?\n(FASTA/GBK + Biopython)", shape=diamond, fillcolor="#FFE7E0"];
+    AddContext [label="append Context_±flank\n(circular context_around)", fillcolor="#FFD6C9"];
+    NoContext [label="write without context", fillcolor="#FFD6C9"];
+
+    Matrices [label="matrices/* outputs\n(filtering + redundancy reduction)\n(min_count/type/repeat/fix)", fillcolor="#FFD6C9"];
+
+    CfgSnap [label="Write config snapshot\n(dataloader_config.snapshot.json)", fillcolor="#FFD6C9"];
+
+    CompactYes -> OutDirQ;
+    CompactNo  -> OutDirQ;
+
+    OutDirQ -> WriteAll [label="yes"];
+    OutDirQ -> Return [label="no"];
+
+    WriteAll -> AllSNP;
+    AllSNP -> SNPAnnotQ;
+    SNPAnnotQ -> Annotate [label="yes"];
+    SNPAnnotQ -> Minimal [label="no"];
+
+    WriteAll -> FastaA;
+    WriteAll -> FastaB;
+
+    WriteAll -> FilteredTSV;
+    FilteredTSV -> ContextQ;
+    ContextQ -> AddContext [label="yes"];
+    ContextQ -> NoContext [label="no"];
+
+    WriteAll -> Matrices;
+    WriteAll -> CfgSnap;
+  }
+
+  // ───────────────────────────────────────────────
+  // RETURN
+  // ───────────────────────────────────────────────
+  Return [label="Return binary DataFrame\n(samples × variants, 0/1)", shape=ellipse, fillcolor="#D7F7D7"];
+
+  CompactYes -> Return [label="df (compact IDs)"];
+  CompactNo  -> Return [label="df (full IDs)"];
+}

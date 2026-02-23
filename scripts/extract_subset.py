@@ -45,6 +45,7 @@ python3 extract_subset.py \\
     --n-samples 100 \\
     --output-dir test_subset_pheno
 
+    
 # Simple random (no stratification)
 python3 extract_subset.py \\
     --vcf-dir AFRO_TB_ANNOTATION_VCF \\

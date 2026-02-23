@@ -196,6 +196,64 @@ class StatisticalValidator:
 
         return interaction_results
 
+    # ------------------------------------------------------------------
+    # Orchestrator-facing wrappers (kept stable for CLI flags)
+    # ------------------------------------------------------------------
+    def validate_features(
+        self,
+        genomic_df: pd.DataFrame,
+        meta_df: pd.DataFrame,
+        label_column: str,
+        discovered_features: List[str],
+        output_dir: Optional[str] = None,
+    ) -> Dict:
+        """Run association tests + multiple testing correction + bootstrap stability.
+
+        Notes:
+            - This is *validation*, not discovery: it never changes the tree.
+            - For statistical defensibility, the association testing happens before
+              any bootstrap-based stability summaries.
+        """
+        if meta_df is None:
+            raise ValueError("meta_df is required for validation")
+        if label_column not in meta_df.columns:
+            raise ValueError(f"label_column not found in metadata: {label_column}")
+        labels = meta_df[label_column]
+
+        # If discovery returned nothing (or was capped elsewhere), fall back to all columns.
+        features = discovered_features or list(genomic_df.columns)
+        data = genomic_df[features]
+
+        assoc = self.chi_squared_test(data=data, labels=labels, output_dir=output_dir)
+        mtest = self.multiple_testing_correction(assoc, output_dir=output_dir)
+
+        # Bootstrap on the discovered feature set (or full set if empty)
+        boot = self.bootstrap_validation(data=genomic_df, labels=labels, features=features, output_dir=output_dir)
+        return {"association": assoc, "multiple_testing": mtest, "bootstrap": boot}
+
+    def validate_interactions(
+        self,
+        genomic_df: pd.DataFrame,
+        meta_df: pd.DataFrame,
+        label_column: str,
+        interactions: List[Tuple[str, str]],
+        output_dir: Optional[str] = None,
+    ) -> Dict:
+        """Permutation validation for candidate interaction pairs."""
+        if meta_df is None:
+            raise ValueError("meta_df is required for interaction validation")
+        if label_column not in meta_df.columns:
+            raise ValueError(f"label_column not found in metadata: {label_column}")
+        labels = meta_df[label_column]
+        if not interactions:
+            return {}
+        return self.permutation_test_interactions(
+            data=genomic_df,
+            labels=labels,
+            interactions=interactions,
+            output_dir=output_dir,
+        )
+
     def _calculate_cramers_v_from_table(self, contingency: pd.DataFrame) -> float:
         """Compute Cramer's V from contingency table."""
         chi2 = chi2_contingency(contingency.values)[0]
