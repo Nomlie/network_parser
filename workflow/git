@@ -13,3 +13,17 @@ git commit -m "Your message"
 git push --set-upstream origin changesss
 
 git remote set-url origin https://github.com/Nomlie/network_parser.git
+
+
+ python extract_subset.py --vcf-dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/AFRO_TB_ANNOTATION_VCF \
+    --meta-file /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/AFRO_dataset_meta.csv \
+    --stratify-by Lineage \
+    --n-samples 3000 \
+    --output-dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/LineageBalanced
+
+ python -m network_parser.cli \
+--genomic /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/LineageBalanced \
+--meta /Users/nmfuphicsir.co.za/Documents/data/AFRO_TB/AFRO_dataset_meta.csv \
+--label Lineage \
+--ref_fasta /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/VCF_2_Matrix/ref/H37Rv.gbk \
+--output_dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/LineageBalanced
