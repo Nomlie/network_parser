@@ -1,0 +1,131 @@
+digraph DataLoader_VCF_Directory_Workflow {
+  rankdir=TB;
+  splines=ortho;
+  bgcolor="white";
+  labelloc="t";
+  fontsize=20;
+  fontname="Helvetica,Arial,sans-serif";
+  label="DataLoader: VCF directory → Cohort site universe → Binary matrix\n(Per-sample parsing → Cohort merge → Presence filter → Baseline encoding → Matrix → Preprocessing)";
+
+  node [
+    shape=box,
+    style="rounded,filled",
+    fontname="Helvetica,Arial,sans-serif",
+    fontsize=11,
+    penwidth=1.2,
+    fillcolor="lightblue"
+  ];
+
+  edge [
+    fontname="Helvetica,Arial,sans-serif",
+    fontsize=10,
+    penwidth=1.2,
+    arrowsize=0.9
+  ];
+
+  // ─────────────────────────────────────────────
+  // Inputs
+  // ─────────────────────────────────────────────
+  Start [label="Start\nVCF directory (per-sample .vcf/.vcf.gz)", fillcolor="lightgreen"];
+  Discover [label="Discover VCF files\n(sorted list)", fillcolor="lightgreen"];
+  Config [label="Log configuration\n• record-level QC thresholds (applied during parsing)\n• cohort/matrix settings (applied after parsing)", fillcolor="lightyellow"];
+
+  Start -> Discover;
+  Discover -> Config;
+
+  // ─────────────────────────────────────────────
+  // Parallel per-sample parsing
+  // ─────────────────────────────────────────────
+  subgraph cluster_parsing {
+    label="Stage A: Parallel per-sample parsing";
+    color="gray70";
+    style="rounded,dashed";
+
+    ParseStart [label="Start parallel parsing\nParallel(n_jobs)\nfor each VCF", fillcolor="orange"];
+
+    IterCalls [label="iter_sample_calls(vcf)\nscan records & apply QC\nretain SNP-like calls\n(biallelic-only if enabled)", fillcolor="orange"];
+
+    CallsDict [label="Per-sample output (in memory)\ncalls_dict:\nsite → (REF, CALLED)", fillcolor="white"];
+
+    ResultsList [label="Collected parsed results (in memory)\nresults: list of\n(sample_id, calls_dict)", fillcolor="white"];
+
+    ParseStart -> IterCalls -> CallsDict -> ResultsList;
+  }
+
+  Config -> ParseStart;
+
+  ParseSummary [label="Parsing complete (log summary)\n• samples\n• total_called_sites\n• mean_calls_per_sample\n• storage: results list", fillcolor="lightgrey"];
+  ResultsList -> ParseSummary;
+
+  // ─────────────────────────────────────────────
+  // Cohort merge
+  // ─────────────────────────────────────────────
+  subgraph cluster_merge {
+    label="Stage B: Cohort merge (define site universe)";
+    color="gray70";
+    style="rounded,dashed";
+
+    MergeStart [label="Cohort merge starting\naggregate per-sample calls", fillcolor="khaki1"];
+
+    BuildPerSample [label="Build in-memory map\nper_sample_calls[sample] → calls_dict", fillcolor="white"];
+
+    BuildSiteCounts [label="Build cohort site counts\nsite_counts[site] →\n[carrier_count, REF, ALT]\n(ALT conflicts discarded if biallelic)", fillcolor="white"];
+
+    MergeDone [label="Cohort merge complete\nsite_counts defines cohort site universe (pre-filter)", fillcolor="khaki1"];
+
+    MergeStart -> BuildPerSample -> BuildSiteCounts -> MergeDone;
+  }
+
+  ParseSummary -> MergeStart;
+
+  CohortLandscape [label="Cohort variant landscape (pre-filter)\n• unique polymorphic sites\n• total mutation occurrences\n• ALT conflicts discarded", fillcolor="khaki1"];
+  MergeDone -> CohortLandscape;
+
+  ArtifactsNote [label="Artifacts note (log)\nOutput written later (after filtering/encoding)\n• matrices + FASTA + annotation tables", fillcolor="lightyellow"];
+  CohortLandscape -> ArtifactsNote;
+
+  // ─────────────────────────────────────────────
+  // Presence filtering
+  // ─────────────────────────────────────────────
+  Presence [label="Cohort presence filtering\nKeep sites with carrier_count ≥ min_sample_presence\n(log retained %)", fillcolor="palegreen"];
+  ArtifactsNote -> Presence;
+
+  NoSites [label="If no sites retained → error\n(relax thresholds)", fillcolor="mistyrose"];
+  Presence -> NoSites [style=dashed, color="gray60", label="kept_sites empty"];
+
+  KeptSites [label="kept_sites (in memory)\nsite → (carrier_count, REF, ALT)", fillcolor="white"];
+  Presence -> KeptSites;
+
+  // ─────────────────────────────────────────────
+  // Allele strings and baseline selection
+  // ─────────────────────────────────────────────
+  AlleleStrings [label="Build allele strings\nsample_allele_strings[sample]\nper retained site list", fillcolor="lightblue"];
+  KeptSites -> AlleleStrings;
+
+  Baseline [label="Baseline selection\nREF baseline: reference allele\nMODE baseline: cohort-majority allele\n(log meaning of 0/1)", fillcolor="lightblue"];
+  AlleleStrings -> Baseline;
+
+  // ─────────────────────────────────────────────
+  // Encoding + matrix assembly
+  // ─────────────────────────────────────────────
+  Encode [label="Binary encoding\n0=baseline allele\n1=non-baseline allele\n(sample_binary_strings)", fillcolor="lightblue"];
+  Baseline -> Encode;
+
+  VariantIDs [label="Feature IDs\nCHROM:POS:REF:ALT\n(variant-centric identifiers)", fillcolor="white"];
+  Encode -> VariantIDs;
+
+  Matrix [label="Assemble binary matrix\nDataFrame: samples × features\n(values 0/1)", fillcolor="lightblue"];
+  VariantIDs -> Matrix;
+
+  MatrixStats [label="Raw matrix stats (log)\n• density\n• mean carriers per site\n• mean burden per genome\n• singleton/doubleton counts", fillcolor="lightgrey"];
+  Matrix -> MatrixStats;
+
+  // ─────────────────────────────────────────────
+  // Preprocessing
+  // ─────────────────────────────────────────────
+  Preprocess [label="Matrix preprocessing (post-encoding)\n• remove_invariant\n• min_minor_count\n(log removals by step)", fillcolor="lightgoldenrod1"];
+  MatrixStats -> Preprocess;
+
+  OutputDF [label="Output\nFiltered binary matrix (df)\nready for downstream analysis", fillcolor="lightgreen"];
+  Preprocess -> OutputDF;
+}
