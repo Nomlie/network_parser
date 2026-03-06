@@ -7,7 +7,7 @@ Central configuration object for NetworkParser.
 All filtering logic that can safely be parameterized is defined here,
 including:
 
-• VCF / DataLoader QC thresholds
+• VCF / DataLoader QC thresholds (per-record, INFO-level, per-sample VCF parsing)
 • Cohort-level SNP presence filtering
 • Binary baseline strategy
 • Lightweight preprocessing
@@ -17,6 +17,10 @@ including:
 • Post-tree bootstrap settings
 
 These values can be overridden via JSON config.
+
+NOTE (Feb 2026):
+- All VCF-merge and union-matrix logic has been removed from config.
+  The pipeline uses the per-sample parsing + cohort merge strategy in DataLoader.
 """
 
 from dataclasses import dataclass
@@ -33,22 +37,18 @@ class NetworkParserConfig:
 
     # ─────────────────────────────────────────────
     # 2) VCF-level QC (DataLoader)
+    #    Applied while streaming each per-sample VCF
     # ─────────────────────────────────────────────
     qual_threshold: float = 30.0
     min_dp_per_sample: int = 10
-    min_gq_per_sample: int = 20  # kept from earlier config (safe default)
+    min_gq_per_sample: int = 20  # kept for compatibility / future genotype-level QC
     mq_threshold: float = 40.0
     mq0f_threshold: float = 0.1
     biallelic_only: bool = True
 
-    # Optional cohort/variant missingness controls (from earlier config)
+    # Optional cohort/variant missingness controls
     max_missing_fraction: float = 0.1
     min_spacing_bp: int = 10
-
-    # Union-matrix mode (directory of single-sample VCFs)
-    force_union_matrix: bool = False
-    union_matrix_threshold: int = 500
-    union_dp_min: int = 10
 
     # ─────────────────────────────────────────────
     # 3) Cohort-level SNP filtering
@@ -81,18 +81,18 @@ class NetworkParserConfig:
     # ─────────────────────────────────────────────
     statistical_test: Literal["chi2", "fisher"] = "chi2"
     significance_level: float = 0.05  # global alpha
-    fdr_alpha: float = 0.05           # (alias-like; kept for your existing JSONs)
-    fdr_threshold: float = 0.05       # kept for earlier code paths
+    fdr_alpha: float = 0.05           
+    fdr_threshold: float = 0.05       
     chi2_min_expected: int = 5
     n_permutation_tests: int = 500
 
-    # Pre-filtering / feature selection (from earlier config; optional stage)
+    # Pre-filtering / feature selection (pre-tree)
     prefilter_alpha: float = 0.05
     min_nonmissing_prefilter: float = 0.20
     min_maf_prefilter: float = 0.0
     max_prefiltered_features: Optional[int] = 10000
 
-    # Multiple testing method (from earlier config)
+    # Multiple testing method
     multiple_testing_method: Literal["fdr_bh", "bonferroni"] = "fdr_bh"
 
     # ─────────────────────────────────────────────
@@ -104,34 +104,35 @@ class NetworkParserConfig:
     min_samples_leaf: int = 1
     min_information_gain: float = 0.001
 
-    # Legacy compatibility
-    min_group_size: int = 2  # populated from min_samples_split in __post_init__
-    # ──────────────────────────────────────────────────────────────
-    # Interaction / Epistasis Mining
-    # ──────────────────────────────────────────────────────────────
+    # Legacy compatibility alias (populated from min_samples_split in __post_init__)
+    min_group_size: int = 2
+
+    # ─────────────────────────────────────────────
+    # 9) Interaction / Epistasis Mining (POST-TREE)
+    # ─────────────────────────────────────────────
     epistasis_strength_threshold: float = 0.05
     max_epistatic_interactions: int = 50
-    n_permutation_tests: int = 500
+
     # ─────────────────────────────────────────────
-    # 9) Post-tree bootstrap / stability
+    # 10) Post-tree bootstrap / stability (POST-TREE)
     # ─────────────────────────────────────────────
-    # Simple bootstrap interface (what your new config already has)
+    # Simple bootstrap interface
     n_bootstrap: int = 100
     bootstrap_sample_fraction: float = 0.8
 
-    # Advanced stability interface (kept for earlier pipeline stages)
+    # Advanced stability interface 
     n_bootstrap_samples: int = 1000
     bootstrap_samples_per_iter: int = 100
     bootstrap_outer_iters: int = 5
     min_bootstrap_support: float = 0.7
 
     # ─────────────────────────────────────────────
-    # 10) Optional matrix compression
+    # 11) Optional matrix compression
     # ─────────────────────────────────────────────
     use_integer_variant_ids: bool = False
 
     # ─────────────────────────────────────────────
-    # 11) Performance & Reproducibility
+    # 12) Performance & Reproducibility
     # ─────────────────────────────────────────────
     n_jobs: int = -1  # -1 = all cores
     random_state: int = 42
@@ -161,8 +162,14 @@ class NetworkParserConfig:
         if self.qual_threshold < 0:
             raise ValueError("qual_threshold must be >= 0")
 
-        if self.min_dp_per_sample < 0 or self.union_dp_min < 0:
-            raise ValueError("DP thresholds must be >= 0")
+        if self.min_dp_per_sample < 0:
+            raise ValueError("min_dp_per_sample must be >= 0")
+
+        if self.min_gq_per_sample < 0:
+            raise ValueError("min_gq_per_sample must be >= 0")
+
+        if self.mq_threshold < 0:
+            raise ValueError("mq_threshold must be >= 0")
 
         if not 0 <= self.mq0f_threshold <= 1:
             raise ValueError("mq0f_threshold must be in [0, 1]")

@@ -31,6 +31,10 @@ try:
 except Exception:  # pragma: no cover
     yaml = None
 
+import logging
+import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 # ──────────────────────────────────────────────────────────────
 # General helpers expected by the pipeline

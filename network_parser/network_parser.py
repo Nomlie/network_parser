@@ -12,7 +12,72 @@ from network_parser.statistical_validation import StatisticalValidator
 from network_parser.utils import save_json, ensure_dir, timestamp
 
 logger = logging.getLogger(__name__)
+def normalize_labels(
+        labels: pd.Series,
+        drop_missing: bool = True,
+        lowercase: bool = False,
+    ) -> pd.Series:
+        """
+        Normalize phenotype / class labels to avoid artificial class inflation.
 
+        Steps:
+        - strip whitespace
+        - treat '-', '', 'NA', 'None', etc. as missing
+        - standardize '_' and '-' to a single form
+        - optional lowercase normalization
+        - optionally drop missing labels
+
+        Returns:
+            Cleaned pd.Series aligned to original index (missing rows optionally removed).
+        """
+
+        if not isinstance(labels, pd.Series):
+            raise TypeError("labels must be a pandas Series")
+
+        original_n = labels.shape[0]
+        original_unique = labels.nunique(dropna=False)
+
+        # Convert to string safely
+        clean = labels.astype(str).str.strip()
+
+        # Normalize obvious missing tokens
+        missing_tokens = {"", "-", "NA", "N/A", "None", "nan", "NaN"}
+        clean = clean.replace(missing_tokens, pd.NA)
+
+        # Standardize separators: unify '-' and '_' → single underscore
+        clean = clean.str.replace("-", "_", regex=False)
+
+        # Optional lowercase normalization
+        if lowercase:
+            clean = clean.str.lower()
+
+        # Count missing before drop
+        n_missing = clean.isna().sum()
+
+        if drop_missing:
+            clean = clean[~clean.isna()]
+
+        final_unique = clean.nunique(dropna=False)
+        final_n = clean.shape[0]
+
+        logger.info(
+            "Label normalization: original_n=%d | final_n=%d | missing_removed=%d | "
+            "unique_before=%d | unique_after=%d",
+            original_n,
+            final_n,
+            n_missing,
+            original_unique,
+            final_unique,
+        )
+
+        # Optional warning if large drop
+        if n_missing > 0:
+            logger.warning(
+                "Label normalization removed %d features due to missing/invalid labels.",
+                n_missing,
+            )
+
+        return clean
 
 class NetworkParser:
     """
@@ -67,13 +132,63 @@ class NetworkParser:
             known_markers = self.loader.load_known_markers(known_markers_path, output_dir=output_dir)
             logger.info(f"Loaded {len(known_markers)} known markers")
 
-        # Stage 2: Decision tree feature discovery
+       # Stage 2: Decision tree feature discovery
         logger.info("Stage 2: Decision tree feature discovery")
+
+        # --- Normalize labels (remove '-', unify formatting) ---
+        raw_labels = meta_df[label_column]
+        labels = normalize_labels(
+            raw_labels,
+            drop_missing=True,     # drops '-', '', NA-like tokens
+            lowercase=False        # keep case unless you want strict normalization
+        )
+
+        # --- Align genomic matrix and labels to common samples AFTER label cleaning ---
+        genomic_samples = genomic_df.index.astype(str)
+        labels.index = labels.index.astype(str)
+
+        common = genomic_samples.intersection(labels.index)
+
+        # Helpful logs (counts only; no spam)
+        logger.info(
+            "Sample alignment: genomic=%d | meta=%d | labels_after_norm=%d | overlap=%d | genomic_only=%d | meta_only=%d",
+            len(genomic_samples),
+            meta_df.shape[0],
+            len(labels),
+            len(common),
+            len(genomic_samples) - len(common),
+            len(labels) - len(common),
+        )
+
+        if len(common) == 0:
+            raise ValueError(
+                "No overlapping sample IDs between genomic matrix and metadata after label normalization. "
+                "Check sample naming / metadata index column."
+            )
+
+        # Subset to overlap
+        genomic_df_aligned = genomic_df.loc[common]
+        labels_aligned = labels.loc[common]
+
+        # Optional: warn about tiny classes (useful for trees + stats)
+        try:
+            vc = labels_aligned.value_counts(dropna=False)
+            n_small = int((vc < getattr(self.config, "min_group_size", 2)).sum())
+            if n_small > 0:
+                logger.warning(
+                    "Labels: %d class(es) have fewer than min_group_size=%d samples (may destabilize inference).",
+                    n_small,
+                    getattr(self.config, "min_group_size", 2),
+                )
+        except Exception:
+            pass
+
+        # --- Now call discovery with cleaned, aligned labels ---
         discovery_results = self.tree_builder.discover_features(
-        data=genomic_df,
-        labels=meta_df[label_column],               # ← extract labels here
-        all_features=genomic_df.columns.tolist(),   # or the filtered list you want
-        output_dir=output_dir
+            data=genomic_df_aligned,
+            labels=labels_aligned,
+            all_features=genomic_df_aligned.columns.tolist(),
+            output_dir=output_dir,
         )
 
         # Stage 3: Statistical validation (optional)
