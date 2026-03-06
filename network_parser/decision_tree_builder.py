@@ -17,6 +17,72 @@ import json
 import logging
 from scipy.stats import chi2_contingency, fisher_exact  # Added missing import for Cramer's V calculation
 
+def normalize_labels(
+        labels: pd.Series,
+        drop_missing: bool = True,
+        lowercase: bool = False,
+    ) -> pd.Series:
+        """
+        Normalize phenotype / class labels to avoid artificial class inflation.
+
+        Steps:
+        - strip whitespace
+        - treat '-', '', 'NA', 'None', etc. as missing
+        - standardize '_' and '-' to a single form
+        - optional lowercase normalization
+        - optionally drop missing labels
+
+        Returns:
+            Cleaned pd.Series aligned to original index (missing rows optionally removed).
+        """
+
+        if not isinstance(labels, pd.Series):
+            raise TypeError("labels must be a pandas Series")
+
+        original_n = labels.shape[0]
+        original_unique = labels.nunique(dropna=False)
+
+        # Convert to string safely
+        clean = labels.astype(str).str.strip()
+
+        # Normalize obvious missing tokens
+        missing_tokens = {"", "-", "NA", "N/A", "None", "nan", "NaN"}
+        clean = clean.replace(missing_tokens, pd.NA)
+
+        # Standardize separators: unify '-' and '_' → single underscore
+        clean = clean.str.replace("-", "_", regex=False)
+
+        # Optional lowercase normalization
+        if lowercase:
+            clean = clean.str.lower()
+
+        # Count missing before drop
+        n_missing = clean.isna().sum()
+
+        if drop_missing:
+            clean = clean[~clean.isna()]
+
+        final_unique = clean.nunique(dropna=False)
+        final_n = clean.shape[0]
+
+        logger.info(
+            "Label normalization: original_n=%d | final_n=%d | missing_removed=%d | "
+            "unique_before=%d | unique_after=%d",
+            original_n,
+            final_n,
+            n_missing,
+            original_unique,
+            final_unique,
+        )
+
+        # Optional warning if large drop
+        if n_missing > 0:
+            logger.warning(
+                "Label normalization removed %d samples due to missing/invalid labels.",
+                n_missing,
+            )
+
+        return clean
 def log_feature_summary(name: str, features: list, max_show: int = 3):
         count = len(features)
         if count == 0:
@@ -49,6 +115,7 @@ class EnhancedDecisionTreeBuilder:
     def __init__(self, config: NetworkParserConfig):
         self.config = config
         np.random.seed(self.config.random_state)  # Ensure reproducibility
+   
     def discover_features(self, data: pd.DataFrame, labels: pd.Series,
                           all_features: List[str], output_dir: Optional[str] = None) -> Dict:
         """

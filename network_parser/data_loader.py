@@ -34,7 +34,7 @@ Returned value:
 """
 
 from __future__ import annotations
-
+import os 
 import csv
 import gzip
 import json
@@ -43,10 +43,70 @@ from collections import Counter, OrderedDict, defaultdict
 from dataclasses import asdict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from concurrent.futures import ProcessPoolExecutor
 from joblib import Parallel, delayed
 import pandas as pd
 
 logger = logging.getLogger(__name__)
+
+def _minor_count_chunk(cols: List[List[str]]) -> List[Tuple[int, int]]:
+    # returns [(count0, count1), ...] for each col in chunk
+    out = []
+    for col in cols:
+        c1 = 0
+        for v in col:
+            if v == "1":
+                c1 += 1
+        c0 = len(col) - c1
+        out.append((c0, c1))
+    return out
+
+
+def minor_count_filter_parallel(binary_cols: List[List[str]], min_count: int, n_jobs: int) -> List[bool]:
+    """
+    Parallel minor-count filter across columns.
+
+    Note: use ProcessPoolExecutor because Python loops are GIL-bound.
+    Keep chunk sizes reasonably large to avoid overhead.
+    """
+    if min_count <= 0:
+        return [True] * len(binary_cols)
+    if n_jobs is None or n_jobs == 1 or len(binary_cols) < 5000:
+        # small: parallel overhead not worth it
+        return minor_count_filter(binary_cols, min_count)
+
+    # choose chunks (tune)
+    n_cols = len(binary_cols)
+    n_workers = os.cpu_count() if n_jobs < 0 else n_jobs
+    n_workers = max(1, int(n_workers))
+    chunk_size = max(1000, n_cols // (n_workers * 4))
+
+    chunks = [binary_cols[i:i+chunk_size] for i in range(0, n_cols, chunk_size)]
+
+    results: List[Tuple[int, int]] = []
+    with ProcessPoolExecutor(max_workers=n_workers) as ex:
+        for part in ex.map(_minor_count_chunk, chunks):
+            results.extend(part)
+
+    keep = []
+    for c0, c1 in results:
+        keep.append(min(c0, c1) >= min_count)
+    return keep
+
+def _fmt_n_jobs(n_jobs: Optional[int]) -> str:
+    """Log-friendly n_jobs formatting."""
+    if n_jobs is None:
+        return "default"
+    if isinstance(n_jobs, int) and n_jobs < 0:
+        return "all cores"
+    return str(n_jobs)
+
+
+def _safe_int(x, default: int = 0) -> int:
+    try:
+        return int(x)
+    except Exception:
+        return default
 
 try:
     from Bio import SeqIO
@@ -649,7 +709,42 @@ def write_matrix_tsv(path: Path, genomes: List[str], positions: List[str], data_
 
 class DataLoader:
     """Build a clean binary feature matrix from per-sample VCFs."""
+    def _log_stage1_reconciliation(
+        self,
+        *,
+        n_samples: int,
+        candidate_sites: int,
+        kept_sites_n: int,
+        df_shape: tuple,
+        out_root: Optional[Path],
+        matrices_final_markers: Optional[int] = None,
+    ) -> None:
+        """
+        Reconcile counts across:
+        - candidate cohort sites
+        - presence-filtered sites
+        - downstream matrix features (after preprocessing)
+        - curated matrices/* outputs
+        """
+        downstream_features = int(df_shape[1])
+        removed_features = max(0, kept_sites_n - downstream_features)
 
+        logger.info(
+            "DataLoader: Stage 1 reconciliation\n"
+            "  samples=%d\n"
+            "  candidate sites=%d\n"
+            "  kept sites after sample presence filter=%d\n"
+            "  downstream features after preprocess=%d (removed=%d invariant features)\n"
+            "  matrices curated markers=%s\n"
+            "  artifacts out=%s",
+            n_samples,
+            candidate_sites,
+            kept_sites_n,
+            downstream_features,
+            removed_features,
+            str(matrices_final_markers) if matrices_final_markers is not None else "n/a",
+            str(out_root) if out_root is not None else "n/a",
+        )
     def __init__(self, config=None, n_jobs: Optional[int] = None):
         self.config = config
         self.n_jobs = n_jobs
@@ -698,11 +793,15 @@ class DataLoader:
         if not path.exists():
             raise FileNotFoundError(f"Genomic input not found: {path}")
 
+        logger.info("DataLoader: input=%s", str(path))
+
         if path.is_dir():
+            logger.info("DataLoader: mode=vcf_directory")
             return self._load_vcf_directory(path, output_dir=output_dir, ref_path=ref_fasta)
 
         suffix = "".join(path.suffixes).lower()
         if suffix.endswith((".csv", ".tsv", ".tab")):
+            logger.info("DataLoader: mode=prebuilt_matrix")
             return self._load_matrix_file(path)
 
         raise ValueError(
@@ -805,6 +904,40 @@ class DataLoader:
         if not vcfs:
             raise ValueError(f"No .vcf/.vcf.gz files found in: {vcf_dir}")
 
+        # 1) Discovery (what is about to be parsed?)
+        logger.info(
+            "DataLoader: discovered %d VCF(s) in %s (biallelic_only=%s)",
+            len(vcfs),
+            str(vcf_dir),
+            self.biallelic_only,
+        )
+
+        # 2) Explicitly describe what parsing does + what gets kept
+        logger.info(
+            "DataLoader: per-sample parsing plan\n"
+            "  Each VCF will be scanned record-by-record using iter_sample_calls().\n"
+            "  Retained calls: SNP-like, biallelic (if enabled), passing QC thresholds.\n"
+            "  Per-sample output: an in-memory dict mapping site→(REF, CALLED) for retained sites.",
+        )
+
+        # 3) Record-level QC configuration (applied during parsing)
+        logger.info(
+            "DataLoader: record-level QC thresholds (applied during parsing)\n"
+            "  QUAL>=%.1f | INFO/DP>=%d | INFO/MQ>=%.1f | INFO/MQ0F<=%.3f",
+            float(self.qual_threshold),
+            int(self.dp_threshold),
+            float(self.mq_threshold),
+            float(self.mq0f_threshold),
+        )
+
+        # 4) Cohort / matrix-level configuration (applied AFTER parsing/merge)
+        logger.info(
+            "DataLoader: cohort + matrix settings (applied after parsing)\n"
+            "  min_sample_presence=%d | baseline=%s | min_minor_count=%d",
+            int(self.min_sample_presence), ("REF" if self.ancestral_allele.upper() == "Y" else "MODE"),
+            int(self.min_minor_count),
+        )
+
         # Helper for parallel processing
         def process_vcf(vcf_path: Path) -> tuple[str, dict]:
             sample = vcf_path.name
@@ -821,39 +954,128 @@ class DataLoader:
                 mq0f_thresh=self.mq0f_threshold,
                 biallelic_only=self.biallelic_only,
             )
+
+            # Keep debug-level to avoid log spam unless enabled
+            logger.debug(
+                "DataLoader: per-sample parse result\n"
+                "  sample=%s\n"
+                "  retained_sites=%d\n"
+                "  storage=returned as calls_dict (site→(REF,CALLED))",
+                sample,
+                len(calls),
+            )
             return sample, calls
 
-        # Parallel parsing
-        n_jobs = getattr(self, 'n_jobs', -1)
-        logger.info("Starting parallel VCF parsing with n_jobs=%s", n_jobs if n_jobs > 0 else "all cores")
+        # 5) Execute parsing
+        n_jobs = getattr(self, "n_jobs", -1)
+        logger.info("DataLoader: starting parallel per-sample parsing (n_jobs=%s)", _fmt_n_jobs(n_jobs))
 
-        results = Parallel(n_jobs=n_jobs)(
-            delayed(process_vcf)(vcf) for vcf in vcfs
+        results = Parallel(n_jobs=n_jobs)(delayed(process_vcf)(vcf) for vcf in vcfs)
+
+        # 6) Parsing summary + clarify where it is stored
+        n_samples = len(results)
+        total_calls = sum(len(calls) for _, calls in results)
+        mean_calls = total_calls / max(1, n_samples)
+
+        logger.info(
+            "DataLoader: parsing complete\n"
+            "  samples=%d\n"
+            "  total_called_sites=%d\n"
+            "  mean_calls_per_sample=%.2f\n"
+            "  storage=results list of (sample_id, calls_dict) in memory",
+            n_samples,
+            total_calls,
+            mean_calls,
         )
 
-        logger.info("Parallel parsing finished — %d files processed successfully", len(results))
+        logger.info(
+            "DataLoader: cohort merge starting\n"
+            "  The per-sample call dictionaries will now be aggregated into:\n"
+            "    (1) per_sample_calls[sample] → calls_dict\n"
+            "    (2) site_counts[site] → carrier_count + consensus (REF, ALT)\n"
+            "  ALT conflicts will be discarded to enforce biallelic consistency.",
+        )
 
-        # Merge parsed results
+        # 7) Merge parsed results into cohort-wide site universe
         per_sample_calls: Dict[str, Dict[Tuple[str, int], Tuple[str, str]]] = {}
         site_counts: Dict[Tuple[str, int], List] = {}
+
+        conflict_alt_discarded = 0
+        carrier_events = 0  # genome-site occurrences where CALLED != REF (under REF-baseline interpretation)
 
         for sample, calls in results:
             per_sample_calls[sample] = calls
             for key, (ref, called) in calls.items():
                 if called == ref:
                     continue
+
                 if key not in site_counts:
+                    # [carrier_count, ref, alt]
                     site_counts[key] = [0, ref, called]
                 else:
                     if self.biallelic_only and called != site_counts[key][2]:
+                        conflict_alt_discarded += 1
                         continue
-                site_counts[key][0] += 1
 
-        # Cohort-level filtering
+                site_counts[key][0] += 1
+                carrier_events += 1
+
+        logger.info(
+            "DataLoader: cohort merge complete\n"
+            "  per_sample_calls now holds %d per-genome call maps.\n"
+            "  site_counts now defines the cohort-wide polymorphic site universe (pre-filter).",
+            len(per_sample_calls),
+        )
+
+        # ---- Cohort universe established (pre-filter boundary) ----
+        candidate_sites = len(site_counts)
+        carrier_events = sum(v[0] for v in site_counts.values())
+        conflict_rate = conflict_alt_discarded / max(1, carrier_events)
+
+        logger.info(
+            "DataLoader: cohort variant landscape (pre-filter)\n"
+            "  The cohort comprises %d genomes.\n"
+            "  A total of %d unique polymorphic sites were observed.\n"
+            "  These correspond to %d total mutation occurrences across genomes.\n"
+            "  (Multiple genomes may share the same mutation, therefore unique sites < total occurrences.)\n"
+            "  ALT conflicts (e.g., A→C in one genome, A→G in another.) discarded=%d (%.4f of mutation occurrences).",
+            len(per_sample_calls),
+            candidate_sites,
+            carrier_events,
+            conflict_alt_discarded,
+            conflict_rate,
+        )
+
+        # Clarify artifact timing + location (what “snapshot” means)
+        if output_dir:
+            out = Path(output_dir)
+            logger.info(
+                "DataLoader: cohort artifacts\n"
+                "  Output will be written to: %s\n"
+                "  Writing occurs after presence filtering and encoding (matrices + FASTA + annotation tables).",
+                str(out),
+            )
+
+        # 8) Cohort-level filtering: min sample presence
         kept_sites: Dict[Tuple[str, int], Tuple[int, str, str]] = {
-            key: (cnt, ref, alt) for key, (cnt, ref, alt) in site_counts.items()
+            key: (cnt, ref, alt)
+            for key, (cnt, ref, alt) in site_counts.items()
             if cnt >= self.min_sample_presence
         }
+
+        kept_n = len(kept_sites)
+        retention_rate = kept_n / max(1, candidate_sites)
+
+        logger.info(
+            "DataLoader: cohort presence filtering\n"
+            "  A minimum of %d genomes per site was required.\n"
+            "  %d of %d polymorphic sites were retained (%.2f%% retained).\n"
+            "  Sites failing this threshold were removed from the cohort feature space.",
+            int(self.min_sample_presence),
+            kept_n,
+            candidate_sites,
+            retention_rate * 100,
+        )
 
         if not kept_sites:
             raise ValueError(
@@ -861,7 +1083,7 @@ class DataLoader:
                 "Consider relaxing thresholds."
             )
 
-        # Sort sites deterministically
+        # 9) Sort sites deterministically and build allele strings
         ordered_keys = sorted(kept_sites.keys(), key=lambda x: (x[0], x[1]))
         ref_bases = [kept_sites[k][1] for k in ordered_keys]
         alt_bases = [kept_sites[k][2] for k in ordered_keys]
@@ -871,6 +1093,7 @@ class DataLoader:
         sample_allele_strings: Dict[str, str] = {}
 
         ref_line = "".join(ref_bases)
+        logger.debug("DataLoader: building allele strings for %d sample(s)", len(per_sample_calls))
 
         for sample in samples_sorted:
             calls = per_sample_calls[sample]
@@ -884,40 +1107,144 @@ class DataLoader:
                 per_pos_counts[j][base] += 1
             sample_allele_strings[sample] = "".join(alleles)
 
-        # Baseline selection
+        # 10) Baseline selection
         if self.ancestral_allele.upper() == "Y":
             baseline = list(ref_line)
+            baseline_strategy = "REF"
         else:
             baseline = [
                 per_pos_counts[j].most_common(1)[0][0] if per_pos_counts[j] else ref_bases[j]
                 for j in range(len(ordered_keys))
             ]
+            baseline_strategy = "MODE"
 
-        # Binary encoding
+        baseline_diff_from_ref = sum(1 for i, ch in enumerate(baseline) if ch != ref_line[i])
+
+        if baseline_strategy == "REF":
+            logger.info(
+                "DataLoader: baseline encoding\n"
+                "  The reference allele was used as the baseline.\n"
+                "  Encoding definition: 0 indicates the reference allele; 1 indicates a non-reference allele.\n"
+                "  A total of %d polymorphic sites were encoded.",
+                len(ordered_keys),
+            )
+        else:
+            logger.info(
+                "DataLoader: baseline encoding\n"
+                "  The most frequent allele across the cohort was used as the baseline.\n"
+                "  Encoding definition: 0 indicates the cohort-majority allele; 1 indicates a minority allele.\n"
+                "  A total of %d polymorphic sites were encoded.\n"
+                "  At %d sites, the cohort-majority allele differed from the reference allele.",
+                len(ordered_keys),
+                baseline_diff_from_ref,
+            )
+
+        # 11) Binary encoding (baseline → 0/1 orientation)
         ref_binary = "".join("0" if ref_line[i] == baseline[i] else "1" for i in range(len(ref_line)))
         sample_binary_strings = {
             s: "".join("0" if seq[i] == baseline[i] else "1" for i in range(len(seq)))
             for s, seq in sample_allele_strings.items()
         }
 
-        # Final matrix
+        expected_len = len(ref_line)
+        for s, binseq in sample_binary_strings.items():
+            if len(binseq) != expected_len:
+                raise ValueError(
+                    f"Binary encoding length mismatch for sample {s}: expected {expected_len}, got {len(binseq)}"
+                )
+
+        # 12) Feature IDs (variant-centric identifiers)
         variant_ids = [f"{c}:{p}:{r}:{a}" for (c, p), r, a in zip(ordered_keys, ref_bases, alt_bases)]
+
+        # 13) Final matrix assembly (sample-centric orientation)
         data_bin = [[int(ch) for ch in sample_binary_strings[s]] for s in samples_sorted]
-        df = pd.DataFrame(data_bin, index=samples_sorted, columns=variant_ids, dtype=int)
+
+        df = pd.DataFrame(
+            data_bin,
+            index=samples_sorted,
+            columns=variant_ids,
+            dtype=int,
+        )
         df.index.name = "Sample"
 
-        # Preprocessing (remove invariant + min minor allele filter)
-        df = self._preprocess_binary_matrix(df)
+        # 14) Raw matrix stats (post-encoding, pre-preprocessing)
+        n_samples, raw_feature_count = df.shape
+        total_ones = int(df.values.sum())
+        total_cells = n_samples * raw_feature_count
 
-        # Optional compact IDs
+        matrix_density = total_ones / max(1, total_cells)
+        mean_ones_per_feature = total_ones / max(1, raw_feature_count)
+        mean_ones_per_sample = total_ones / max(1, n_samples)
+
+        logger.info(
+            "DataLoader: raw binary matrix (post-encoding, pre-preprocessing)\n"
+            "  The matrix contains %d genomes (rows) and %d polymorphic sites (columns).\n"
+            "  This corresponds to %d total genotype entries.\n"
+            "  A total of %d entries are encoded as 1 (non-baseline alleles).\n"
+            "  Matrix density (fraction of 1s) = %.6f.\n"
+            "  Mean carrier count per site = %.2f genomes.\n"
+            "  Mean variant burden per genome = %.2f sites.",
+            n_samples,
+            raw_feature_count,
+            total_cells,
+            total_ones,
+            matrix_density,
+            mean_ones_per_feature,
+            mean_ones_per_sample,
+        )
+
+        # 15) Variant frequency summary (carriers per feature)
+        carrier_counts = df.sum(axis=0).astype(int)
+        singleton_sites = int((carrier_counts == 1).sum())
+        doubleton_sites = int((carrier_counts == 2).sum())
+
+        logger.info(
+            "DataLoader: variant frequency summary (carriers per feature)\n"
+            "  singleton_sites=%d (carriers==1)\n"
+            "  doubleton_sites=%d (carriers==2)",
+            singleton_sites,
+            doubleton_sites,
+        )
+
+        # ─────────────────────────────────────────────
+        # Preprocessing
+        # ─────────────────────────────────────────────
+        df, prep_stats = self._preprocess_binary_matrix(df)
+        logger.info(
+            "DataLoader: matrix preprocessing (post-encoding)\n"
+            "  The preprocessing stage applied invariant-site removal and minor allele count filtering.\n"
+            "  Invariant removal enabled: %s.\n"
+            "  Minimum minor allele count threshold: %d.\n"
+            "  The matrix contained %d features prior to preprocessing.\n"
+            "  %d invariant features were removed.\n"
+            "  %d features were removed due to insufficient minor allele count.\n"
+            "  %d features remain after preprocessing.",
+            self.remove_invariant,
+            self.min_minor_count,
+            prep_stats["features_before"],
+            prep_stats["removed_invariant"],
+            prep_stats["removed_low_minor_count"],
+            prep_stats["features_after"],
+        )
+        if self.config is not None:
+            cfg_path = out / "dataloader_config.snapshot.json"
+            payload = asdict(self.config) if hasattr(self.config, "__dataclass_fields__") else vars(self.config)
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+            logger.info("DataLoader: wrote config snapshot %s", str(cfg_path))
+            
         lookup = None
         if self.use_integer_variant_ids:
             df, lookup = self._convert_to_integer_variant_ids(df)
-
-        # Artifact output
+            logger.info("DataLoader: compacted variant IDs (v0..vN) and created lookup")
         if output_dir:
             out = Path(output_dir)
-            self._write_all_artifacts(
+            logger.info(
+                "DataLoader: writing artifacts\n"
+                "output_dir=%s\n",
+                output_dir,
+            )
+            matrices_final_markers = self._write_all_artifacts(
                 out_root=out,
                 kept_sites=kept_sites,
                 ordered_keys=ordered_keys,
@@ -929,44 +1256,63 @@ class DataLoader:
                 ref_path=Path(ref_path) if ref_path else None,
                 integer_id_lookup=lookup,
             )
-
-            if self.config is not None:
-                cfg_path = out / "dataloader_config.snapshot.json"
-                payload = asdict(self.config) if hasattr(self.config, "__dataclass_fields__") else vars(self.config)
-                with open(cfg_path, "w", encoding="utf-8") as f:
-                    json.dump(payload, f, indent=2)
-
-        return df  
+            return df
     
-    def _preprocess_binary_matrix(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Apply lightweight, non-statistical preprocessing to the binary matrix.
-        
-        Removes invariant columns and (optionally) filters low minor-allele-count variants.
-        This step is NOT a substitute for proper statistical filtering (χ²/Fisher + FDR).
+    def _preprocess_binary_matrix(self, df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+        """
+        Apply lightweight, non-statistical preprocessing to the binary matrix.
+
+        Steps:
+        1) Remove invariant features (all 0 or all 1)
+        2) Enforce minimum minor allele count per site
+
+        Returns:
+        df_filtered, stats_dict
         """
         if df.empty:
-            return df
+            return df, {
+                "features_before": 0,
+                "removed_invariant": 0,
+                "removed_low_minor_count": 0,
+                "features_after": 0,
+            }
 
-        # Remove invariant features (all 0 or all 1)
+        features_before = df.shape[1]
+        removed_invariant = 0
+        removed_low_minor_count = 0
+
+        # ─────────────────────────────────────────────
+        # 1) Remove invariant features
+        # ─────────────────────────────────────────────
         if self.remove_invariant:
             nunique = df.nunique(axis=0, dropna=False)
-            df = df.loc[:, nunique > 1]
+            invariant_mask = nunique <= 1
+            removed_invariant = int(invariant_mask.sum())
+
+            df = df.loc[:, ~invariant_mask]
+
             if df.empty:
                 raise ValueError(
                     "All polymorphic sites were removed during invariant filtering. "
                     "Check input data or relax remove_invariant setting."
                 )
 
-        # Optional: enforce minimum minor allele count per site
-        if self.min_minor_count > 0:
+        # ─────────────────────────────────────────────
+        # 2) Enforce minimum minor allele count
+        # ─────────────────────────────────────────────
+        if self.min_minor_count > 0 and not df.empty:
             keep_mask = []
+
             for col in df.columns:
                 vc = df[col].value_counts(dropna=False)
                 count_0 = vc.get(0, 0)
                 count_1 = vc.get(1, 0)
                 keep_mask.append(min(count_0, count_1) >= self.min_minor_count)
 
+            before_minor = df.shape[1]
             df = df.loc[:, keep_mask]
+            removed_low_minor_count = before_minor - df.shape[1]
+
             if df.empty:
                 raise ValueError(
                     "All sites removed by minor allele count filter. "
@@ -974,7 +1320,16 @@ class DataLoader:
                     "or verify binary encoding."
                 )
 
-        return df
+        features_after = df.shape[1]
+
+        stats = {
+            "features_before": features_before,
+            "removed_invariant": removed_invariant,
+            "removed_low_minor_count": removed_low_minor_count,
+            "features_after": features_after,
+        }
+
+        return df, stats
     
     def _convert_to_integer_variant_ids(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, str]]:
         """Replace long variant IDs with compact IDs and return a lookup."""
@@ -989,7 +1344,7 @@ class DataLoader:
         return df2, lookup
 
     # ──────────────────────────────────────────────────────────
-    # Artifact generation (all 3 scripts’ outputs)
+    # Artifact generation 
     # ──────────────────────────────────────────────────────────
 
     def _write_all_artifacts(
@@ -1004,8 +1359,29 @@ class DataLoader:
         sample_binary_strings: Dict[str, str],
         ref_path: Optional[Path],
         integer_id_lookup: Optional[Dict[str, str]],
-    ) -> None:
-        """Write vcf_counts/*, fasta/*, and matrices/* outputs."""
+    ) -> Optional[int]:
+        """Write vcf_counts/*, fasta/*, and matrices/* outputs (with detailed timing logs)."""
+        import time
+
+        def _fmt_size(p: Path) -> str:
+            try:
+                b = p.stat().st_size
+                if b < 1024:
+                    return f"{b} B"
+                if b < 1024**2:
+                    return f"{b/1024:.1f} KB"
+                if b < 1024**3:
+                    return f"{b/1024**2:.1f} MB"
+                return f"{b/1024**3:.2f} GB"
+            except Exception:
+                return "?"
+
+        def _log_written(p: Path, extra: str = "") -> None:
+            if extra:
+                logger.info("Artifacts: wrote %s (%s) %s", str(p), _fmt_size(p), extra)
+            else:
+                logger.info("Artifacts: wrote %s (%s)", str(p), _fmt_size(p))
+
         out_root.mkdir(parents=True, exist_ok=True)
 
         vcf_counts_dir = out_root / "vcf_counts"
@@ -1016,21 +1392,52 @@ class DataLoader:
         fasta_dir.mkdir(parents=True, exist_ok=True)
         matrices_dir.mkdir(parents=True, exist_ok=True)
 
+        logger.info("Artifacts: start (out=%s)", str(out_root))
+        logger.info(
+            "Artifacts: inputs kept_sites=%d | ordered_keys=%d | samples=%d | ref_path=%s",
+            len(kept_sites),
+            len(ordered_keys),
+            len(sample_allele_strings),
+            str(ref_path) if ref_path else "<none>",
+        )
+
+        t_total = time.perf_counter()
+
         # 1) vcf_counts/all_snp.txt
+        t = time.perf_counter()
         all_snp_path = vcf_counts_dir / "all_snp.txt"
         all_snp_rows, all_snp_header = self._write_all_snp_table(
             path=all_snp_path,
             kept_sites=kept_sites,
             ref_path=ref_path,
         )
+        dt = time.perf_counter() - t
+        n_rows = len(all_snp_rows) if all_snp_rows is not None else -1
+        n_cols = len(all_snp_header) if all_snp_header is not None else -1
+        logger.info("Artifacts: all_snp.txt done (%.2fs) rows=%d cols=%d", dt, n_rows, n_cols)
+        _log_written(all_snp_path)
 
         # 2) fasta/<generic>_{alleles,binary}.fasta
+        t = time.perf_counter()
         alleles_fa = fasta_dir / f"{self.generic_name}_alleles.fasta"
         binary_fa = fasta_dir / f"{self.generic_name}_binary.fasta"
+
+        # Note: write_fasta_matrix typically writes a REF row + sample rows.
         write_fasta_matrix(alleles_fa, ref_line, sample_allele_strings, ref_name="REF")
         write_fasta_matrix(binary_fa, ref_binary, sample_binary_strings, ref_name="REF")
 
-        # 3) fasta/<generic>_filtered.tsv (filtered copy of all_snp.txt; optional Context_±40)
+        dt = time.perf_counter() - t
+        logger.info(
+            "Artifacts: fasta write done (%.2fs) sequences=%d (includes REF) | length=%d",
+            dt,
+            len(sample_allele_strings) + 1,
+            len(ref_line),
+        )
+        _log_written(alleles_fa)
+        _log_written(binary_fa)
+
+        # 3) fasta/<generic>_filtered.tsv (filtered copy of all_snp.txt; optional Context_±flank)
+        t = time.perf_counter()
         filtered_tsv = fasta_dir / f"{self.generic_name}_filtered.tsv"
         self._write_filtered_copy_with_context(
             input_rows=all_snp_rows,
@@ -1039,20 +1446,40 @@ class DataLoader:
             kept_positions=set(positions_1based),
             ref_path=ref_path,
         )
+        dt = time.perf_counter() - t
+        logger.info(
+            "Artifacts: filtered.tsv done (%.2fs) kept_positions=%d context_ref=%s",
+            dt,
+            len(set(positions_1based)),
+            "yes" if ref_path else "no",
+        )
+        _log_written(filtered_tsv)
 
         # 4) matrices/* outputs produced by filtering (minor-count + type + redundancy + fix)
-        self._write_matrices_outputs(
+        t = time.perf_counter()
+        logger.info("Artifacts: matrices/* start (this is often the slow step)")
+        matrices_final_markers = self._write_matrices_outputs(
             fasta_alleles=alleles_fa,
             fasta_binary=binary_fa,
             annotation_tsv=filtered_tsv,
             out_dir=matrices_dir,
         )
+        dt = time.perf_counter() - t
+        logger.info("Artifacts: matrices/* done (%.2fs)", dt)
 
         # 5) optional lookup used by returned df
         if integer_id_lookup is not None:
-            with open(out_root / "variant_id_lookup.json", "w", encoding="utf-8") as f:
+            t = time.perf_counter()
+            lookup_path = out_root / "variant_id_lookup.json"
+            with open(lookup_path, "w", encoding="utf-8") as f:
                 json.dump(integer_id_lookup, f, indent=2)
+            dt = time.perf_counter() - t
+            logger.info("Artifacts: variant_id_lookup.json done (%.2fs) entries=%d", dt, len(integer_id_lookup))
+            _log_written(lookup_path)
 
+        logger.info("Artifacts: done (total %.2fs)", time.perf_counter() - t_total)
+        return matrices_final_markers
+    
     def _write_all_snp_table(
         self,
         path: Path,
@@ -1149,86 +1576,326 @@ class DataLoader:
                     row_vals.append(context_around(pos, ref_seq, flank=40))
                 w.writerow(row_vals)
 
+    
     def _write_matrices_outputs(
         self,
         fasta_alleles: Path,
         fasta_binary: Path,
         annotation_tsv: Path,
         out_dir: Path,
-    ) -> None:
-        """Generate matrices outputs: TSV matrices + filtered FASTA + filtered annotation TSV."""
-        out_dir.mkdir(parents=True, exist_ok=True)
+    ) -> int:
+        """
+    Generate final cohort-level matrices (TSV + FASTA + filtered annotation).
 
+    This stage refines the encoded matrix before downstream modeling.
+    It operates strictly at the feature level and does NOT perform statistical
+    association testing. Instead, it ensures that the final matrix is
+    biologically interpretable, structurally stable, and non-redundant.
+
+    Filtering stages (conceptual flow):
+
+    1) Minor-count filter (signal stability control)
+       - Removes markers where the minority state is too rare across genomes.
+       - In small cohorts, extremely rare states introduce instability and
+         can distort downstream tree splits or interaction mining.
+
+    2) Annotation-driven type filter (biological subset selection)
+       - Retains only markers whose functional annotation matches a requested category.
+       - Skipped if annotation rows do not align with marker count.
+
+    3) Redundancy reduction via pattern grouping (feature de-duplication)
+       - Identifies markers that share an identical 0/1 pattern across all genomes.
+       - These markers represent the exact same cohort-level signal.
+       - Keeps at most `repeat_number` representatives per identical-pattern group.
+       - Purpose: collapse perfectly collinear features to reduce redundancy and prevent
+         one signal from being over-represented by multiple duplicate columns.
+
+    4) Forced retention of specified positions (controlled override)
+       - User-specified marker indices are force-kept even if filtered out.
+       - Ensures known markers remain present for downstream reporting.
+
+    Important methodological distinction:
+    - Minor-count and type filters are biological inclusion criteria.
+    - Redundancy reduction is a feature-engineering / de-duplication step.
+    - None of these constitute statistical hypothesis testing.
+        """
+        out_dir.mkdir(parents=True, exist_ok=True)
+        base = self.generic_name
+
+        # ─────────────────────────────────────────────
+        # 0) Announce what we're about to parse/write
+        # ─────────────────────────────────────────────
+        logger.info("Matrices/*: start (base=%s)", base)
+        logger.info(
+                "Matrices stage: feature refinement prior to downstream modeling\n"
+                "Purpose: structural filtering + redundancy control\n"
+            )
+
+        logger.info(
+                "Matrices configuration:\n"
+                "min_minor_count=%d\n"
+                "annotation_type_filter=%s\n"
+                "repeat_number=%d\n"
+                "forced_positions='%s'",
+                self.matrices_min_count,
+                self.matrices_type,
+                self.matrices_repeat_number,
+                self.matrices_fix,
+            )
+        logger.info(
+            "Matrices/*: inputs alleles_fasta=%s | binary_fasta=%s | annotation_tsv=%s",
+            str(fasta_alleles),
+            str(fasta_binary),
+            str(annotation_tsv),
+        )
+        logger.info("Matrices/*: output_dir=%s", str(out_dir))
+
+        for p, label in (
+            (fasta_alleles, "alleles FASTA"),
+            (fasta_binary, "binary FASTA"),
+            (annotation_tsv, "annotation TSV"),
+        ):
+            if not p.exists():
+                raise FileNotFoundError(f"Matrices/*: missing {label}: {p}")
+
+        # ─────────────────────────────────────────────
+        # 1) Load (parse) inputs
+        # ─────────────────────────────────────────────
         alleles = read_fasta_matrix(fasta_alleles)
         binary = read_fasta_matrix(fasta_binary)
         annot_rows, annot_header = read_annotation_tsv(annotation_tsv)
 
+        if not alleles or not binary:
+            raise ValueError("Matrices/*: empty FASTA matrix detected (alleles or binary).")
+
         if list(alleles.keys()) != list(binary.keys()):
-            raise ValueError("Genome order differs between alleles and binary FASTA files.")
+            raise ValueError("Matrices/*: genome order differs between alleles and binary FASTA files.")
 
         genomes = list(alleles.keys())
         S = len(next(iter(alleles.values())))
         if len(next(iter(binary.values()))) != S:
-            raise ValueError("Alleles and binary FASTA have different number of columns (markers).")
+            raise ValueError("Matrices/*: alleles and binary FASTA have different number of columns (markers).")
 
-        # If annotation rows length doesn’t match, we can’t apply type-filter reliably.
-        # We still proceed with minor-count/redundancy only by synthesizing positions.
+        logger.info("Matrices/*: parsed inputs genomes=%d | markers=%d", len(genomes), S)
+
         annotation_matches = len(annot_rows) == S
+        if annotation_matches:
+            logger.info("Matrices/*: annotation rows match markers (rows=%d)", len(annot_rows))
+        else:
+            logger.warning(
+                "Matrices/*: annotation rows do NOT match markers (rows=%d vs markers=%d). "
+                "Type-filter will be skipped and annotation will be copied as-is.",
+                len(annot_rows),
+                S,
+            )
 
-        # Prepare column views
+        # ─────────────────────────────────────────────
+        # 2) Announce filter parameters
+        # ─────────────────────────────────────────────
+        logger.info(
+            "Matrices/*: params min_count=%d | type=%s | repeat_number=%d | fix='%s'",
+            self.matrices_min_count,
+            self.matrices_type,
+            self.matrices_repeat_number,
+            self.matrices_fix,
+        )
+
         genomes_order, allele_cols = transpose_rows_to_columns(alleles)
         _, binary_cols = transpose_rows_to_columns(binary)
 
-        # 1) minor-count filter
-        mask_minor = minor_count_filter(binary_cols, self.matrices_min_count)
+        # ─────────────────────────────────────────────
+        # 3) Filter 1: minor-count
+        #
+        # Keeps a marker only if the minority state (usually '1' in a 0/1 column)
+        # appears at least `min_count` times across genomes.
+        #
+        # Intuition: columns where only 1 genome differs can be unstable in tiny cohorts
+        # and can inflate downstream splits or interactions by acting as "singletons".
+        # ─────────────────────────────────────────────
+        if self.matrices_min_count > 0:
+            logger.info(
+                "Applying minor-count filter:\n"
+                "  Rationale: remove markers where minority state appears < %d times\n"
+                "  Purpose: avoid instability from extremely rare variants in small cohorts",
+                self.matrices_min_count,
+            )
+        else:
+            logger.info(
+                "Minor-count filter disabled (min_minor_count=0). "
+                "All markers retained at this stage."
+            )
 
-        # 2) type filter (only if annotation matches and has required fields)
-        if annotation_matches and annot_header:
+        mask_minor = minor_count_filter_parallel(
+            binary_cols,
+            self.matrices_min_count,
+            n_jobs=getattr(self, "n_jobs", -1),
+        )
+        kept_minor = int(sum(mask_minor))
+
+        logger.info(
+            "Minor-count filter result: kept=%d/%d (removed=%d)",
+            kept_minor,
+            S,
+            S - kept_minor,
+        )
+
+        # ─────────────────────────────────────────────
+        # 4) Filter 2: type filter (annotation-driven)
+        #
+        # Keeps markers whose annotation indicates the requested category (e.g., coding/non-coding/etc).
+        # This is only meaningful if annotation rows align 1:1 with marker columns.
+        # If annotation does not match, we skip this filter rather than risk mislabeling columns.
+        # ─────────────────────────────────────────────
+        if annotation_matches and annot_header and self.matrices_type != "all":
+            logger.info(
+                "Applying annotation-driven type filter:\n"
+                "  Keeping markers matching type='%s'\n"
+                "  Purpose: biological subset selection",
+                self.matrices_type,
+            )
             mask_type = type_filter(annot_rows, self.matrices_type)
         else:
             mask_type = [True] * S
+            logger.info(
+                "Type filter skipped (either type='all' or annotation mismatch)."
+            )
 
+        kept_type = int(sum(mask_type))
+
+        logger.info(
+            "Type filter result: kept=%d/%d",
+            kept_type,
+            S,
+        )
+
+        # ─────────────────────────────────────────────
+        # 5) Combined mask (minor AND type)
+        #
+        # This is the inclusion mask after the "content" filters:
+        #   - minor-count: statistical stability
+        #   - type: biological subset selection
+        # ─────────────────────────────────────────────
         mask_12 = combine_masks(mask_minor, mask_type)
+        kept_12 = int(sum(mask_12))
+        logger.info("Matrices/*: combined (minor AND type) kept=%d/%d", kept_12, S)
 
-        # Apply mask_12 for grouping stage
         idx12 = [i for i, k in enumerate(mask_12) if k]
         allele_cols_12 = [c for c, k in zip(allele_cols, mask_12) if k]
         binary_cols_12 = [c for c, k in zip(binary_cols, mask_12) if k]
         annot_rows_12 = [r for r, k in zip(annot_rows, mask_12) if k] if annotation_matches else []
 
-        # 3) redundancy filter by identical pattern
+        # ─────────────────────────────────────────────
+        # 6) Filter 3: redundancy reduction by identical binary pattern
+        #
+        # What "redundancy" means here:
+        #   Two (or more) markers can produce the *exact same* 0/1 vector across all genomes.
+        #   Example (conceptual):
+        #       marker A: 0 0 1 0 1 0 ...
+        #       marker B: 0 0 1 0 1 0 ...
+        #
+        # In that case, A and B are perfectly collinear:
+        #   - Any model/split using A could use B interchangeably.
+        #   - Keeping all of them can over-represent one signal and inflate apparent importance.
+        #
+        # This step groups markers by their full-sample binary pattern and keeps only a limited
+        # number of representatives per group.
+        #
+        # How `repeat_number` is used:
+        #   - repeat_number = 1  → keep only one representative marker per identical-pattern group
+        #   - repeat_number = k  → keep up to k representatives per group (useful if you want
+        #                          a small amount of redundancy retained for downstream reporting)
+        #
+        # What this step is NOT:
+        #   - It does not remove markers because they are rare (minor-count already handled that).
+        #   - It does not change the 0/1 encoding.
+        #   - It does not merge markers into a new synthetic feature; it simply drops duplicates.
+        #
+        # Why it is "same as other filters" structurally:
+        #   - It produces another boolean mask (keep/drop) and logs kept counts.
+        # Why it is different conceptually:
+        #   - It is a de-duplication / collinearity control step, not a biological inclusion filter.
+        #
+        # Interpretable output:
+        #   - The logging includes `unique_patterns` as a compact summary:
+        #       *many columns* collapsing to *few patterns* suggests strong redundancy in the matrix.
+        # ─────────────────────────────────────────────
         if binary_cols_12:
-            if annotation_matches:
-                mask_group = group_and_reduce_by_pattern(binary_cols_12, annot_rows_12, self.matrices_repeat_number)
-            else:
-                # If no annotation, group without using positions (stable order)
-                dummy_rows = [{"Position": str(i + 1)} for i in range(len(binary_cols_12))]
-                mask_group = group_and_reduce_by_pattern(binary_cols_12, dummy_rows, self.matrices_repeat_number)
+            unique_patterns = len({tuple(col) for col in binary_cols_12})
+
+            logger.info(
+                "Applying redundancy reduction (pattern grouping):\n"
+                "  unique_binary_patterns=%d\n"
+                "  repeat_number=%d\n"
+                "  Purpose: collapse perfectly collinear markers\n"
+                "           (markers sharing identical cohort-level signals)",
+                unique_patterns,
+                self.matrices_repeat_number,
+            )
+
+            mask_group = group_and_reduce_by_pattern(
+                binary_cols_12,
+                annot_rows if annotation_matches else [{"Position": str(i + 1)} for i in range(len(binary_cols_12))],
+                self.matrices_repeat_number,
+            )
+
+            kept_group = int(sum(mask_group))
+
+            logger.info(
+                "Redundancy reduction result:\n"
+                "  retained=%d/%d\n"
+                "  removed_duplicate_representations=%d",
+                kept_group,
+                len(binary_cols_12),
+                len(binary_cols_12) - kept_group,
+            )
         else:
             mask_group = []
+            kept_group = 0
+            logger.info("Redundancy reduction skipped (no markers after biological filtering).")
 
-        # Final mask relative to original columns
+        # Convert redundancy mask back to full length
         mask_final = [False] * S
         for kept_flag, original_idx in zip(mask_group, idx12):
             if kept_flag:
                 mask_final[original_idx] = True
+        # ─────────────────────────────────────────────
+        # 7) Force-keep fixed positions
+        # ─────────────────────────────────────────────
+        fix_idx0, fix_warnings = parse_fix_positions(self.matrices_fix, S)
 
-        # 4) force-keep positions
-        fix_idx0, _warnings = parse_fix_positions(self.matrices_fix, S)
+        for w in fix_warnings:
+            logger.warning(w)
+
+        if fix_idx0:
+            logger.info(
+                "Applying forced retention of %d user-specified marker(s).",
+                len(fix_idx0),
+            )
+
         for idx in fix_idx0:
-            mask_final[idx] = True
+            if 0 <= idx < S:
+                mask_final[idx] = True
 
-        # Apply final mask
+        kept_final = int(sum(mask_final))
+
+        logger.info(
+            "Final marker count after all filters:\n"
+            "  %d/%d retained",
+            kept_final,
+            S,
+        )
+
+        # Apply final mask to FASTA matrices
         alleles_filt = apply_mask_to_char_rows(alleles, mask_final)
         binary_filt = apply_mask_to_char_rows(binary, mask_final)
 
-        # Filter annotation rows if possible; otherwise write the original filtered.tsv unchanged
+        # Filter annotation rows if possible; otherwise keep original
         if annotation_matches:
             annot_filt = [r for r, k in zip(annot_rows, mask_final) if k]
         else:
             annot_filt = annot_rows
 
-        # Prepare columns + positions for TSV
+        # Prepare TSV matrix outputs
         _, allele_cols_f = transpose_rows_to_columns(alleles_filt)
         _, binary_cols_f = transpose_rows_to_columns(binary_filt)
 
@@ -1237,18 +1904,38 @@ class DataLoader:
         else:
             positions_f = [str(i + 1) for i in range(len(allele_cols_f))]
 
-        base = self.generic_name
-        write_matrix_tsv(out_dir / f"{base}_alleles.tsv", genomes_order, positions_f, allele_cols_f)
-        write_matrix_tsv(out_dir / f"{base}_binary.tsv", genomes_order, positions_f, binary_cols_f)
-        write_fasta_matrix_wrapped(out_dir / f"{base}_alleles.fasta", alleles_filt)
-        write_fasta_matrix_wrapped(out_dir / f"{base}_binary.fasta", binary_filt)
+        # ─────────────────────────────────────────────
+        # 8) Write outputs
+        # ─────────────────────────────────────────────
+        out_alleles_tsv = out_dir / f"{base}_alleles.tsv"
+        out_binary_tsv = out_dir / f"{base}_binary.tsv"
+        out_alleles_fa = out_dir / f"{base}_alleles.fasta"
+        out_binary_fa = out_dir / f"{base}_binary.fasta"
+        out_filtered_tsv = out_dir / f"{base}_filtered.tsv"
+
+        write_matrix_tsv(out_alleles_tsv, genomes_order, positions_f, allele_cols_f)
+        write_matrix_tsv(out_binary_tsv, genomes_order, positions_f, binary_cols_f)
+        write_fasta_matrix_wrapped(out_alleles_fa, alleles_filt)
+        write_fasta_matrix_wrapped(out_binary_fa, binary_filt)
 
         if annotation_matches and annot_header:
-            write_annotation_tsv(out_dir / f"{base}_filtered.tsv", annot_filt, annot_header)
+            write_annotation_tsv(out_filtered_tsv, annot_filt, annot_header)
         else:
-            # Fallback: copy the TSV as-is
-            out_path = out_dir / f"{base}_filtered.tsv"
-            out_path.write_text(annotation_tsv.read_text(encoding="utf-8", errors="replace"), encoding="utf-8")
+            out_filtered_tsv.write_text(
+                annotation_tsv.read_text(encoding="utf-8", errors="replace"),
+                encoding="utf-8",
+            )
+
+        logger.info(
+            "Matrices/*: wrote outputs: %s | %s | %s | %s | %s",
+            str(out_alleles_tsv),
+            str(out_binary_tsv),
+            str(out_alleles_fa),
+            str(out_binary_fa),
+            str(out_filtered_tsv),
+        )
+        logger.info("Matrices/*: done")
+        return kept_final
 
     # ──────────────────────────────────────────────────────────
     # Prebuilt matrix loader

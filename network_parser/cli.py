@@ -147,7 +147,7 @@ def main():
     logger.info(f"Label column:     {args.label}")
     logger.info(f"Output directory: {Path(args.output_dir).resolve()}")
     if ref_fasta_path:
-        logger.info(f"Reference FASTA:  {ref_fasta_path.resolve()}")
+        logger.info(f"Reference:  {ref_fasta_path.resolve()}")
 
     try:
         start_time = time.time()

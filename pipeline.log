@@ -1,0 +1,115 @@
+ python -m network_parser.cli \
+--genomic /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/10_LineageBalanced \
+--meta /Users/nmfuphicsir.co.za/Documents/data/AFRO_TB/AFRO_dataset_meta.csv \
+--label Lineage \
+--ref_fasta /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/VCF_2_Matrix/ref/H37Rv.gbk \
+--output_dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/10_LineageBalanced
+2026-02-24 14:56:25,901 - INFO - Starting NetworkParser pipeline
+2026-02-24 14:56:25,901 - INFO - Genomic input:    /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/10_LineageBalanced
+2026-02-24 14:56:25,901 - INFO - Metadata:         /Users/nmfuphicsir.co.za/Documents/data/AFRO_TB/AFRO_dataset_meta.csv
+2026-02-24 14:56:25,901 - INFO - Label column:     Lineage
+2026-02-24 14:56:25,901 - INFO - Output directory: /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/10_LineageBalanced
+2026-02-24 14:56:25,901 - INFO - Reference:  /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/VCF_2_Matrix/ref/H37Rv.gbk
+2026-02-24 14:56:25,902 - INFO - Initializing NetworkParser with config: {'include_intermediate_files': True, 'generic_name': 'matrix', 'qual_threshold': 30.0, 'min_dp_per_sample': 10, 'min_gq_per_sample': 20, 'mq_threshold': 40.0, 'mq0f_threshold': 0.1, 'biallelic_only': True, 'max_missing_fraction': 0.1, 'min_spacing_bp': 10, 'min_sample_presence': 3, 'ancestral_allele': 'Y', 'remove_invariant': True, 'min_minor_count': 0, 'matrices_min_count': 3, 'matrices_repeat_number': 5, 'matrices_type': 'all', 'matrices_fix': '', 'statistical_test': 'chi2', 'significance_level': 0.05, 'fdr_alpha': 0.05, 'fdr_threshold': 0.05, 'chi2_min_expected': 5, 'n_permutation_tests': 500, 'prefilter_alpha': 0.05, 'min_nonmissing_prefilter': 0.2, 'min_maf_prefilter': 0.0, 'max_prefiltered_features': 10000, 'multiple_testing_method': 'fdr_bh', 'max_depth': None, 'max_branch_depth': 3, 'min_samples_split': 2, 'min_samples_leaf': 1, 'min_information_gain': 0.001, 'min_group_size': 2, 'epistasis_strength_threshold': 0.05, 'max_epistatic_interactions': 50, 'n_bootstrap': 100, 'bootstrap_sample_fraction': 0.8, 'n_bootstrap_samples': 1000, 'bootstrap_samples_per_iter': 100, 'bootstrap_outer_iters': 5, 'min_bootstrap_support': 0.7, 'use_integer_variant_ids': False, 'n_jobs': -1, 'random_state': 42, 'memory_efficient': False}
+2026-02-24 14:56:25,902 - INFO - Initialized StatisticalValidator.
+2026-02-24 14:56:25,902 - INFO - Stage 1: Loading genomic matrix
+2026-02-24 14:56:25,902 - INFO - DataLoader: input=/Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/10_LineageBalanced
+2026-02-24 14:56:25,902 - INFO - DataLoader: mode=vcf_directory
+2026-02-24 14:56:25,902 - INFO - DataLoader: discovered 10 VCF(s) in /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/10_LineageBalanced (biallelic_only=True)
+2026-02-24 14:56:25,902 - INFO - DataLoader QC thresholds: QUAL>=30.0, INFO/DP>=10, INFO/MQ>=40.0, INFO/MQ0F<=0.1
+2026-02-24 14:56:25,902 - INFO - DataLoader cohort thresholds: min_sample_presence=3 | baseline=REF | remove_invariant=True | min_minor_count=0
+2026-02-24 14:56:25,902 - INFO - DataLoader: starting parallel per-sample parsing (n_jobs=all cores)
+2026-02-24 14:56:37,017 - INFO - DataLoader: parsing completes
+  samples=10
+  total_called_sites=17509
+  mean_calls_per_sample=1750.90
+2026-02-24 14:56:37,032 - INFO - DataLoader: cohort merge
+  candidate_sites=8840
+  carrier_events=17494
+  alt_conflicts_discarded=15 (0.0009 of carrier events)
+2026-02-24 14:56:37,280 - INFO - DataLoader: presence filter
+  min_sample_presence=3
+  kept_sites=1397 / 8840 (15.80% retained)
+2026-02-24 14:56:37,299 - INFO - DataLoader: baseline encoding
+  strategy=REF
+  total_sites=1397
+  sites_where_baseline≠REF=0
+2026-02-24 14:56:37,339 - INFO - DataLoader: raw binary matrix (post-encoding)
+  samples=10
+  features=1397
+  total_cells=13970
+  total_ones=9526
+  matrix_density=0.681890
+  mean_ones_per_feature=6.82
+  mean_ones_per_sample=952.60
+2026-02-24 14:56:37,341 - INFO - DataLoader: variant frequency summary
+  singleton_sites=0
+  doubleton_sites=0
+2026-02-24 14:56:37,398 - INFO - DataLoader: after preprocessing
+  features_remaining=1022
+  features_removed=375
+2026-02-24 14:56:37,398 - INFO - DataLoader: writing artifacts
+output_dir=/Users/nmfuphicsir.co.za/Documents/pHDProject/Results/10_LineageBalanced
+
+2026-02-24 14:56:37,399 - INFO - Artifacts: start (out=/Users/nmfuphicsir.co.za/Documents/pHDProject/Results/10_LineageBalanced)
+2026-02-24 14:56:37,399 - INFO - Artifacts: inputs kept_sites=1397 | ordered_keys=1397 | samples=10 | ref_path=/Users/nmfuphicsir.co.za/Documents/pHDProject/Code/VCF_2_Matrix/ref/H37Rv.gbk
+2026-02-24 14:56:43,724 - INFO - Artifacts: all_snp.txt done (6.33s) rows=1397 cols=9
+2026-02-24 14:56:43,725 - INFO - Artifacts: wrote /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/10_LineageBalanced/vcf_counts/all_snp.txt (191.1 KB)
+2026-02-24 14:56:43,726 - INFO - Artifacts: fasta write done (0.00s) sequences=11 (includes REF) | length=1397
+2026-02-24 14:56:43,726 - INFO - Artifacts: wrote /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/10_LineageBalanced/fasta/matrix_alleles.fasta (15.1 KB)
+2026-02-24 14:56:43,726 - INFO - Artifacts: wrote /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/10_LineageBalanced/fasta/matrix_binary.fasta (15.1 KB)
+2026-02-24 14:56:44,491 - INFO - Artifacts: filtered.tsv done (0.76s) kept_positions=1397 context_ref=yes
+2026-02-24 14:56:44,492 - INFO - Artifacts: wrote /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/10_LineageBalanced/fasta/matrix_filtered.tsv (303.0 KB)
+2026-02-24 14:56:44,492 - INFO - Artifacts: matrices/* start (this is often the slow step)
+2026-02-24 14:56:44,492 - INFO - Matrices/*: start (base=matrix)
+2026-02-24 14:56:44,492 - INFO - Matrices/*: params min_count=3 | type=all | repeat_number=5 | fix=''
+2026-02-24 14:56:44,501 - INFO - Matrices/*: inputs genomes=11 | markers=1397
+2026-02-24 14:56:44,502 - INFO - Matrices/*: annotation rows match markers (rows=1397)
+2026-02-24 14:56:44,507 - INFO - Matrices/*: filter1 minor-count kept=765/1397 (min_count=3)
+2026-02-24 14:56:44,507 - INFO - Matrices/*: filter2 type kept=1397/1397 (type=all)
+2026-02-24 14:56:44,508 - INFO - Matrices/*: combined (minor AND type) kept=765/1397
+2026-02-24 14:56:44,510 - INFO - Matrices/*: filter3 redundancy kept=190/765 (unique_patterns=97, repeat_number=5)
+2026-02-24 14:56:44,510 - INFO - Matrices/*: kept after redundancy=190/1397
+2026-02-24 14:56:44,510 - INFO - Matrices/*: fix positions not provided
+2026-02-24 14:56:44,510 - INFO - Matrices/*: final kept markers=190/1397
+2026-02-24 14:56:44,515 - INFO - Matrices/*: wrote outputs: /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/10_LineageBalanced/matrices/matrix_alleles.tsv | /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/10_LineageBalanced/matrices/matrix_binary.tsv | /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/10_LineageBalanced/matrices/matrix_alleles.fasta | /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/10_LineageBalanced/matrices/matrix_binary.fasta | /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/10_LineageBalanced/matrices/matrix_filtered.tsv
+2026-02-24 14:56:44,515 - INFO - Matrices/*: done
+2026-02-24 14:56:44,516 - INFO - Artifacts: matrices/* done (0.02s)
+2026-02-24 14:56:44,516 - INFO - Artifacts: done (total 7.12s)
+2026-02-24 14:56:44,517 - INFO - DataLoader: wrote config snapshot /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/10_LineageBalanced/dataloader_config.snapshot.json
+2026-02-24 14:56:44,517 - INFO - DataLoader: Stage 1 reconciliation
+  samples=10
+  candidate_sites=8840
+  kept_sites_after_presence=1397
+  downstream_features_after_preprocess=1022 (removed=375)
+  matrices_curated_markers=190
+  artifacts_out=/Users/nmfuphicsir.co.za/Documents/pHDProject/Results/10_LineageBalanced
+2026-02-24 14:56:44,518 - INFO - Loaded genomic matrix with shape: (10, 1022)
+2026-02-24 14:56:44,518 - INFO - Loading metadata
+2026-02-24 14:56:44,573 - INFO - Loaded metadata with shape: (13753, 3)
+2026-02-24 14:56:44,573 - INFO - Stage 2: Decision tree feature discovery
+2026-02-24 14:56:44,591 - INFO - Label normalization: original_n=13753 | final_n=13737 | missing_removed=16 | unique_before=11 | unique_after=8
+2026-02-24 14:56:44,591 - WARNING - Label normalization removed 16 samples due to missing/invalid labels.
+2026-02-24 14:56:44,594 - INFO - Sample alignment: genomic=10 | meta=13753 | labels_after_norm=13737 | overlap=9 | genomic_only=1 | meta_only=13728
+2026-02-24 14:56:44,597 - WARNING - Labels: 7 class(es) have fewer than min_group_size=2 samples (may destabilize inference).
+2026-02-24 14:56:44,598 - INFO - Input features: 1,022 features → M.tuberculosis_H37Rv:1849:C:A, M.tuberculosis_H37Rv:2532:T:C, M.tuberculosis_H37Rv:6446:G:T ... +1,019 more
+2026-02-24 14:56:47,903 - WARNING - No FDR-significant features; falling back to top by variance from pre-candidates.
+2026-02-24 14:56:47,906 - INFO - Prefiltered features: 1,022 features → M.tuberculosis_H37Rv:3743549:A:G, M.tuberculosis_H37Rv:2897871:A:G, M.tuberculosis_H37Rv:3884906:A:G ... +1,019 more
+2026-02-24 14:56:47,906 - INFO - Checking for NaN in X ((9, 1022)) ...
+2026-02-24 14:56:47,908 - INFO - 📊 8 classes: ['lineage 1', 'lineage 2', 'lineage 3', 'lineage 4', 'lineage 5', 'lineage 6', 'lineage 7', 'lineage BOV_AFRI']
+
+======================================================================
+ 🎯 FEATURE DISCOVERY SUMMARY (Workflow Stage 2)
+======================================================================
+📈 Tree Accuracy: 1.000 | Classes: 8
+🌳 Root Features: 2 | Branch: 5
+  1. M.tuberculosis_H37Rv:3486977:A:G (conf: 0.412)
+  2. M.tuberculosis_H37Rv:4287164:A:G (conf: 0.340)
+🔗 Epistatic Interactions: 0
+======================================================================
+
+2026-02-24 14:56:48,207 - INFO - Stage 4: Writing final results
+2026-02-24 14:56:48,208 - INFO - Wrote JSON: /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/10_LineageBalanced/networkparser_results_20260224_145648.json
+2026-02-24 14:56:48,208 - INFO - Saved final results: /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/10_LineageBalanced/networkparser_results_20260224_145648.json
+2026-02-24 14:56:48,210 - INFO - NetworkParser pipeline completed successfully in 22.31 seconds
+(base) 
