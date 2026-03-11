@@ -24,6 +24,6 @@ python -m network_parser.cli \
     --genomic /mnt/lustre/users/nmfuphi/AFRO_TB/AFRO_TB_ANNOTATION_VCF \
     --meta    /mnt/lustre/users/nmfuphi/AFRO_TB/AFRO_dataset_meta.csv \
     --label   Lineage \
-    --output-dir /mnt/lustre/users/nmfuphi/testing_network_parser/All_VCFs/
+    --output_dir /mnt/lustre/users/nmfuphi/testing_network_parser/All_VCFs/
 
 echo "Job finished at $(date)"
