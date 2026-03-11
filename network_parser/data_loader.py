@@ -1504,11 +1504,12 @@ class DataLoader:
                     w.writerow(r)
             return rows, header_annot
 
-        # Minimal output (Position, Count) still matches the script behavior when no ref is given.
+      # Minimal output (Position, Count) still matches the script behavior when no ref is given.
         header_min = ["Position", "Count"]
         rows_min: List[Dict[str, str]] = []
-        for (chrom, pos) in sorted(kept_sites.keys(), key=lambda x: (x[0], x[1])):
-            count, _, _ = kept_sites[(chrom, pos)]
+
+        for (chrom, pos, ref_nt, alt_nt) in sorted(kept_sites.keys(), key=lambda x: (x[0], x[1], x[2], x[3])):
+            count = kept_sites[(chrom, pos, ref_nt, alt_nt)]
             rows_min.append({"Position": str(pos), "Count": str(count)})
 
         with open(path, "w", encoding="utf-8", newline="") as out:
