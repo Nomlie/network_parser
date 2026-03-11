@@ -1,0 +1,61 @@
+{
+  "include_intermediate_files": true,
+  "generic_name": "matrix",
+
+  "qual_threshold": 30.0,
+  "min_dp_per_sample": 10,
+  "min_gq_per_sample": 20,
+  "mq_threshold": 40.0,
+  "mq0f_threshold": 0.1,
+  "biallelic_only": true,
+  "max_missing_fraction": 0.1,
+  "min_spacing_bp": 10,
+
+  "min_sample_presence": 5,
+  "ancestral_allele": "Y",
+
+  "remove_invariant": true,
+  "min_minor_count": 5,
+
+  "matrices_min_count": 5,
+  "matrices_repeat_number": 5,
+  "matrices_type": "all",
+  "matrices_fix": "",
+
+  "statistical_test": "chi2",
+  "significance_level": 0.05,
+  "fdr_alpha": 0.05,
+  "fdr_threshold": 0.05,
+  "chi2_min_expected": 5,
+  "n_permutation_tests": 100,
+
+  "prefilter_alpha": 0.05,
+  "min_nonmissing_prefilter": 0.95,
+  "min_maf_prefilter": 0.005,
+  "max_prefiltered_features": 5000,
+  "multiple_testing_method": "fdr_bh",
+
+  "max_depth": null,
+  "max_branch_depth": 3,
+  "min_samples_split": 2,
+  "min_samples_leaf": 1,
+  "min_information_gain": 0.001,
+
+  "epistasis_strength_threshold": 0.05,
+  "max_epistatic_interactions": 50,
+
+  "n_bootstrap": 10,
+  "bootstrap_sample_fraction": 0.8,
+  "n_bootstrap_samples": 10,
+  "bootstrap_samples_per_iter": 10,
+  "bootstrap_outer_iters": 1,
+  "min_bootstrap_support": 0.7,
+
+  "use_integer_variant_ids": false,
+
+  "n_jobs": 4,
+  "random_state": 42,
+  "memory_efficient": true,
+
+  "run_ml_protocol": false
+}

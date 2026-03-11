@@ -370,8 +370,8 @@ def annotate_snps_genbank(
 
     rows: List[Dict[str, str]] = []
 
-    for (chrom, pos) in sorted(snp_details.keys(), key=lambda x: (x[0], x[1])):
-        count, ref_nt, alt_nt = snp_details[(chrom, pos)]
+    for (chrom, pos, ref_nt, alt_nt) in sorted(snp_details.keys(), key=lambda x: (x[0], x[1], x[2], x[3])):
+        count = snp_details[(chrom, pos, ref_nt, alt_nt)]
         pos0 = pos - 1
         coding_found = False
 
@@ -992,32 +992,24 @@ class DataLoader:
             "DataLoader: cohort merge starting\n"
             "  The per-sample call dictionaries will now be aggregated into:\n"
             "    (1) per_sample_calls[sample] → calls_dict\n"
-            "    (2) site_counts[site] → carrier_count + consensus (REF, ALT)\n"
-            "  ALT conflicts will be discarded to enforce biallelic consistency.",
+            "    (2) site_counts[site] → carrier_count for allele-specific events\n"
+            "  Alternate alleles at the same genomic position will be retained as separate features.",
         )
 
         # 7) Merge parsed results into cohort-wide site universe
         per_sample_calls: Dict[str, Dict[Tuple[str, int], Tuple[str, str]]] = {}
-        site_counts: Dict[Tuple[str, int], List] = {}
+        site_counts: Dict[Tuple[str, int, str, str], int] = {}
 
-        conflict_alt_discarded = 0
-        carrier_events = 0  # genome-site occurrences where CALLED != REF (under REF-baseline interpretation)
+        carrier_events = 0
 
         for sample, calls in results:
             per_sample_calls[sample] = calls
-            for key, (ref, called) in calls.items():
+            for (chrom, pos), (ref, called) in calls.items():
                 if called == ref:
                     continue
 
-                if key not in site_counts:
-                    # [carrier_count, ref, alt]
-                    site_counts[key] = [0, ref, called]
-                else:
-                    if self.biallelic_only and called != site_counts[key][2]:
-                        conflict_alt_discarded += 1
-                        continue
-
-                site_counts[key][0] += 1
+                allele_key = (chrom, pos, ref, called)
+                site_counts[allele_key] = site_counts.get(allele_key, 0) + 1
                 carrier_events += 1
 
         logger.info(
@@ -1029,21 +1021,15 @@ class DataLoader:
 
         # ---- Cohort universe established (pre-filter boundary) ----
         candidate_sites = len(site_counts)
-        carrier_events = sum(v[0] for v in site_counts.values())
-        conflict_rate = conflict_alt_discarded / max(1, carrier_events)
-
         logger.info(
             "DataLoader: cohort variant landscape (pre-filter)\n"
             "  The cohort comprises %d genomes.\n"
-            "  A total of %d unique polymorphic sites were observed.\n"
+            "  A total of %d unique allele-specific polymorphic features were observed.\n"
             "  These correspond to %d total mutation occurrences across genomes.\n"
-            "  (Multiple genomes may share the same mutation, therefore unique sites < total occurrences.)\n"
-            "  ALT conflicts (e.g., A→C in one genome, A→G in another.) discarded=%d (%.4f of mutation occurrences).",
+            "  Alternate alleles at the same genomic position were retained as separate features.",
             len(per_sample_calls),
             candidate_sites,
             carrier_events,
-            conflict_alt_discarded,
-            conflict_rate,
         )
 
         # Clarify artifact timing + location (what “snapshot” means)
@@ -1057,9 +1043,9 @@ class DataLoader:
             )
 
         # 8) Cohort-level filtering: min sample presence
-        kept_sites: Dict[Tuple[str, int], Tuple[int, str, str]] = {
-            key: (cnt, ref, alt)
-            for key, (cnt, ref, alt) in site_counts.items()
+        kept_sites: Dict[Tuple[str, int, str, str], int] = {
+            key: cnt
+            for key, cnt in site_counts.items()
             if cnt >= self.min_sample_presence
         }
 
@@ -1084,9 +1070,9 @@ class DataLoader:
             )
 
         # 9) Sort sites deterministically and build allele strings
-        ordered_keys = sorted(kept_sites.keys(), key=lambda x: (x[0], x[1]))
-        ref_bases = [kept_sites[k][1] for k in ordered_keys]
-        alt_bases = [kept_sites[k][2] for k in ordered_keys]
+        ordered_keys = sorted(kept_sites.keys(), key=lambda x: (x[0], x[1], x[2], x[3]))
+        ref_bases = [k[2] for k in ordered_keys]
+        alt_bases = [k[3] for k in ordered_keys]
 
         samples_sorted = sorted(per_sample_calls.keys())
         per_pos_counts = [Counter() for _ in ordered_keys]
@@ -1098,11 +1084,9 @@ class DataLoader:
         for sample in samples_sorted:
             calls = per_sample_calls[sample]
             alleles = []
-            for j, key in enumerate(ordered_keys):
-                ref = ref_bases[j]
-                alt = alt_bases[j]
-                _, called = calls.get(key, (ref, ref))
-                base = called if called in {ref, alt} else ref
+            for j, (chrom, pos, ref, alt) in enumerate(ordered_keys):
+                called = calls.get((chrom, pos), (ref, ref))[1]
+                base = alt if called == alt else ref
                 alleles.append(base)
                 per_pos_counts[j][base] += 1
             sample_allele_strings[sample] = "".join(alleles)
@@ -1154,8 +1138,7 @@ class DataLoader:
                 )
 
         # 12) Feature IDs (variant-centric identifiers)
-        variant_ids = [f"{c}:{p}:{r}:{a}" for (c, p), r, a in zip(ordered_keys, ref_bases, alt_bases)]
-
+        variant_ids = [f"{c}:{p}:{r}:{a}" for (c, p, r, a) in ordered_keys]
         # 13) Final matrix assembly (sample-centric orientation)
         data_bin = [[int(ch) for ch in sample_binary_strings[s]] for s in samples_sorted]
 
@@ -1214,7 +1197,11 @@ class DataLoader:
             "DataLoader: matrix preprocessing (post-encoding)\n"
             "  The preprocessing stage applied invariant-site removal and minor allele count filtering.\n"
             "  Invariant removal enabled: %s.\n"
+            "  Rationale: remove markers with no variation across samples\n"
+            "  Purpose: eliminate non-informative genomic features before downstream analysis\n"
             "  Minimum minor allele count threshold: %d.\n"
+            "  Rationale: remove markers where minority state appears\n"
+            "  Purpose: avoids instability from extremely rare variants in small cohorts\n"
             "  The matrix contained %d features prior to preprocessing.\n"
             "  %d invariant features were removed.\n"
             "  %d features were removed due to insufficient minor allele count.\n"
@@ -1248,7 +1235,7 @@ class DataLoader:
                 out_root=out,
                 kept_sites=kept_sites,
                 ordered_keys=ordered_keys,
-                positions_1based=[p for _, p in ordered_keys],
+                positions_1based=[p for _, p, _, _ in ordered_keys],
                 ref_line=ref_line,
                 sample_allele_strings=sample_allele_strings,
                 ref_binary=ref_binary,
@@ -1712,31 +1699,20 @@ class DataLoader:
         # Intuition: columns where only 1 genome differs can be unstable in tiny cohorts
         # and can inflate downstream splits or interactions by acting as "singletons".
         # ─────────────────────────────────────────────
-        if self.matrices_min_count > 0:
-            logger.info(
-                "Applying minor-count filter:\n"
-                "  Rationale: remove markers where minority state appears < %d times\n"
-                "  Purpose: avoid instability from extremely rare variants in small cohorts",
-                self.matrices_min_count,
-            )
-        else:
-            logger.info(
-                "Minor-count filter disabled (min_minor_count=0). "
-                "All markers retained at this stage."
-            )
-
-        mask_minor = minor_count_filter_parallel(
-            binary_cols,
-            self.matrices_min_count,
-            n_jobs=getattr(self, "n_jobs", -1),
+        logger.info(
+            "Applying minor-count filter:\n"
+            "  Skipped for matrices/* outputs\n"
+            "  Rationale: minor-count filtering was already applied during main matrix preprocessing"
         )
+
+        mask_minor = [True] * len(binary_cols)
         kept_minor = int(sum(mask_minor))
 
         logger.info(
             "Minor-count filter result: kept=%d/%d (removed=%d)",
             kept_minor,
-            S,
-            S - kept_minor,
+            len(binary_cols),
+            len(binary_cols) - kept_minor,
         )
 
         # ─────────────────────────────────────────────
