@@ -22,8 +22,8 @@ GitHub: https://github.com/Nomlie/network_parser/
 from .config import NetworkParserConfig
 from .network_parser import NetworkParser, run_networkparser_analysis
 from .data_loader import DataLoader
-from .statistical_validation import StatisticalValidator
-from .decision_tree_builder import EnhancedDecisionTreeBuilder
+from network_parser.decision_tree_branch import DecisionTreeBranch, StatisticalValidatorBranch
+from network_parser.ml_protocol import MLProtocolRunner
 
 # Package version (update this as you develop!)
 __version__ = "0.2.0"  # Increment from 0.1.0 to reflect VCF + FASTA support
@@ -50,4 +50,6 @@ def _welcome():
 ║  Perfect for AMR surveillance and lineage analysis        ║
 ╚═══════════════════════════════════════════════════════════╝
     """.format(__version__))
+
+
 

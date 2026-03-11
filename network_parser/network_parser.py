@@ -1,98 +1,173 @@
 # network_parser/network_parser.py
 import logging
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 
 import pandas as pd
+import numpy as np
 
 from network_parser.config import NetworkParserConfig
 from network_parser.data_loader import DataLoader
-from network_parser.decision_tree_builder import EnhancedDecisionTreeBuilder
-from network_parser.statistical_validation import StatisticalValidator
+from network_parser.decision_tree_branch import DecisionTreeBranch
+from network_parser.decision_tree_branch import StatisticalValidatorBranch
 from network_parser.utils import save_json, ensure_dir, timestamp
+from network_parser.ml_protocol import MLProtocolRunner
+
 
 logger = logging.getLogger(__name__)
+
+
 def normalize_labels(
-        labels: pd.Series,
-        drop_missing: bool = True,
-        lowercase: bool = False,
-    ) -> pd.Series:
-        """
-        Normalize phenotype / class labels to avoid artificial class inflation.
+    labels: pd.Series,
+    drop_missing: bool = True,
+    lowercase: bool = False,
+) -> pd.Series:
+    """
+    Normalize phenotype / class labels to avoid artificial class inflation.
+    """
+    if not isinstance(labels, pd.Series):
+        raise TypeError("labels must be a pandas Series")
 
-        Steps:
-        - strip whitespace
-        - treat '-', '', 'NA', 'None', etc. as missing
-        - standardize '_' and '-' to a single form
-        - optional lowercase normalization
-        - optionally drop missing labels
+    original_n = labels.shape[0]
+    original_unique = labels.nunique(dropna=False)
 
-        Returns:
-            Cleaned pd.Series aligned to original index (missing rows optionally removed).
-        """
+    clean = labels.astype(str).str.strip()
+    missing_tokens = {"", "-", "NA", "N/A", "None", "nan", "NaN"}
+    clean = clean.replace(missing_tokens, pd.NA)
+    clean = clean.str.replace("-", "_", regex=False)
 
-        if not isinstance(labels, pd.Series):
-            raise TypeError("labels must be a pandas Series")
+    if lowercase:
+        clean = clean.str.lower()
 
-        original_n = labels.shape[0]
-        original_unique = labels.nunique(dropna=False)
+    n_missing = int(clean.isna().sum())
+    if drop_missing:
+        clean = clean[~clean.isna()]
 
-        # Convert to string safely
-        clean = labels.astype(str).str.strip()
+    final_unique = int(clean.nunique(dropna=False))
+    final_n = int(clean.shape[0])
 
-        # Normalize obvious missing tokens
-        missing_tokens = {"", "-", "NA", "N/A", "None", "nan", "NaN"}
-        clean = clean.replace(missing_tokens, pd.NA)
+    logger.info(
+        "Label normalization: original_n=%d | final_n=%d | missing_removed=%d | unique_before=%d | unique_after=%d",
+        int(original_n), final_n, n_missing, int(original_unique), final_unique
+    )
 
-        # Standardize separators: unify '-' and '_' → single underscore
-        clean = clean.str.replace("-", "_", regex=False)
-
-        # Optional lowercase normalization
-        if lowercase:
-            clean = clean.str.lower()
-
-        # Count missing before drop
-        n_missing = clean.isna().sum()
-
-        if drop_missing:
-            clean = clean[~clean.isna()]
-
-        final_unique = clean.nunique(dropna=False)
-        final_n = clean.shape[0]
-
-        logger.info(
-            "Label normalization: original_n=%d | final_n=%d | missing_removed=%d | "
-            "unique_before=%d | unique_after=%d",
-            original_n,
-            final_n,
+    if n_missing > 0:
+        logger.warning(
+            "Label normalization removed %d sample label(s) due to missing/invalid phenotype values.",
             n_missing,
-            original_unique,
-            final_unique,
         )
 
-        # Optional warning if large drop
-        if n_missing > 0:
-            logger.warning(
-                "Label normalization removed %d features due to missing/invalid labels.",
-                n_missing,
-            )
+    return clean
 
-        return clean
 
 class NetworkParser:
     """
     Main orchestrator class for the NetworkParser pipeline.
+
+    Core (existing):
+      DataLoader → (optional stats) → decision tree → (optional interactions) → outputs
+
+    Added (optional downstream):
+      ML prototype → model_selector → train (NeuralNetwork) → test (NeuralNetwork)
     """
 
     def __init__(self, config: NetworkParserConfig):
-        logger.info(f"Initializing NetworkParser with config: {vars(config)}")
+        logger.info("Initializing NetworkParser with config: %s", vars(config))
         self.config = config
 
-        # Data loading behavior (including folder-of-VCFs union-matrix mode) is driven via config
-        self.loader = DataLoader(config=config, n_jobs=config.n_jobs)  # Uses enhanced DataLoader with bcftools + FASTA support
+        self.loader = DataLoader(config=config, n_jobs=config.n_jobs)
+        self.validator = StatisticalValidatorBranch(config)
+        self.tree_builder =DecisionTreeBranch(config)
 
-        self.validator = StatisticalValidator(config)
-        self.tree_builder = EnhancedDecisionTreeBuilder(config)
+    def _align_X_y(
+        self,
+        genomic_df: pd.DataFrame,
+        meta_df: pd.DataFrame,
+        label_column: str
+    ) -> Tuple[pd.DataFrame, pd.Series]:
+        if label_column not in meta_df.columns:
+            raise ValueError(f"label_column '{label_column}' not found in metadata columns")
+
+        labels = normalize_labels(meta_df[label_column], drop_missing=True, lowercase=False)
+
+        def _normalize_sample_id(x: str) -> str:
+            s = str(x).strip()
+            s = s.replace(".vcf.gz", "").replace(".vcf", "")
+            s = __import__("re").sub(r"_library[0-9]+$", "", s)
+            return s
+
+        genomic_df = genomic_df.copy()
+        genomic_df.index = genomic_df.index.astype(str).map(_normalize_sample_id)
+
+        labels.index = labels.index.astype(str).map(_normalize_sample_id)
+
+        common = genomic_df.index.intersection(labels.index)
+
+        logger.info(
+            "Sample alignment: genomic=%d | meta=%d | labels_after_norm=%d | overlap=%d",
+            int(genomic_df.shape[0]),
+            int(meta_df.shape[0]),
+            int(labels.shape[0]),
+            int(common.shape[0]),
+        )
+
+        if len(common) == 0:
+            raise ValueError(
+                "No overlapping sample IDs between genomic matrix and metadata after label normalization."
+            )
+
+        X = genomic_df.loc[common]
+        y = labels.loc[common]
+
+        return X, y
+
+    def _write_supervised_matrix(
+        self,
+        X: pd.DataFrame,
+        y: pd.Series,
+        out_dir: Path,
+        filename: str = "ml_supervised_matrix.csv",
+    ) -> Path:
+        """
+        Write: Sample | label | feature1 | feature2 | ...
+        All feature values are written as strings to work with NeuralNetwork categorical encoders.
+        """
+        out_path = out_dir / filename
+        df = X.copy()
+
+        # Ensure string tokens (NeuralNetwork expects symbols/categorical tokens)
+        df = df.astype(str)
+
+        df.insert(0, "label", y.loc[df.index].astype(str))
+        df.insert(0, "Sample", df.index.astype(str))
+
+        df.to_csv(out_path, index=False)
+        logger.info("ML prototype: wrote supervised matrix %s", str(out_path))
+        return out_path
+
+    def _map_selector_to_nn_algo(self, rec: str) -> str:
+        """
+        Map model_selector recommendation keys to NeuralNetwork-supported keys.
+        NeuralNetwork.py supports: RF, MLP, LR, DT, SVC, KNN, XGBoost (if installed), DNL, MBCS.
+        model_selector recommends: LR, LinearSVC, SVC, RF, DT, MLP, KNN, NBayes, XGBoost.
+        """
+        r = (rec or "").strip()
+
+        if r == "SVC_RBF":
+            return "SVC"
+        if r == "MLP_small":
+            return "MLP"
+        if r == "LinearSVC":
+            # NeuralNetwork doesn't have LinearSVC; SVC is the nearest within that API
+            return "SVC"
+        if r == "NBayes":
+            # NeuralNetwork doesn't expose NB directly in your CLI script; safest fallback is LR
+            return "LR"
+        if r in {"LR", "RF", "DT", "MLP", "SVC", "KNN", "XGBoost"}:
+            return r
+
+        # Default conservative fallback
+        return "RF"
 
     def run_pipeline(
         self,
@@ -106,7 +181,7 @@ class NetworkParser:
         ref_fasta: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Execute full NetworkParser pipeline.
+        Execute NetworkParser pipeline.
         """
         output_dir_path = Path(output_dir)
         ensure_dir(output_dir_path)
@@ -117,118 +192,126 @@ class NetworkParser:
             output_dir=output_dir,
             ref_fasta=ref_fasta,
         )
-
-        logger.info(f"Loaded genomic matrix with shape: {genomic_df.shape}")
+        logger.info("Loaded genomic matrix with shape: %s", str(genomic_df.shape))
 
         meta_df = None
         if meta_path:
             logger.info("Loading metadata")
             meta_df = self.loader.load_metadata(meta_path, output_dir=output_dir)
-            logger.info(f"Loaded metadata with shape: {meta_df.shape}")
+            logger.info("Loaded metadata with shape: %s", str(meta_df.shape))
 
         known_markers = None
         if known_markers_path:
             logger.info("Loading known markers")
             known_markers = self.loader.load_known_markers(known_markers_path, output_dir=output_dir)
-            logger.info(f"Loaded {len(known_markers)} known markers")
+            logger.info("Loaded %d known markers", len(known_markers))
 
-       # Stage 2: Decision tree feature discovery
-        logger.info("Stage 2: Decision tree feature discovery")
+        if meta_df is None:
+            raise ValueError("meta_path is required (labels are needed for discovery and ML protocol).")
 
-        # --- Normalize labels (remove '-', unify formatting) ---
-        raw_labels = meta_df[label_column]
-        labels = normalize_labels(
-            raw_labels,
-            drop_missing=True,     # drops '-', '', NA-like tokens
-            lowercase=False        # keep case unless you want strict normalization
-        )
+        # Final supervised boundary shared by both branches
+        X, y = self._align_X_y(genomic_df, meta_df, label_column=label_column)
 
-        # --- Align genomic matrix and labels to common samples AFTER label cleaning ---
-        genomic_samples = genomic_df.index.astype(str)
-        labels.index = labels.index.astype(str)
+        mode = getattr(self.config, "pipeline_mode", "decision_tree_only")
+        logger.info("Pipeline mode resolved: %s", mode)
 
-        common = genomic_samples.intersection(labels.index)
+        validation_results: Dict[str, Any] = {}
+        discovery_results: Dict[str, Any] = {}
+        ml_results: Dict[str, Any] = {}
 
-        # Helpful logs (counts only; no spam)
-        logger.info(
-            "Sample alignment: genomic=%d | meta=%d | labels_after_norm=%d | overlap=%d | genomic_only=%d | meta_only=%d",
-            len(genomic_samples),
-            meta_df.shape[0],
-            len(labels),
-            len(common),
-            len(genomic_samples) - len(common),
-            len(labels) - len(common),
-        )
+        run_tree = mode in {"decision_tree_only", "both"}
+        run_ml = mode in {"ml_only", "both"}
 
-        if len(common) == 0:
-            raise ValueError(
-                "No overlapping sample IDs between genomic matrix and metadata after label normalization. "
-                "Check sample naming / metadata index column."
-            )
+        # -------------------------------------------------
+        # Matrix-only stop point
+        # -------------------------------------------------
+        if mode == "matrix_only":
+            logger.info("Pipeline stop point reached: matrix creation / alignment only")
 
-        # Subset to overlap
-        genomic_df_aligned = genomic_df.loc[common]
-        labels_aligned = labels.loc[common]
+            results = {
+                "timestamp": timestamp(),
+                "config": vars(self.config),
+                "pipeline_mode": mode,
+                "aligned_matrix_shape": {
+                    "samples": int(X.shape[0]),
+                    "features": int(X.shape[1]),
+                },
+                "discovery": discovery_results,
+                "validation": validation_results,
+                "ml_protocol": ml_results,
+            }
 
-        # Optional: warn about tiny classes (useful for trees + stats)
-        try:
-            vc = labels_aligned.value_counts(dropna=False)
-            n_small = int((vc < getattr(self.config, "min_group_size", 2)).sum())
-            if n_small > 0:
-                logger.warning(
-                    "Labels: %d class(es) have fewer than min_group_size=%d samples (may destabilize inference).",
-                    n_small,
-                    getattr(self.config, "min_group_size", 2),
+            results_path = output_dir_path / f"networkparser_results_{timestamp()}.json"
+            save_json(results, results_path)
+            logger.info("Saved final results: %s", results_path)
+            return results
+
+        # -------------------------------------------------
+        # Decision-tree branch
+        # -------------------------------------------------
+        if run_tree:
+            if validate_statistics:
+                logger.info("Stage 2: Statistical Validation (pre-tree, optional)")
+                validation_results["features"] = self.validator.validate_features(
+                    genomic_df=X,
+                    meta_df=meta_df.loc[X.index],
+                    label_column=label_column,
+                    discovered_features=None,
+                    output_dir=output_dir,
                 )
-        except Exception:
-            pass
 
-        # --- Now call discovery with cleaned, aligned labels ---
-        discovery_results = self.tree_builder.discover_features(
-            data=genomic_df_aligned,
-            labels=labels_aligned,
-            all_features=genomic_df_aligned.columns.tolist(),
-            output_dir=output_dir,
-        )
-
-        # Stage 3: Statistical validation (optional)
-        validation_results = {}
-        if validate_statistics:
-            logger.info("Stage 3: Statistical validation (features)")
-            validation_results["features"] = self.validator.validate_features(
-                genomic_df=genomic_df,
-                meta_df=meta_df,
-                label_column=label_column,
-                discovered_features=discovery_results.get("ranked_features", []),
-                output_dir=output_dir
+            logger.info("Stage 3: Decision Tree Feature Discovery")
+            discovery_results = self.tree_builder.run(
+                data=X,
+                labels=y,
+                all_features=list(X.columns),
+                output_dir=output_dir,
             )
 
-        if validate_interactions:
-            logger.info("Stage 3: Statistical validation (interactions)")
-            validation_results["interactions"] = self.validator.validate_interactions(
-                genomic_df=genomic_df,
-                meta_df=meta_df,
-                label_column=label_column,
-                interactions=discovery_results.get("epistatic_interactions", []),
-                output_dir=output_dir
-            )
+            if validate_interactions:
+                logger.info("Stage 4: Statistical Validation (interactions, optional)")
+                validation_results["interactions"] = self.validator.validate_interactions(
+                    genomic_df=X,
+                    meta_df=meta_df.loc[X.index],
+                    label_column=label_column,
+                    interactions=discovery_results.get("epistatic_interactions", []),
+                    output_dir=output_dir,
+                )
+        else:
+            logger.info("Decision tree branch skipped by pipeline_mode=%s", mode)
 
-        # Stage 4: Final synthesis / report writing
-        logger.info("Stage 4: Writing final results")
+        # -------------------------------------------------
+        # ML protocol branch
+        # -------------------------------------------------
+        
+        if run_ml:
+            logger.info("Stage 5: ML protocol branch")
+
+            ml_runner = MLProtocolRunner(config=self.config)
+            ml_results = ml_runner.run(
+                genomic_df=X,
+                labels=y,
+                output_dir=output_dir,
+                algorithm=getattr(self.config, "ml_algorithm", "auto"),
+            )
+        else:
+            logger.info("ML protocol branch skipped by pipeline_mode=%s", mode)
+        
         results = {
             "timestamp": timestamp(),
             "config": vars(self.config),
+            "pipeline_mode": mode,
             "discovery": discovery_results,
-            "validation": validation_results
+            "validation": validation_results,
+            "ml_protocol": ml_results,
         }
 
         results_path = output_dir_path / f"networkparser_results_{timestamp()}.json"
         save_json(results, results_path)
-        logger.info(f"Saved final results: {results_path}")
+        logger.info("Saved final results: %s", results_path)
 
         return results
-
-
+    
 def run_networkparser_analysis(
     genomic_path: str,
     meta_path: Optional[str],
@@ -240,9 +323,6 @@ def run_networkparser_analysis(
     validate_interactions: bool = False,
     ref_fasta: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """
-    Convenience wrapper to run the pipeline.
-    """
     parser = NetworkParser(config)
     return parser.run_pipeline(
         genomic_path=genomic_path,
