@@ -54,7 +54,10 @@ def validate_input_path(path_str: str) -> Path:
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="NetworkParser: VCF/Matrix -> statistically validated features + interpretable networks"
+        description=(
+            "NetworkParser: VCF/Matrix -> central feature filtering -> "
+            "ML protocol / model selector -> conditional decision tree interpretability"
+        )
     )
 
     input_group = parser.add_argument_group("Input Files")
@@ -70,39 +73,59 @@ def build_arg_parser() -> argparse.ArgumentParser:
     cfg_group = parser.add_argument_group("Config")
     cfg_group.add_argument("--config", type=str, default=None)
 
-    flags_group = parser.add_argument_group("Validation Flags")
-    flags_group.add_argument(
+    validation_group = parser.add_argument_group("Central Filtering / Validation")
+    validation_group.add_argument(
         "--validate_statistics",
         action="store_true",
-        help="Run association testing + multiple testing correction (pre-tree)",
+        help="Run central statistical feature filtering before model screening.",
     )
-    flags_group.add_argument(
+    validation_group.add_argument(
         "--validate_interactions",
         action="store_true",
-        help="Run post-tree interaction permutation validation",
+        help="Run optional post-tree interaction permutation validation.",
     )
 
-    branch_group = parser.add_argument_group("Pipeline Branch Control")
+    branch_group = parser.add_argument_group("Pipeline Control")
     branch_group.add_argument(
         "--pipeline_mode",
         type=str,
         default=None,
         choices=["matrix_only", "decision_tree_only", "ml_only", "both"],
-        help="Select pipeline stop/run mode",
+        help=(
+            "matrix_only = stop after alignment; "
+            "decision_tree_only = central filtering then DT branch; "
+            "ml_only = central filtering then ML protocol only; "
+            "both = central filtering then ML protocol with conditional DT trigger"
+        ),
     )
     branch_group.add_argument(
         "--run_ml_protocol",
         action="store_true",
-        help="Backward-compatible shortcut: equivalent to pipeline_mode='both' unless pipeline_mode is explicitly set",
+        help="Backward-compatible shortcut: equivalent to pipeline_mode='both' unless pipeline_mode is explicitly set.",
+    )
+    branch_group.add_argument(
+        "--disable_central_feature_filtering",
+        action="store_true",
+        help="Skip central feature filtering and pass aligned features downstream unchanged.",
+    )
+    branch_group.add_argument(
+        "--disable_model_selector",
+        action="store_true",
+        help="Disable selector-driven recommendations and rely on --ml_algorithm directly.",
+    )
+    branch_group.add_argument(
+        "--disable_conditional_dt",
+        action="store_true",
+        help="Disable selector/candidate-driven DT triggering.",
     )
 
-    ml_group = parser.add_argument_group("ML Protocol Branch")
+    ml_group = parser.add_argument_group("ML Protocol")
     ml_group.add_argument(
         "--ml_algorithm",
         type=str,
         default=None,
         choices=["auto", "RF", "MLP", "LR", "MBCS", "DT", "SVC", "SCV", "DNL"],
-        help="ML protocol algorithm override",
+        help="ML algorithm override. Use 'auto' to let the selector decide.",
     )
     ml_group.add_argument("--ml_min_sensitivity", type=float, default=None)
     ml_group.add_argument("--ml_max_sensitivity", type=float, default=None)
@@ -123,9 +146,18 @@ def apply_cli_overrides(args: argparse.Namespace, config: NetworkParserConfig) -
     if args.pipeline_mode is not None:
         config.pipeline_mode = args.pipeline_mode
 
-    # backward-compatible shortcut
     if args.run_ml_protocol and args.pipeline_mode is None:
         config.run_ml_protocol = True
+
+    if args.disable_central_feature_filtering:
+        config.run_central_feature_filtering = False
+
+    if args.disable_model_selector:
+        config.run_model_selector = False
+
+    if args.disable_conditional_dt:
+        config.trigger_decision_tree_on_selected = False
+        config.trigger_decision_tree_if_candidate = False
 
     if args.ml_algorithm is not None:
         config.ml_algorithm = args.ml_algorithm
@@ -183,6 +215,8 @@ def main():
     logger.info(f"Label column:     {args.label}")
     logger.info(f"Output directory: {Path(args.output_dir).resolve()}")
     logger.info(f"Pipeline mode:    {config.pipeline_mode}")
+    logger.info(f"Central filtering:{config.run_central_feature_filtering}")
+    logger.info(f"Model selector:   {config.run_model_selector}")
 
     if config.pipeline_mode in {"ml_only", "both"}:
         logger.info(f"ML algorithm:     {config.ml_algorithm}")
@@ -198,6 +232,7 @@ def main():
 
     try:
         start_time = time.time()
+
         run_networkparser_analysis(
             genomic_path=str(genomic_path),
             meta_path=str(meta_path) if meta_path else None,
@@ -209,8 +244,8 @@ def main():
             validate_interactions=args.validate_interactions,
             ref_fasta=str(ref_fasta_path) if ref_fasta_path else None,
         )
-        elapsed_time = time.time() - start_time
 
+        elapsed_time = time.time() - start_time
         total_seconds = float(elapsed_time)
         hours = int(total_seconds // 3600)
         minutes = int((total_seconds % 3600) // 60)

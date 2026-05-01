@@ -1,0 +1,24 @@
+python3 extract_subset.py \
+    --vcf-dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/AFRO_TB_ANNOTATION_VCF \
+    --meta-file /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/AFRO_dataset_meta.csv \
+    --n-samples 100 \
+    --output-dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/AFRO_TB_100_VCFs
+
+python -m network_parser.cli \                                
+--genomic /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/AFRO_TB_1000_VCFs\
+--meta /Users/nmfuphicsir.co.za/Documents/data/AFRO_TB/AFRO_dataset_meta.csv \
+--label Lineage \
+--ref_fasta /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/VCF_2_Matrix/ref/H37Rv.gbk \
+--output_dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/1000_VCFs \
+--pipeline_mode both
+dot -Tpng -Gdpi=300 networkparser_full.dot -o network_parser.png
+
+
+python -m network_parser.cli train-two-level \
+--genomic /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/AFRO_TB_1000_VCFs \
+--meta /Users/nmfuphicsir.co.za/Documents/data/AFRO_TB/AFRO_dataset_meta.csv \
+--level1_label Lineage \
+--level2_label Pheno \
+--ref_fasta /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/VCF_2_Matrix/ref/H37Rv.gbk \
+--output_dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/smoke_test \
+--n_jobs 1

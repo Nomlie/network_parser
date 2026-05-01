@@ -4,15 +4,13 @@ network_parser.config
 
 Central configuration object for NetworkParser.
 
-Design notes
-------------
-- Keep everything generic with respect to the current dataset.
-- Statistical validation is pre-tree.
-- Bootstrap / confidence is post-tree.
-- ML protocol is an optional downstream branch that consumes the
-  already-created sample x feature dataframe from DataLoader.
-
-These values can be overridden via JSON config.
+Updated architecture
+--------------------
+Input -> preprocessing
+      -> central feature filtering
+      -> ML protocol / model selector
+      -> conditional decision tree branch
+      -> optional downstream interaction validation
 """
 
 from dataclasses import dataclass
@@ -21,16 +19,15 @@ from typing import Optional, Literal
 
 @dataclass
 class NetworkParserConfig:
-    # ─────────────────────────────────────────────
+    # -------------------------------------------------
     # 1) Input / Output behavior
-    # ─────────────────────────────────────────────
+    # -------------------------------------------------
     include_intermediate_files: bool = True
     generic_name: str = "matrix"
 
-    # ─────────────────────────────────────────────
+    # -------------------------------------------------
     # 2) VCF-level QC (DataLoader)
-    #    Applied while streaming each per-sample VCF
-    # ─────────────────────────────────────────────
+    # -------------------------------------------------
     qual_threshold: float = 30.0
     min_dp_per_sample: int = 10
     min_gq_per_sample: int = 20
@@ -38,37 +35,37 @@ class NetworkParserConfig:
     mq0f_threshold: float = 0.1
     biallelic_only: bool = True
 
-    # Optional cohort / site missingness controls
     max_missing_fraction: float = 0.1
     min_spacing_bp: int = 10
 
-    # ─────────────────────────────────────────────
+    # -------------------------------------------------
     # 3) Cohort-level SNP filtering
-    # ─────────────────────────────────────────────
+    # -------------------------------------------------
     min_sample_presence: int = 3
 
-    # ─────────────────────────────────────────────
+    # -------------------------------------------------
     # 4) Binary encoding strategy
-    # ─────────────────────────────────────────────
+    # -------------------------------------------------
     ancestral_allele: Literal["Y", "N"] = "Y"
 
-    # ─────────────────────────────────────────────
+    # -------------------------------------------------
     # 5) Lightweight preprocessing (NOT statistical)
-    # ─────────────────────────────────────────────
+    # -------------------------------------------------
     remove_invariant: bool = True
     min_minor_count: int = 0
 
-    # ─────────────────────────────────────────────
-    # 6) Artifact (matrices/*) filtering controls
-    # ─────────────────────────────────────────────
+    # -------------------------------------------------
+    # 6) Artifact filtering controls
+    # -------------------------------------------------
     matrices_min_count: int = 3
     matrices_repeat_number: int = 5
     matrices_type: Literal["all", "coding", "sense-mutations"] = "all"
     matrices_fix: str = ""
 
-    # ─────────────────────────────────────────────
-    # 7) Statistical validation (PRE-TREE)
-    # ─────────────────────────────────────────────
+    # -------------------------------------------------
+    # 7) Central statistical feature filtering
+    # -------------------------------------------------
+    run_central_feature_filtering: bool = True
     statistical_test: Literal["chi2", "fisher"] = "chi2"
     significance_level: float = 0.05
     fdr_alpha: float = 0.05
@@ -76,79 +73,82 @@ class NetworkParserConfig:
     chi2_min_expected: int = 5
     n_permutation_tests: int = 500
 
-    # Pre-tree statistical filtering
+    # Legacy internal prefilter compatibility
     prefilter_alpha: float = 0.05
     min_nonmissing_prefilter: float = 0.20
     min_maf_prefilter: float = 0.0
     max_prefiltered_features: Optional[int] = 10000
 
-    # Multiple testing
     multiple_testing_method: Literal["fdr_bh", "bonferroni"] = "fdr_bh"
 
-    # ─────────────────────────────────────────────
+    # -------------------------------------------------
     # 8) Decision Tree parameters
-    # ─────────────────────────────────────────────
+    # -------------------------------------------------
     max_depth: Optional[int] = None
     max_branch_depth: int = 3
     min_samples_split: int = 2
     min_samples_leaf: int = 1
     min_information_gain: float = 0.001
 
-    # Compatibility alias
     min_group_size: int = 2
 
-    # ─────────────────────────────────────────────
+    # -------------------------------------------------
     # 9) Interaction / Epistasis Mining (POST-TREE)
-    # ─────────────────────────────────────────────
+    # -------------------------------------------------
     epistasis_strength_threshold: float = 0.05
     max_epistatic_interactions: int = 50
 
-    # ─────────────────────────────────────────────
-    # 10) Post-tree bootstrap / stability (POST-TREE)
-    # ─────────────────────────────────────────────
+    # -------------------------------------------------
+    # 10) Post-tree bootstrap / stability
+    # -------------------------------------------------
     n_bootstrap: int = 100
     bootstrap_sample_fraction: float = 0.8
-
-    # Advanced stability interface
     n_bootstrap_samples: int = 1000
     bootstrap_samples_per_iter: int = 100
     bootstrap_outer_iters: int = 5
     min_bootstrap_support: float = 0.7
 
-    # ─────────────────────────────────────────────
+    # -------------------------------------------------
     # 11) Optional matrix compression
-    # ─────────────────────────────────────────────
+    # -------------------------------------------------
     use_integer_variant_ids: bool = False
 
-    # ─────────────────────────────────────────────
-    # 12) Performance & Reproducibility
-    # ─────────────────────────────────────────────
+    # -------------------------------------------------
+    # 12) Performance & reproducibility
+    # -------------------------------------------------
     n_jobs: int = -1
     random_state: int = 42
     memory_efficient: bool = False
 
-    # ─────────────────────────────────────────────
-    # 13) Pipeline branch mode
-    # ─────────────────────────────────────────────
+    # -------------------------------------------------
+    # 13) Pipeline mode
+    # -------------------------------------------------
     pipeline_mode: Literal[
         "matrix_only",
         "decision_tree_only",
         "ml_only",
         "both",
-    ] = "decision_tree_only"
+    ] = "both"
 
-    # Backward compatibility with older configs / CLI
+    # Backward compatibility
     run_ml_protocol: bool = False
 
-    # ─────────────────────────────────────────────
-    # 14) Downstream ML protocol branch
-    # ─────────────────────────────────────────────
+    # -------------------------------------------------
+    # 14) Updated orchestration flags
+    # -------------------------------------------------
+    run_model_selector: bool = True
+    trigger_decision_tree_on_selected: bool = True
+    trigger_decision_tree_if_candidate: bool = True
+    decision_tree_requires_selector_match: bool = False
+
+    # -------------------------------------------------
+    # 15) ML protocol branch
+    # -------------------------------------------------
     ml_algorithm: str = "auto"
     ml_min_sensitivity: float = 0.5
     ml_max_sensitivity: float = 1.0
     ml_step_sensitivity: float = 0.1
 
-    # train.py-derived optional controls
     ml_empty_symbol: str = ""
     ml_remove_empty_field_threshold: float = 1.0
 
@@ -176,7 +176,6 @@ class NetworkParserConfig:
             raise ValueError(f"ml_algorithm must be one of: {sorted(supported_ml)}")
 
         if self.run_ml_protocol and self.pipeline_mode == "decision_tree_only":
-            # preserve old behavior: run_ml_protocol=True used to mean "add ML branch"
             self.pipeline_mode = "both"
 
         if self.qual_threshold < 0:
@@ -225,3 +224,29 @@ class NetworkParserConfig:
             raise ValueError("max_branch_depth must be >= 1")
         if self.min_samples_split < 2:
             raise ValueError("min_samples_split must be >= 2")
+        if self.min_samples_leaf < 1:
+            raise ValueError("min_samples_leaf must be >= 1")
+        if self.epistasis_strength_threshold < 0:
+            raise ValueError("epistasis_strength_threshold must be >= 0")
+        if self.max_epistatic_interactions < 1:
+            raise ValueError("max_epistatic_interactions must be >= 1")
+        if self.n_bootstrap < 0:
+            raise ValueError("n_bootstrap must be >= 0")
+        if self.n_bootstrap_samples < 0:
+            raise ValueError("n_bootstrap_samples must be >= 0")
+        if self.bootstrap_samples_per_iter < 1:
+            raise ValueError("bootstrap_samples_per_iter must be >= 1")
+        if self.bootstrap_outer_iters < 1:
+            raise ValueError("bootstrap_outer_iters must be >= 1")
+        if not 0 <= self.min_bootstrap_support <= 1:
+            raise ValueError("min_bootstrap_support must be in [0, 1]")
+        if not 0 <= self.ml_min_sensitivity <= 1:
+            raise ValueError("ml_min_sensitivity must be in [0, 1]")
+        if not 0 <= self.ml_max_sensitivity <= 1:
+            raise ValueError("ml_max_sensitivity must be in [0, 1]")
+        if self.ml_min_sensitivity > self.ml_max_sensitivity:
+            raise ValueError("ml_min_sensitivity cannot exceed ml_max_sensitivity")
+        if self.ml_step_sensitivity <= 0:
+            raise ValueError("ml_step_sensitivity must be > 0")
+        if not 0 <= self.ml_remove_empty_field_threshold <= 1:
+            raise ValueError("ml_remove_empty_field_threshold must be in [0, 1]")

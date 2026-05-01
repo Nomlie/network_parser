@@ -11,13 +11,13 @@
   "max_missing_fraction": 0.1,
   "min_spacing_bp": 10,
 
-  "min_sample_presence": 5,
+  "min_sample_presence": 10,
   "ancestral_allele": "Y",
 
   "remove_invariant": true,
-  "min_minor_count": 5,
+  "min_minor_count": 10,
 
-  "matrices_min_count": 5,
+  "matrices_min_count": 10,
   "matrices_repeat_number": 5,
   "matrices_type": "all",
   "matrices_fix": "",
@@ -53,7 +53,7 @@
 
   "use_integer_variant_ids": false,
 
-  "n_jobs": 4,
+  "n_jobs": 12,
   "random_state": 42,
   "memory_efficient": true,
 

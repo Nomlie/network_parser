@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -40,26 +40,16 @@ class MLProtocolRunner:
     """
     Downstream ML protocol branch.
 
-    Purpose
-    -------
-    Consume the sample x feature dataframe already created by DataLoader,
+    Updated role in pipeline
+    ------------------------
+    Consume the already aligned and centrally filtered sample x feature dataframe,
     then run:
 
-        selector -> training -> testing/evaluation
+        selector -> shortlist -> resolve final algorithm -> train -> evaluate
 
-    using the logic derived from:
-        - model_selector.py
-        - train.py
-        - tester.py
-
-    Notes
-    -----
-    - This branch is downstream and does NOT replace the main
-      decision-tree / interaction discovery branch.
-    - Input dataframe is expected to be sample-centric:
-          index   = sample identifiers
-          columns = genomic features / polymorphic sites
-          values  = categorical or binary feature states
+    The selector output is also used as a branch-decision payload so the
+    orchestrator can decide whether the decision-tree interpretability branch
+    should be triggered.
     """
 
     SUPPORTED_ALGOS = {"RF", "MLP", "LR", "MBCS", "DT", "SVC", "SCV", "DNL"}
@@ -78,23 +68,7 @@ class MLProtocolRunner:
         algorithm: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Run the full ML protocol on an already-aligned dataframe.
-
-        Parameters
-        ----------
-        genomic_df
-            Sample x feature dataframe from DataLoader.
-        labels
-            Label series aligned or alignable to genomic_df.index.
-        output_dir
-            Root output directory.
-        algorithm
-            Optional forced algorithm. If None or "auto", selector decides.
-
-        Returns
-        -------
-        dict
-            Summary of selector, training, and evaluation outputs.
+        Run the full ML protocol on an already aligned, centrally filtered dataframe.
         """
         self._validate_inputs(genomic_df, labels)
 
@@ -103,7 +77,6 @@ class MLProtocolRunner:
         genomic_df_aligned, labels_aligned = self._align_inputs(genomic_df, labels)
         protocol_df = self.build_protocol_df(genomic_df_aligned, labels_aligned)
 
-        # NEW: apply train.py-style empty-column filtering before selector/train/eval
         empty_thr = 1.0
         empty_symbol = ""
         if self.config is not None:
@@ -116,7 +89,6 @@ class MLProtocolRunner:
             empty_symbol=empty_symbol,
         )
 
-        # Rebuild aligned genomic/labels from the filtered protocol matrix
         genomic_df_aligned = protocol_df.iloc[:, 2:].copy()
         labels_aligned = protocol_df.iloc[:, 1].copy()
         genomic_df_aligned.index = protocol_df.iloc[:, 0].astype(str)
@@ -124,17 +96,38 @@ class MLProtocolRunner:
         protocol_matrix_path = out_dir / "ml_protocol_matrix.csv"
         protocol_df.to_csv(protocol_matrix_path, index=False)
 
-        selector_result = self.select_model(genomic_df_aligned, labels_aligned)
-
         requested_algo = algorithm
         if requested_algo is None and self.config is not None:
             requested_algo = getattr(self.config, "ml_algorithm", "auto")
+
+        run_selector = bool(getattr(self.config, "run_model_selector", True)) if self.config is not None else True
+
+        # --------------------------------------------------------------
+        # Selector / ranking stage
+        # --------------------------------------------------------------
+        if run_selector:
+            selector_result = self.select_model(genomic_df_aligned, labels_aligned)
+            selector_result = self._normalize_selector_output(selector_result)
+        else:
+            logger.info(
+                "Model selector disabled by config.run_model_selector=False; using requested algorithm pathway."
+            )
+            selector_result = self._selector_disabled_payload(requested_algorithm=requested_algo)
 
         selected_algo = self.resolve_algorithm(
             selector_recommendation=selector_result.get("recommendation", "RF"),
             requested_algorithm=requested_algo,
         )
 
+        branch_decision = self.build_branch_decision_payload(
+            selector_result=selector_result,
+            selected_algorithm=selected_algo,
+            requested_algorithm=requested_algo,
+        )
+
+        # --------------------------------------------------------------
+        # Training stage
+        # --------------------------------------------------------------
         model = self.train_model(
             genomic_df=genomic_df_aligned,
             labels=labels_aligned,
@@ -144,10 +137,19 @@ class MLProtocolRunner:
         model_path = out_dir / f"{selected_algo}_ml_protocol_model.pkl"
         self.save_model(model, model_path)
 
+        # --------------------------------------------------------------
+        # Evaluation stage
+        # --------------------------------------------------------------
         evaluation = self.evaluate_model(
             model=model,
             protocol_df=protocol_df,
             out_dir=out_dir,
+        )
+
+        interpretability = (
+            model.get_interpretability()
+            if hasattr(model, "get_interpretability")
+            else {}
         )
 
         summary = {
@@ -155,8 +157,12 @@ class MLProtocolRunner:
             "n_samples": int(genomic_df_aligned.shape[0]),
             "n_features": int(genomic_df_aligned.shape[1]),
             "selected_algorithm": selected_algo,
+            "requested_algorithm": "auto" if requested_algo is None else str(requested_algo),
+            "selector_enabled": bool(run_selector),
             "selector": selector_result,
+            "branch_decision": branch_decision,
             "training_metrics": getattr(model, "training_metrics", {}),
+            "interpretability": interpretability,
             "evaluation": evaluation,
             "artifacts": {
                 "protocol_matrix": str(protocol_matrix_path),
@@ -164,6 +170,7 @@ class MLProtocolRunner:
                 "evaluation_json": str(out_dir / "ml_protocol_evaluation.json"),
                 "evaluation_tsv": str(out_dir / "ml_protocol_thresholds.tsv"),
                 "sample_predictions_tsv": str(out_dir / "ml_protocol_sample_predictions.tsv"),
+                "results_json": str(out_dir / "ml_protocol_results.json"),
             },
         }
 
@@ -171,13 +178,16 @@ class MLProtocolRunner:
             json.dump(summary, fh, indent=2, default=_json_default)
 
         logger.info(
-            "ML protocol complete | samples=%d | features=%d | algorithm=%s | out=%s",
+            "ML protocol complete | samples=%d | features=%d | selected_algorithm=%s | dt_candidate=%s | selector_enabled=%s | out=%s",
             genomic_df_aligned.shape[0],
             genomic_df_aligned.shape[1],
             selected_algo,
+            branch_decision.get("run_decision_tree_branch", False),
+            run_selector,
             out_dir,
         )
-        return summary  
+
+        return summary
 
     # ------------------------------------------------------------------
     # validation / alignment
@@ -198,7 +208,7 @@ class MLProtocolRunner:
         self,
         genomic_df: pd.DataFrame,
         labels: pd.Series,
-    ) -> tuple[pd.DataFrame, pd.Series]:
+    ) -> Tuple[pd.DataFrame, pd.Series]:
         genomic_df = genomic_df.copy()
         labels = labels.copy()
 
@@ -228,7 +238,7 @@ class MLProtocolRunner:
         return genomic_df_aligned, labels_aligned
 
     # ------------------------------------------------------------------
-    # train.py-style matrix construction
+    # protocol matrix construction
     # ------------------------------------------------------------------
     def build_protocol_df(
         self,
@@ -236,7 +246,7 @@ class MLProtocolRunner:
         labels: pd.Series,
     ) -> pd.DataFrame:
         """
-        Build the same logical structure expected by train.py / tester.py:
+        Build the structure expected by train/test style logic:
 
             col0 = sample_id
             col1 = label
@@ -255,8 +265,7 @@ class MLProtocolRunner:
         empty_symbol: str = "",
     ) -> pd.DataFrame:
         """
-        Derived from train.py:
-        remove feature columns where empty fraction > thr.
+        Remove feature columns where empty fraction > thr.
 
         The first two columns (sample_id, label) are preserved.
         """
@@ -269,7 +278,7 @@ class MLProtocolRunner:
         empty_sym = str(empty_symbol).strip()
         feature_cols = list(protocol_df.columns[2:])
         keep_cols: List[str] = []
-        removed: List[tuple[str, float]] = []
+        removed: List[Tuple[str, float]] = []
 
         for col in feature_cols:
             s = protocol_df[col]
@@ -296,7 +305,7 @@ class MLProtocolRunner:
         return protocol_df
 
     # ------------------------------------------------------------------
-    # model_selector.py integration
+    # selector integration
     # ------------------------------------------------------------------
     def import_selector(self):
         try:
@@ -310,23 +319,18 @@ class MLProtocolRunner:
         """
         Encode mixed/categorical feature columns into integer codes for selector probing.
 
-        This mirrors the intent of model_selector without changing the original
-        dataframe used for model training.
+        This keeps selector probing separate from the raw dataframe used for training.
         """
         encoded_cols: List[np.ndarray] = []
 
         for col in genomic_df.columns:
             s = genomic_df[col].copy()
-
-            # preserve missing-like as a shared token so selector sees them consistently
             s = s.where(~s.isna(), "__MISSING__")
             s = s.astype(str).str.strip()
             s = s.replace({"": "__MISSING__", "nan": "__MISSING__", "NaN": "__MISSING__", "nd": "__MISSING__"})
 
             cat = pd.Categorical(s)
             codes = cat.codes.astype(float)
-
-            # categorical codes are non-negative here
             encoded_cols.append(codes)
 
         if not encoded_cols:
@@ -354,18 +358,133 @@ class MLProtocolRunner:
             logger.warning("Model selector failed, defaulting to RF: %s", exc)
             result = {
                 "recommendation": "RF",
-                "reason": f"selector_failed: {exc}",
+                "rationale": [f"selector_failed: {exc}"],
                 "probe_scores": {},
+                "candidate_ranked": ["RF"],
+                "dt_candidate": False,
             }
 
         if "recommendation" not in result:
             result["recommendation"] = "RF"
 
         logger.info("ML selector recommendation: %s", result["recommendation"])
-        logger.info("ML selector probe scores | %s",
-            result.get("probe_scores", {})
-        )
+        logger.info("ML selector probe scores | %s", result.get("probe_scores", {}))
         return result
+
+    def _selector_disabled_payload(
+        self,
+        requested_algorithm: Optional[str],
+    ) -> Dict[str, Any]:
+        """
+        Build a consistent selector-like payload when model screening is disabled.
+        """
+        req = "auto" if requested_algorithm is None else str(requested_algorithm).strip()
+
+        if req.lower() == "auto":
+            rec = "RF"
+            rationale = [
+                "Model selector disabled; falling back to default RF recommendation because requested_algorithm='auto'."
+            ]
+        else:
+            rec = "SVC" if req == "SCV" else req
+            rationale = [
+                f"Model selector disabled; using requested algorithm '{rec}' as the recommendation."
+            ]
+
+        candidate_ranked = [rec]
+        interpretable = [a for a in candidate_ranked if a in {"DT", "LR", "RF", "SVC", "MLP"}]
+
+        payload = {
+            "recommendation": rec,
+            "candidate_ranked": candidate_ranked,
+            "dt_candidate": bool(rec == "DT"),
+            "recommended_interpretable_models": interpretable,
+            "rationale": rationale,
+            "probe_scores": {},
+            "selector_enabled": False,
+        }
+        return payload
+
+    def _normalize_selector_output(
+        self,
+        selector_result: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Normalize selector output so the rest of the pipeline can rely on a
+        consistent structure, even if model_selector.py still returns the older format.
+        """
+        result = dict(selector_result or {})
+
+        recommendation = str(result.get("recommendation", "RF")).strip() or "RF"
+        result["recommendation"] = recommendation
+
+        probe_scores = result.get("probe_scores", {})
+        if not isinstance(probe_scores, dict):
+            probe_scores = {}
+
+        ranked: List[str] = []
+        scored_items: List[Tuple[str, float]] = []
+        for k, v in probe_scores.items():
+            if k == "delta_nonlinear_minus_linear":
+                continue
+            fv = _safe_float(v, default=float("-inf"))
+            if np.isfinite(fv):
+                scored_items.append((str(k), fv))
+
+        scored_items.sort(key=lambda x: x[1], reverse=True)
+        ranked = [name for name, _ in scored_items]
+
+        normalized_ranked: List[str] = []
+        for item in ranked:
+            normalized_ranked.append(self._normalize_selector_name(item))
+
+        normalized_recommendation = self._normalize_selector_name(recommendation)
+        if normalized_recommendation not in normalized_ranked:
+            normalized_ranked.insert(0, normalized_recommendation)
+
+        candidate_ranked = result.get("candidate_ranked", normalized_ranked)
+        if not isinstance(candidate_ranked, list):
+            candidate_ranked = normalized_ranked
+
+        candidate_ranked = [self._normalize_selector_name(x) for x in candidate_ranked]
+
+        dt_candidate = bool(
+            result.get("dt_candidate", False)
+            or normalized_recommendation == "DT"
+            or "DT" in candidate_ranked
+        )
+
+        interpretable_models = []
+        for algo in candidate_ranked:
+            if algo in {"DT", "LR", "RF", "SVC", "MLP"} and algo not in interpretable_models:
+                interpretable_models.append(algo)
+
+        result["recommendation"] = normalized_recommendation
+        result["candidate_ranked"] = candidate_ranked
+        result["dt_candidate"] = dt_candidate
+        result["recommended_interpretable_models"] = interpretable_models
+
+        if "rationale" not in result:
+            result["rationale"] = []
+
+        if "selector_enabled" not in result:
+            result["selector_enabled"] = True
+
+        return result
+
+    def _normalize_selector_name(self, name: Any) -> str:
+        """
+        Normalize selector names to the downstream vocabulary used by this branch.
+        """
+        raw = str(name).strip()
+
+        mapping = {
+            "MLP_small": "MLP",
+            "LinearSVC": "SVC",
+            "SVC_RBF": "SVC",
+            "SCV": "SVC",
+        }
+        return mapping.get(raw, raw)
 
     def resolve_algorithm(
         self,
@@ -373,7 +492,7 @@ class MLProtocolRunner:
         requested_algorithm: Optional[str] = None,
     ) -> str:
         """
-        Resolve final algorithm to one supported by NeuralNetwork.py.
+        Resolve final algorithm to one supported by neural_network.py.
         """
         req = "auto" if requested_algorithm is None else str(requested_algorithm).strip()
         rec = str(selector_recommendation).strip()
@@ -390,15 +509,10 @@ class MLProtocolRunner:
             "RF": "RF",
             "DT": "DT",
             "LR": "LR",
-            "MLP_small": "MLP",
             "MLP": "MLP",
-            "LinearSVC": "SVC",
-            "SVC_RBF": "SVC",
-            "SVC": "SVC",
-            "SCV": "SVC",
             "MBCS": "MBCS",
             "DNL": "DNL",
-            # unsupported / optional recommendations fallback safely
+            "SVC": "SVC",
             "KNN": "RF",
             "NBayes": "RF",
             "XGBoost": "RF",
@@ -406,8 +520,42 @@ class MLProtocolRunner:
 
         return mapping.get(rec, "RF")
 
+    def build_branch_decision_payload(
+        self,
+        selector_result: Dict[str, Any],
+        selected_algorithm: str,
+        requested_algorithm: Optional[str],
+    ) -> Dict[str, Any]:
+        """
+        Create a normalized branch-decision payload for the orchestrator.
+
+        This is what enables conditional triggering of the DT branch after model selection.
+        """
+        requested = "auto" if requested_algorithm is None else str(requested_algorithm).strip()
+        recommendation = str(selector_result.get("recommendation", "RF")).strip()
+        candidate_ranked = selector_result.get("candidate_ranked", [])
+        if not isinstance(candidate_ranked, list):
+            candidate_ranked = []
+
+        dt_candidate = bool(selector_result.get("dt_candidate", False) or "DT" in candidate_ranked)
+        run_dt = bool(selected_algorithm == "DT" or recommendation == "DT" or dt_candidate)
+
+        payload = {
+            "requested_algorithm": requested,
+            "selector_recommendation": recommendation,
+            "selected_algorithm": selected_algorithm,
+            "candidate_algorithms": candidate_ranked,
+            "recommended_interpretable_models": selector_result.get(
+                "recommended_interpretable_models", []
+            ),
+            "dt_candidate": dt_candidate,
+            "run_decision_tree_branch": run_dt,
+        }
+
+        return payload
+
     # ------------------------------------------------------------------
-    # NeuralNetwork.py integration
+    # neural_network.py integration
     # ------------------------------------------------------------------
     def import_nn(self):
         try:
@@ -434,7 +582,6 @@ class MLProtocolRunner:
 
         model = mapping[algo](marker_style=marker_style)
 
-        # preserve the train.py RF behavior
         if algo == "RF" and getattr(model, "max_features", None) == "auto":
             model.max_features = "sqrt"
 
@@ -447,18 +594,16 @@ class MLProtocolRunner:
         algorithm: str,
     ):
         """
-        Train a model directly from the DataLoader dataframe.
+        Train a model directly from the centrally filtered dataframe.
 
-        This follows the train.py logic:
-        - plain marker style
-        - no one-hot here for plain mode
-        - feature titles are original dataframe columns
+        This follows current train.py-style logic:
+          - plain marker style
+          - one column per original feature
         """
         NN = self.import_nn()
 
         feature_titles = genomic_df.columns.astype(str).tolist()
 
-        # train.py passes categorical/raw values into the NN model in plain mode
         X = genomic_df.copy()
         for col in X.columns:
             X[col] = X[col].where(~X[col].isna(), "")
@@ -494,13 +639,13 @@ class MLProtocolRunner:
                 pickle.dump(model, fh)
 
     # ------------------------------------------------------------------
-    # tester.py-style evaluation
+    # evaluation helpers
     # ------------------------------------------------------------------
     def _feature_overlap(
         self,
         model: Any,
         protocol_df: pd.DataFrame,
-    ) -> tuple[List[str], float]:
+    ) -> Tuple[List[str], float]:
         if not hasattr(model, "feature_titles"):
             raise AttributeError("Model has no attribute 'feature_titles'")
 
@@ -527,9 +672,6 @@ class MLProtocolRunner:
         model: Any,
         marker_dict: Dict[str, str],
     ) -> Dict[str, Any]:
-        """
-        Call model.identify(markers) and normalize the output.
-        """
         result = model.identify(marker_dict)
 
         if not isinstance(result, dict):
@@ -539,7 +681,7 @@ class MLProtocolRunner:
         if not isinstance(predictions, list):
             predictions = []
 
-        norm_predictions: List[tuple[str, float]] = []
+        norm_predictions: List[Tuple[str, float]] = []
         for item in predictions:
             try:
                 label, prob = item[0], item[1]
@@ -560,7 +702,7 @@ class MLProtocolRunner:
         sensitivity: float,
     ) -> List[Dict[str, Any]]:
         """
-        tester.py-style per-sample identification at a fixed sensitivity threshold.
+        Per-sample identification at a fixed sensitivity threshold.
         """
         records: List[Dict[str, Any]] = []
 
@@ -577,79 +719,64 @@ class MLProtocolRunner:
                     marker_dict[marker] = str(value).strip()
 
             pred = self._predict_one(model, marker_dict)
-            all_predictions = pred["predictions"]
-            identified = [lab for lab, prob in all_predictions if prob >= sensitivity]
+            predictions = pred["predictions"]
 
-            top_label = ""
-            top_prob = 0.0
-            if all_predictions:
-                top_label, top_prob = max(all_predictions, key=lambda x: x[1])
+            if not predictions:
+                top_label = ""
+                top_prob = 0.0
+            else:
+                top_label, top_prob = predictions[0]
+
+            is_called = bool(top_prob >= sensitivity)
+            called_label = top_label if is_called else ""
 
             records.append(
                 {
                     "sample_id": sample_id,
                     "true_label": true_label,
-                    "identified_labels": identified,
-                    "top_label": str(top_label),
-                    "top_probability": float(top_prob),
-                    "n_predictions": len(all_predictions),
-                    "matched": true_label in identified,
+                    "predicted_label": top_label,
+                    "predicted_probability": float(top_prob),
+                    "called_label": called_label,
+                    "called": is_called,
+                    "sensitivity": float(sensitivity),
                 }
             )
 
         return records
 
-    def summarize_thresholds(
+    def score_records(
         self,
-        thresholds: List[float],
-        per_threshold_records: Dict[float, List[Dict[str, Any]]],
-    ) -> Dict[str, Any]:
+        records: List[Dict[str, Any]],
+    ) -> Dict[str, float]:
         """
-        Build tester-style threshold summary.
-
-        Metrics here are intentionally simple and transparent:
-        - tp: true label present among identified labels
-        - fp: identified labels exist but true label absent
-        - fn: no identified labels above threshold
+        Compute simple accuracy / call-rate summaries for a fixed threshold.
         """
-        rows: List[Dict[str, Any]] = []
+        if not records:
+            return {
+                "n_records": 0,
+                "n_called": 0,
+                "call_rate": 0.0,
+                "accuracy_called_only": 0.0,
+                "accuracy_all_samples": 0.0,
+            }
 
-        for thr in thresholds:
-            records = per_threshold_records[thr]
+        n_records = len(records)
+        called = [r for r in records if bool(r.get("called", False))]
+        n_called = len(called)
 
-            tp = 0
-            fp = 0
-            fn = 0
+        correct_called = sum(
+            1 for r in called if str(r.get("called_label", "")) == str(r.get("true_label", ""))
+        )
+        correct_all = sum(
+            1 for r in records if str(r.get("predicted_label", "")) == str(r.get("true_label", ""))
+        )
 
-            for rec in records:
-                identified = rec["identified_labels"]
-                if not identified:
-                    fn += 1
-                elif rec["matched"]:
-                    tp += 1
-                else:
-                    fp += 1
-
-            precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-            recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-            f1 = (2.0 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0.0
-
-            rows.append(
-                {
-                    "sensitivity": float(thr),
-                    "tp": int(tp),
-                    "fp": int(fp),
-                    "fn": int(fn),
-                    "precision": float(precision),
-                    "recall": float(recall),
-                    "f1": float(f1),
-                }
-            )
-
-        best = max(rows, key=lambda x: x["f1"]) if rows else {}
         return {
-            "thresholds": rows,
-            "best_threshold": best,
+            "n_records": int(n_records),
+            "n_called": int(n_called),
+            "call_rate": float(n_called / max(1, n_records)),
+            "accuracy_called_only": float(correct_called / max(1, n_called)),
+            "accuracy_all_samples": float(correct_all / max(1, n_records)),
         }
 
     def evaluate_model(
@@ -659,76 +786,65 @@ class MLProtocolRunner:
         out_dir: Path,
     ) -> Dict[str, Any]:
         """
-        Run the tester stage in memory and write summary artifacts.
+        Evaluate model across a sensitivity range and save artifacts.
         """
-        min_sensitivity = _safe_float(
-            getattr(self.config, "ml_min_sensitivity", 0.5) if self.config is not None else 0.5,
-            0.5,
-        )
-        max_sensitivity = _safe_float(
-            getattr(self.config, "ml_max_sensitivity", 1.0) if self.config is not None else 1.0,
-            1.0,
-        )
-        step_sensitivity = _safe_float(
-            getattr(self.config, "ml_step_sensitivity", 0.1) if self.config is not None else 0.1,
-            0.1,
-        )
-
-        if step_sensitivity <= 0:
-            raise ValueError("ml_step_sensitivity must be > 0")
-        if min_sensitivity > max_sensitivity:
-            raise ValueError("ml_min_sensitivity must be <= ml_max_sensitivity")
-
         used_markers, coverage = self._feature_overlap(model, protocol_df)
 
-        thresholds: List[float] = []
-        t = min_sensitivity
-        eps = step_sensitivity / 10.0
-        while t <= max_sensitivity + eps:
-            thresholds.append(round(float(t), 6))
-            t += step_sensitivity
+        min_sens = 0.5
+        max_sens = 1.0
+        step_sens = 0.1
+        if self.config is not None:
+            min_sens = float(getattr(self.config, "ml_min_sensitivity", 0.5))
+            max_sens = float(getattr(self.config, "ml_max_sensitivity", 1.0))
+            step_sens = float(getattr(self.config, "ml_step_sensitivity", 0.1))
 
-        per_threshold_records: Dict[float, List[Dict[str, Any]]] = {}
+        thresholds = np.arange(min_sens, max_sens + (step_sens / 10.0), step_sens)
+
+        threshold_rows: List[Dict[str, Any]] = []
+        best_records: List[Dict[str, Any]] = []
+        best_summary: Optional[Dict[str, Any]] = None
+        best_score = float("-inf")
+
         for thr in thresholds:
-            per_threshold_records[thr] = self.identify_records(
+            records = self.identify_records(
                 model=model,
                 protocol_df=protocol_df,
                 used_markers=used_markers,
-                sensitivity=thr,
+                sensitivity=float(thr),
             )
+            scored = self.score_records(records)
 
-        summary = self.summarize_thresholds(
-            thresholds=thresholds,
-            per_threshold_records=per_threshold_records,
-        )
+            row = {
+                "sensitivity": float(thr),
+                **scored,
+            }
+            threshold_rows.append(row)
 
-        # save threshold table
-        threshold_df = pd.DataFrame(summary["thresholds"])
-        threshold_df.to_csv(out_dir / "ml_protocol_thresholds.tsv", sep="\t", index=False)
+            composite_score = scored["accuracy_called_only"] + scored["call_rate"]
+            if composite_score > best_score:
+                best_score = composite_score
+                best_records = records
+                best_summary = row
 
-        # save best-threshold sample predictions
-        best_thr = summary.get("best_threshold", {}).get("sensitivity", thresholds[0] if thresholds else 0.5)
-        best_records = per_threshold_records[float(best_thr)]
-        pd.DataFrame(best_records).to_csv(
-            out_dir / "ml_protocol_sample_predictions.tsv",
-            sep="\t",
-            index=False,
-        )
+        thresholds_df = pd.DataFrame(threshold_rows)
+        predictions_df = pd.DataFrame(best_records)
 
-        evaluation_payload = {
+        thresholds_path = out_dir / "ml_protocol_thresholds.tsv"
+        preds_path = out_dir / "ml_protocol_sample_predictions.tsv"
+        eval_json_path = out_dir / "ml_protocol_evaluation.json"
+
+        thresholds_df.to_csv(thresholds_path, sep="\t", index=False)
+        predictions_df.to_csv(preds_path, sep="\t", index=False)
+
+        evaluation = {
             "feature_overlap_coverage": float(coverage),
-            "used_markers_count": int(len(used_markers)),
-            "threshold_summary": summary,
+            "used_marker_count": int(len(used_markers)),
+            "used_markers": used_markers,
+            "best_threshold_summary": best_summary if best_summary is not None else {},
+            "all_thresholds": threshold_rows,
         }
 
-        with open(out_dir / "ml_protocol_evaluation.json", "w", encoding="utf-8") as fh:
-            json.dump(evaluation_payload, fh, indent=2, default=_json_default)
+        with open(eval_json_path, "w", encoding="utf-8") as fh:
+            json.dump(evaluation, fh, indent=2, default=_json_default)
 
-        logger.info(
-            "ML protocol evaluation complete | used_markers=%d | coverage=%.3f | best_threshold=%s",
-            len(used_markers),
-            coverage,
-            summary.get("best_threshold", {}).get("sensitivity", "NA"),
-        )
-
-        return evaluation_payload
+        return evaluation

@@ -1,0 +1,182 @@
+digraph NetworkParser_Pipeline {
+  rankdir=TB;
+  splines=ortho;
+  bgcolor="white";
+  labelloc="t";
+  fontsize=22;
+  fontname="Helvetica,Arial,sans-serif";
+  label="NetworkParser Pipeline\nVCF/Matrix → Statistical Filtering → Model Screening → Selected Algorithm Branch → Predictive and Interpretable Outputs";
+
+  graph [nodesep=0.45, ranksep=0.65, pad=0.25];
+
+  node [
+    shape=box,
+    style="rounded,filled",
+    fontname="Helvetica,Arial,sans-serif",
+    fontsize=11,
+    penwidth=1.3,
+    fillcolor="#E6F3FF"
+  ];
+
+  edge [
+    fontname="Helvetica,Arial,sans-serif",
+    fontsize=10,
+    penwidth=1.2,
+    arrowsize=0.9
+  ];
+
+  // =========================
+  // Entry
+  // =========================
+  Start [label="Start\nCLI + Config + Output Directory", fillcolor="#D5F5E3"];
+  Inputs [label="Inputs\n• Genomic matrix or VCF directory\n• Metadata + label column\n• Optional: reference FASTA, known markers", fillcolor="#D5F5E3"];
+  Start -> Inputs;
+
+  // =========================
+  // Stage 1
+  // =========================
+  subgraph cluster_loader {
+    label="Stage 1: Data Loading and Preprocessing";
+    color="#5F5F5F";
+    style="rounded,dashed";
+    fillcolor="white";
+
+    LoadGenomic [label="Load genomic input\n(CSV matrix or VCF directory)", fillcolor="#FFCC99"];
+    ParseVCF [label="Parse VCF calls\nQC + cohort filtering + baseline encoding", fillcolor="#FFCC99"];
+    BuildMatrix [label="Build sample × variant matrix", fillcolor="#A8DADC"];
+    Preprocess [label="Matrix preprocessing\n• remove invariant sites\n• handle missing / empty values\n• lightweight count filtering", fillcolor="#F4D35E"];
+
+    LoadMeta [label="Load metadata", fillcolor="#F4A261"];
+    Normalize [label="Normalize phenotype labels\nstrip, harmonize, drop missing", fillcolor="#F4A261"];
+    Align [label="Align samples\nintersect genomic matrix with labels", fillcolor="#A8DADC"];
+
+    LoadGenomic -> ParseVCF [style=dashed, color="#777", label="when VCF input"];
+    LoadGenomic -> BuildMatrix [style=dashed, color="#777", label="when matrix input"];
+    ParseVCF -> BuildMatrix;
+    BuildMatrix -> Preprocess;
+    LoadMeta -> Normalize -> Align;
+    Preprocess -> Align;
+  }
+
+  Inputs -> LoadGenomic;
+  Inputs -> LoadMeta;
+
+  // =========================
+  // Stage 2
+  // =========================
+  subgraph cluster_stats {
+    label="Stage 2: Statistical Filtering and Feature Selection";
+    color="#5F5F5F";
+    style="rounded,dashed";
+    fillcolor="white";
+
+    Assoc [label="Per-feature association testing\n(χ² / Fisher exact test)", fillcolor="#B5EAD7"];
+    FDR [label="Multiple testing correction\n(FDR-BH)", fillcolor="#B5EAD7"];
+    Filtered [label="Curated feature set\nstatistically supported genomic markers", fillcolor="#FFFFFF", penwidth=2];
+
+    Align -> Assoc -> FDR -> Filtered;
+  }
+
+  // =========================
+  // Stage 3
+  // =========================
+  subgraph cluster_screen {
+    label="Stage 3: Model Screening and Branch Selection";
+    color="#5F5F5F";
+    style="rounded,dashed";
+    fillcolor="white";
+
+    Supervised [label="Build supervised protocol matrix\n(sample_id + label + features)", fillcolor="#A2D2DF"];
+    EmptyCols [label="Remove overly sparse feature columns", fillcolor="#A2D2DF"];
+    Selector [label="Model selector\ncross-validated probe of candidate algorithms", fillcolor="#A2D2DF"];
+    Resolve [label="Resolve selected algorithm\n(selector recommendation and/or config override)", fillcolor="#A2D2DF", penwidth=2];
+
+    Filtered -> Supervised -> EmptyCols -> Selector -> Resolve;
+  }
+
+  // =========================
+  // Stage 4
+  // =========================
+  subgraph cluster_branches {
+    label="Stage 4: Selected Algorithm Branch";
+    color="#5F5F5F";
+    style="rounded,dashed";
+    fillcolor="white";
+
+    RF [label="Random Forest", fillcolor="#E0F7FA"];
+    LR [label="Logistic Regression", fillcolor="#E0F7FA"];
+    SVC [label="Support Vector Classifier", fillcolor="#E0F7FA"];
+    MLP [label="Multi-Layer Perceptron", fillcolor="#E0F7FA"];
+    DT [label="Decision Tree\n(interpretable hierarchy + rule extraction)", fillcolor="#FFCCBC", penwidth=2.5];
+    OtherML [label="Other / Future algorithm branches", fillcolor="#E0F7FA"];
+
+    Resolve -> RF [style=dashed, color="#777"];
+    Resolve -> LR [style=dashed, color="#777"];
+    Resolve -> SVC [style=dashed, color="#777"];
+    Resolve -> MLP [style=dashed, color="#777"];
+    Resolve -> DT [style=dashed, color="#777"];
+    Resolve -> OtherML [style=dashed, color="#777"];
+  }
+
+  // =========================
+  // Stage 5
+  // =========================
+  subgraph cluster_posttree {
+    label="Stage 5: Decision Tree Interpretability Extension";
+    color="#5F5F5F";
+    style="rounded,dashed";
+    fillcolor="white";
+
+    TreeSummary [label="Decision Tree structure extraction\nroot features / branch features / rules", fillcolor="#FFAB91"];
+    Paths [label="Path-based epistatic interaction mining", fillcolor="#CE93D8"];
+    MI [label="Mutual information scoring", fillcolor="#CE93D8"];
+    Bootstrap [label="Bootstrap stability analysis", fillcolor="#CE93D8"];
+    Confidence [label="Integrated confidence scores\nfor ranked interpretable features", fillcolor="#D1C4E9", penwidth=2];
+
+    DT -> TreeSummary;
+    TreeSummary -> Paths;
+    TreeSummary -> Bootstrap;
+    Paths -> MI;
+    MI -> Confidence;
+    Bootstrap -> Confidence;
+  }
+
+  // =========================
+  // Stage 6
+  // =========================
+  subgraph cluster_outputs {
+    label="Stage 6: Outputs and Artifacts";
+    color="#5F5F5F";
+    style="rounded,dashed";
+    fillcolor="white";
+
+    Pred [label="Predictive model outputs\ntrained model + metrics + predictions", fillcolor="#C5E1A5"];
+    Ranked [label="Ranked interpretable feature list\n(with confidence scores)", fillcolor="#C5E1A5"];
+    InterGraph [label="Epistatic interaction network", fillcolor="#C5E1A5"];
+    SampleGraph [label="Sample-feature bipartite graph", fillcolor="#C5E1A5"];
+    GNN [label="GNN-ready matrices\n(adjacency, features, labels)", fillcolor="#C5E1A5"];
+    Reports [label="Comprehensive reports\nJSON / TSV / logs / matrices", fillcolor="#C5E1A5"];
+
+    RF -> Pred;
+    LR -> Pred;
+    SVC -> Pred;
+    MLP -> Pred;
+    DT -> Pred;
+    OtherML -> Pred;
+
+    Confidence -> Ranked;
+    Confidence -> InterGraph;
+    Confidence -> SampleGraph;
+    Confidence -> GNN;
+    Confidence -> Reports;
+
+    Pred -> Reports [style=dashed, color="#777", label="ML branch artifacts"];
+  }
+
+  // =========================
+  // Optional reference layer
+  // =========================
+  KnownMarkers [label="Optional: Load known markers", fillcolor="#F4A261"];
+  Inputs -> KnownMarkers;
+  KnownMarkers -> Reports [style=dashed, color="#777", label="reference layer"];
+}
