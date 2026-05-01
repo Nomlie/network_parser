@@ -174,6 +174,7 @@ class MLearn:
         self.categorical = bool(categorical)
         self.min_coverage_warn = float(min_coverage_warn)
         self.raise_on_low_coverage = bool(raise_on_low_coverage)
+        self.interpretability_top_n = 25
 
         # Filled by train()
         self.titles: List[str] = []                  # class titles (original labels, ordered)
@@ -250,6 +251,200 @@ class MLearn:
     def get_feature_titles(self) -> List[str] | None:
         """Return the marker names used during training."""
         return self.feature_titles
+
+    def get_interpretability(self) -> Dict[str, Any]:
+        """Return model-specific interpretability payload if available."""
+        if not hasattr(self, "training_metrics") or self.training_metrics is None:
+            return {}
+        if not isinstance(self.training_metrics, dict):
+            return {}
+        return self.training_metrics.get("interpretability", {})
+
+    def _safe_get_feature_names_after_preprocessing(self) -> List[str]:
+        """Best-effort recovery of feature names after sklearn preprocessing."""
+        if self.pipeline is None:
+            return list(self.feature_titles or [])
+
+        try:
+            pre = self.pipeline.named_steps.get("pre", None)
+        except Exception:
+            pre = None
+
+        if pre is None or pre == "passthrough":
+            return list(self.feature_titles or [])
+
+        try:
+            names = pre.get_feature_names_out()
+            return [str(x) for x in names]
+        except Exception:
+            return list(self.feature_titles or [])
+
+    def _aggregate_onehot_importance_by_base_feature(
+        self,
+        feature_names: List[str],
+        values: np.ndarray,
+    ) -> Dict[str, float]:
+        """Aggregate one-hot importances / coefficients back to base features."""
+        aggregated: Dict[str, float] = {}
+
+        base_features = list(self.feature_titles or [])
+        if not base_features:
+            return aggregated
+
+        base_features_sorted = sorted(base_features, key=len, reverse=True)
+
+        for fname, val in zip(feature_names, values):
+            fname = str(fname)
+            assigned = None
+
+            if fname in base_features:
+                assigned = fname
+            else:
+                for base in base_features_sorted:
+                    prefix = f"{base}_"
+                    if fname.startswith(prefix):
+                        assigned = base
+                        break
+
+            if assigned is None:
+                assigned = fname
+
+            aggregated[assigned] = aggregated.get(assigned, 0.0) + float(val)
+
+        return aggregated
+
+    def _top_items(
+        self,
+        score_map: Dict[str, float],
+        top_n: int = 25,
+        absolute: bool = True,
+    ) -> List[Dict[str, float]]:
+        """Convert a feature->score mapping into a sorted compact list."""
+        items = []
+        for feat, score in score_map.items():
+            items.append({
+                "feature": str(feat),
+                "score": float(score),
+                "abs_score": float(abs(score)),
+            })
+
+        if absolute:
+            items.sort(key=lambda d: d["abs_score"], reverse=True)
+        else:
+            items.sort(key=lambda d: d["score"], reverse=True)
+
+        return items[: int(top_n)]
+
+    def _lr_interpretability_payload(self, top_n: int = 25) -> Dict[str, Any]:
+        """Build interpretable summaries for Logistic Regression."""
+        if self.pipeline is None:
+            return {}
+
+        clf = self.pipeline.named_steps.get("clf", None)
+        if clf is None or not hasattr(clf, "coef_"):
+            return {}
+
+        feature_names = self._safe_get_feature_names_after_preprocessing()
+        coef = np.asarray(clf.coef_, dtype=float)
+
+        class_titles = list(self.classes_) if getattr(self, "classes_", None) is not None else list(self.titles)
+
+        if coef.ndim == 2 and coef.shape[0] == 1:
+            raw = coef[0]
+            aggregated = self._aggregate_onehot_importance_by_base_feature(feature_names, raw)
+
+            positive = self._top_items({k: v for k, v in aggregated.items() if v > 0}, top_n=top_n, absolute=False)
+            negative = self._top_items({k: v for k, v in aggregated.items() if v < 0}, top_n=top_n, absolute=False)
+            overall = self._top_items(aggregated, top_n=top_n, absolute=True)
+
+            return {
+                "model_type": "LR",
+                "mode": "binary",
+                "class_names": class_titles,
+                "top_positive_features": positive,
+                "top_negative_features": negative[:top_n],
+                "top_features_overall": overall,
+            }
+
+        class_payload = {}
+        for i in range(coef.shape[0]):
+            class_name = str(class_titles[i]) if i < len(class_titles) else f"class_{i}"
+            raw = coef[i]
+            aggregated = self._aggregate_onehot_importance_by_base_feature(feature_names, raw)
+
+            class_payload[class_name] = {
+                "top_positive_features": self._top_items(
+                    {k: v for k, v in aggregated.items() if v > 0},
+                    top_n=top_n,
+                    absolute=False,
+                ),
+                "top_negative_features": self._top_items(
+                    {k: v for k, v in aggregated.items() if v < 0},
+                    top_n=top_n,
+                    absolute=False,
+                )[:top_n],
+                "top_features_overall": self._top_items(
+                    aggregated,
+                    top_n=top_n,
+                    absolute=True,
+                ),
+            }
+
+        return {
+            "model_type": "LR",
+            "mode": "multiclass",
+            "class_names": class_titles,
+            "per_class": class_payload,
+        }
+
+    def _rf_interpretability_payload(self, top_n: int = 25) -> Dict[str, Any]:
+        """Build interpretable summaries for Random Forest."""
+        if self.pipeline is None:
+            return {}
+
+        clf = self.pipeline.named_steps.get("clf", None)
+        if clf is None or not hasattr(clf, "feature_importances_"):
+            return {}
+
+        feature_names = self._safe_get_feature_names_after_preprocessing()
+        raw_importances = np.asarray(clf.feature_importances_, dtype=float)
+
+        aggregated = self._aggregate_onehot_importance_by_base_feature(feature_names, raw_importances)
+        top_features = self._top_items(aggregated, top_n=top_n, absolute=False)
+
+        payload: Dict[str, Any] = {
+            "model_type": "RF",
+            "top_features": top_features,
+        }
+
+        if hasattr(clf, "estimators_") and clf.estimators_:
+            per_tree_maps = []
+            for est in clf.estimators_:
+                if hasattr(est, "feature_importances_"):
+                    est_imp = np.asarray(est.feature_importances_, dtype=float)
+                    per_tree_maps.append(
+                        self._aggregate_onehot_importance_by_base_feature(feature_names, est_imp)
+                    )
+
+            if per_tree_maps:
+                keys = set()
+                for m in per_tree_maps:
+                    keys.update(m.keys())
+
+                stability_rows = []
+                for feat in keys:
+                    vals = np.asarray([m.get(feat, 0.0) for m in per_tree_maps], dtype=float)
+                    stability_rows.append({
+                        "feature": str(feat),
+                        "mean_importance": float(np.mean(vals)),
+                        "std_importance": float(np.std(vals)),
+                        "nonzero_fraction": float(np.mean(vals > 0)),
+                    })
+
+                stability_rows.sort(key=lambda d: d["mean_importance"], reverse=True)
+                payload["stability_summary"] = stability_rows[:top_n]
+
+        return payload
         
     def get_grouped_feature_values(self, flg_integers: bool = False):
         """
@@ -1172,6 +1367,9 @@ class RF(MLearn):
             "accuracy": float(acc),
             "classification_report": report,
             "confusion_matrix": cm.tolist(),
+            "interpretability": self._rf_interpretability_payload(
+                top_n=int(getattr(self, "interpretability_top_n", 25))
+            ),
         }
         return self
 
@@ -1286,6 +1484,9 @@ class RF(MLearn):
             "accuracy": float(acc),
             "classification_report": report,
             "confusion_matrix": cm.tolist(),
+            "interpretability": self._rf_interpretability_payload(
+                top_n=int(getattr(self, "interpretability_top_n", 25))
+            ),
         }
         return self
 
@@ -2693,6 +2894,9 @@ class LR(MLearn):
             "accuracy": float(acc),
             "classification_report": report,
             "confusion_matrix": cm.tolist(),
+            "interpretability": self._lr_interpretability_payload(
+                top_n=int(getattr(self, "interpretability_top_n", 25))
+            ),
         }
         return self
 
@@ -2805,6 +3009,9 @@ class LR(MLearn):
             "accuracy": float(acc),
             "classification_report": report,
             "confusion_matrix": cm.tolist(),
+            "interpretability": self._lr_interpretability_payload(
+                top_n=int(getattr(self, "interpretability_top_n", 25))
+            ),
         }
         return self
 

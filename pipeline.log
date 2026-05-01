@@ -67756,3 +67756,463 @@ forced_positions=''
 2026-03-11 17:47:31,214 - INFO - Wrote JSON: /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/LineageBalanced/networkparser_results_20260311_174731.json
 2026-03-11 17:47:31,214 - INFO - Saved final results: /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/LineageBalanced/networkparser_results_20260311_174731.json
 2026-03-11 17:47:31,214 - INFO - NetworkParser pipeline completed successfully in 15.33s
+2026-03-11 19:48:22,296 - INFO - Starting NetworkParser pipeline
+2026-03-11 19:48:22,297 - INFO - Genomic input:    /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/AFRO_TB_ANNOTATION_VCF
+2026-03-11 19:48:22,297 - INFO - Metadata:         /Users/nmfuphicsir.co.za/Documents/data/AFRO_TB/AFRO_dataset_meta.csv
+2026-03-11 19:48:22,297 - INFO - Label column:     Lineage
+2026-03-11 19:48:22,297 - INFO - Output directory: /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/LineageBalanced
+2026-03-11 19:48:22,297 - INFO - Pipeline mode:    matrix_only
+2026-03-11 19:48:22,297 - INFO - Reference:        /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/VCF_2_Matrix/ref/H37Rv.gbk
+2026-03-11 19:48:22,297 - INFO - Initializing NetworkParser with config: {'include_intermediate_files': True, 'generic_name': 'matrix', 'qual_threshold': 30.0, 'min_dp_per_sample': 10, 'min_gq_per_sample': 20, 'mq_threshold': 40.0, 'mq0f_threshold': 0.1, 'biallelic_only': True, 'max_missing_fraction': 0.1, 'min_spacing_bp': 10, 'min_sample_presence': 5, 'ancestral_allele': 'Y', 'remove_invariant': True, 'min_minor_count': 5, 'matrices_min_count': 5, 'matrices_repeat_number': 5, 'matrices_type': 'all', 'matrices_fix': '', 'statistical_test': 'chi2', 'significance_level': 0.05, 'fdr_alpha': 0.05, 'fdr_threshold': 0.05, 'chi2_min_expected': 5, 'n_permutation_tests': 100, 'prefilter_alpha': 0.05, 'min_nonmissing_prefilter': 0.95, 'min_maf_prefilter': 0.005, 'max_prefiltered_features': 5000, 'multiple_testing_method': 'fdr_bh', 'max_depth': None, 'max_branch_depth': 3, 'min_samples_split': 2, 'min_samples_leaf': 1, 'min_information_gain': 0.001, 'min_group_size': 2, 'epistasis_strength_threshold': 0.05, 'max_epistatic_interactions': 50, 'n_bootstrap': 10, 'bootstrap_sample_fraction': 0.8, 'n_bootstrap_samples': 10, 'bootstrap_samples_per_iter': 10, 'bootstrap_outer_iters': 1, 'min_bootstrap_support': 0.7, 'use_integer_variant_ids': False, 'n_jobs': 4, 'random_state': 42, 'memory_efficient': True, 'pipeline_mode': 'matrix_only', 'run_ml_protocol': False, 'ml_algorithm': 'auto', 'ml_min_sensitivity': 0.5, 'ml_max_sensitivity': 1.0, 'ml_step_sensitivity': 0.1, 'ml_empty_symbol': '', 'ml_remove_empty_field_threshold': 1.0}
+2026-03-11 19:48:22,298 - INFO - Initialized StatisticalValidatorBranch.
+2026-03-11 19:48:22,298 - INFO - Stage 1: Loading genomic matrix
+2026-03-11 19:48:22,298 - INFO - DataLoader: input=/Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/AFRO_TB_ANNOTATION_VCF
+2026-03-11 19:48:22,298 - INFO - DataLoader: mode=vcf_directory
+2026-03-11 19:48:22,478 - INFO - DataLoader: discovered 13734 VCF(s) in /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/AFRO_TB_ANNOTATION_VCF (biallelic_only=True)
+2026-03-11 19:48:22,478 - INFO - DataLoader: per-sample parsing plan
+  Each VCF will be scanned record-by-record using iter_sample_calls().
+  Retained calls: SNP-like, biallelic (if enabled), passing QC thresholds.
+  Per-sample output: an in-memory dict mapping site→(REF, CALLED) for retained sites.
+2026-03-11 19:48:22,478 - INFO - DataLoader: record-level QC thresholds (applied during parsing)
+  QUAL>=30.0 | INFO/DP>=10 | INFO/MQ>=40.0 | INFO/MQ0F<=0.100
+2026-03-11 19:48:22,478 - INFO - DataLoader: cohort + matrix settings (applied after parsing)
+  min_sample_presence=5 | baseline=REF | min_minor_count=5
+2026-03-11 19:48:22,478 - INFO - DataLoader: starting parallel per-sample parsing (n_jobs=4)
+2026-03-11 19:50:13,044 - INFO - DataLoader: parsing complete
+  samples=13734
+  total_called_sites=16361007
+  mean_calls_per_sample=1191.28
+  storage=results list of (sample_id, calls_dict) in memory
+2026-03-11 19:50:13,045 - INFO - DataLoader: cohort merge starting
+  The per-sample call dictionaries will now be aggregated into:
+    (1) per_sample_calls[sample] → calls_dict
+    (2) site_counts[site] → carrier_count for allele-specific events
+  Alternate alleles at the same genomic position will be retained as separate features.
+2026-03-11 19:50:23,823 - INFO - DataLoader: cohort merge complete
+  per_sample_calls now holds 13734 per-genome call maps.
+  site_counts now defines the cohort-wide polymorphic site universe (pre-filter).
+2026-03-11 19:50:23,826 - INFO - DataLoader: cohort variant landscape (pre-filter)
+  The cohort comprises 13734 genomes.
+  A total of 445673 unique allele-specific polymorphic features were observed.
+  These correspond to 16361007 total mutation occurrences across genomes.
+  Alternate alleles at the same genomic position were retained as separate features.
+2026-03-11 19:50:23,826 - INFO - DataLoader: cohort artifacts
+  Output will be written to: /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/LineageBalanced
+  Writing occurs after presence filtering and encoding (matrices + FASTA + annotation tables).
+2026-03-11 19:50:23,959 - INFO - DataLoader: cohort presence filtering
+  A minimum of 5 genomes per site was required.
+  209226 of 445673 polymorphic sites were retained (46.95% retained).
+  Sites failing this threshold were removed from the cohort feature space.
+2026-03-11 20:17:07,408 - INFO - Starting NetworkParser pipeline
+2026-03-11 20:17:07,409 - INFO - Genomic input:    /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/AFRO_TB_ANNOTATION_VCF
+2026-03-11 20:17:07,409 - INFO - Metadata:         /Users/nmfuphicsir.co.za/Documents/data/AFRO_TB/AFRO_dataset_meta.csv
+2026-03-11 20:17:07,409 - INFO - Label column:     Lineage
+2026-03-11 20:17:07,409 - INFO - Output directory: /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/LineageBalanced
+2026-03-11 20:17:07,409 - INFO - Pipeline mode:    matrix_only
+2026-03-11 20:17:07,409 - INFO - Reference:        /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/VCF_2_Matrix/ref/H37Rv.gbk
+2026-03-11 20:17:07,409 - INFO - Initializing NetworkParser with config: {'include_intermediate_files': True, 'generic_name': 'matrix', 'qual_threshold': 30.0, 'min_dp_per_sample': 10, 'min_gq_per_sample': 20, 'mq_threshold': 40.0, 'mq0f_threshold': 0.1, 'biallelic_only': True, 'max_missing_fraction': 0.1, 'min_spacing_bp': 10, 'min_sample_presence': 10, 'ancestral_allele': 'Y', 'remove_invariant': True, 'min_minor_count': 10, 'matrices_min_count': 10, 'matrices_repeat_number': 5, 'matrices_type': 'all', 'matrices_fix': '', 'statistical_test': 'chi2', 'significance_level': 0.05, 'fdr_alpha': 0.05, 'fdr_threshold': 0.05, 'chi2_min_expected': 5, 'n_permutation_tests': 100, 'prefilter_alpha': 0.05, 'min_nonmissing_prefilter': 0.95, 'min_maf_prefilter': 0.005, 'max_prefiltered_features': 5000, 'multiple_testing_method': 'fdr_bh', 'max_depth': None, 'max_branch_depth': 3, 'min_samples_split': 2, 'min_samples_leaf': 1, 'min_information_gain': 0.001, 'min_group_size': 2, 'epistasis_strength_threshold': 0.05, 'max_epistatic_interactions': 50, 'n_bootstrap': 10, 'bootstrap_sample_fraction': 0.8, 'n_bootstrap_samples': 10, 'bootstrap_samples_per_iter': 10, 'bootstrap_outer_iters': 1, 'min_bootstrap_support': 0.7, 'use_integer_variant_ids': False, 'n_jobs': 4, 'random_state': 42, 'memory_efficient': True, 'pipeline_mode': 'matrix_only', 'run_ml_protocol': False, 'ml_algorithm': 'auto', 'ml_min_sensitivity': 0.5, 'ml_max_sensitivity': 1.0, 'ml_step_sensitivity': 0.1, 'ml_empty_symbol': '', 'ml_remove_empty_field_threshold': 1.0}
+2026-03-11 20:17:07,409 - INFO - Initialized StatisticalValidatorBranch.
+2026-03-11 20:17:07,409 - INFO - Stage 1: Loading genomic matrix
+2026-03-11 20:17:07,409 - INFO - DataLoader: input=/Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/AFRO_TB_ANNOTATION_VCF
+2026-03-11 20:17:07,410 - INFO - DataLoader: mode=vcf_directory
+2026-03-11 20:17:07,513 - INFO - DataLoader: discovered 13734 VCF(s) in /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/AFRO_TB_ANNOTATION_VCF (biallelic_only=True)
+2026-03-11 20:17:07,513 - INFO - DataLoader: per-sample parsing plan
+  Each VCF will be scanned record-by-record using iter_sample_calls().
+  Retained calls: SNP-like, biallelic (if enabled), passing QC thresholds.
+  Per-sample output: an in-memory dict mapping site→(REF, CALLED) for retained sites.
+2026-03-11 20:17:07,513 - INFO - DataLoader: record-level QC thresholds (applied during parsing)
+  QUAL>=30.0 | INFO/DP>=10 | INFO/MQ>=40.0 | INFO/MQ0F<=0.100
+2026-03-11 20:17:07,513 - INFO - DataLoader: cohort + matrix settings (applied after parsing)
+  min_sample_presence=10 | baseline=REF | min_minor_count=10
+2026-03-11 20:17:07,513 - INFO - DataLoader: starting parallel per-sample parsing (n_jobs=4)
+2026-03-11 20:18:51,447 - INFO - DataLoader: parsing complete
+  samples=13734
+  total_called_sites=16361007
+  mean_calls_per_sample=1191.28
+  storage=results list of (sample_id, calls_dict) in memory
+2026-03-11 20:18:51,450 - INFO - DataLoader: cohort merge starting
+  The per-sample call dictionaries will now be aggregated into:
+    (1) per_sample_calls[sample] → calls_dict
+    (2) site_counts[site] → carrier_count for allele-specific events
+  Alternate alleles at the same genomic position will be retained as separate features.
+2026-03-11 20:19:02,548 - INFO - DataLoader: cohort merge complete
+  per_sample_calls now holds 13734 per-genome call maps.
+  site_counts now defines the cohort-wide polymorphic site universe (pre-filter).
+2026-03-11 20:19:02,550 - INFO - DataLoader: cohort variant landscape (pre-filter)
+  The cohort comprises 13734 genomes.
+  A total of 445673 unique allele-specific polymorphic features were observed.
+  These correspond to 16361007 total mutation occurrences across genomes.
+  Alternate alleles at the same genomic position were retained as separate features.
+2026-03-11 20:19:02,551 - INFO - DataLoader: cohort artifacts
+  Output will be written to: /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/LineageBalanced
+  Writing occurs after presence filtering and encoding (matrices + FASTA + annotation tables).
+2026-03-11 20:19:02,618 - INFO - DataLoader: cohort presence filtering
+  A minimum of 10 genomes per site was required.
+  41301 of 445673 polymorphic sites were retained (9.27% retained).
+  Sites failing this threshold were removed from the cohort feature space.
+2026-03-11 20:31:57,740 - INFO - DataLoader: baseline encoding
+  The reference allele was used as the baseline.
+  Encoding definition: 0 indicates the reference allele; 1 indicates a non-reference allele.
+  A total of 41301 polymorphic sites were encoded.
+2026-03-11 20:37:30,156 - INFO - DataLoader: raw binary matrix (post-encoding, pre-preprocessing)
+  The matrix contains 13734 genomes (rows) and 41301 polymorphic sites (columns).
+  This corresponds to 567227934 total genotype entries.
+  A total of 14843178 entries are encoded as 1 (non-baseline alleles).
+  Matrix density (fraction of 1s) = 0.026168.
+  Mean carrier count per site = 359.39 genomes.
+  Mean variant burden per genome = 1080.76 sites.
+2026-03-11 20:37:34,499 - INFO - DataLoader: variant frequency summary (carriers per feature)
+  singleton_sites=0 (carriers==1)
+  doubleton_sites=0 (carriers==2)
+2026-03-11 20:39:13,729 - INFO - DataLoader: matrix preprocessing (post-encoding)
+  The preprocessing stage applied invariant-site removal and minor allele count filtering.
+  Invariant removal enabled: True.
+  Rationale: remove markers with no variation across samples
+  Purpose: eliminate non-informative genomic features before downstream analysis
+  Minimum minor allele count threshold: 10.
+  Rationale: remove markers where minority state appears
+  Purpose: avoids instability from extremely rare variants in small cohorts
+  The matrix contained 41301 features prior to preprocessing.
+  0 invariant features were removed.
+  0 features were removed due to insufficient minor allele count.
+  41301 features remain after preprocessing.
+2026-03-11 20:39:13,732 - INFO - DataLoader: wrote config snapshot /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/LineageBalanced/dataloader_config.snapshot.json
+2026-03-11 20:39:13,733 - INFO - DataLoader: writing artifacts
+output_dir=/Users/nmfuphicsir.co.za/Documents/pHDProject/Results/LineageBalanced
+
+2026-03-11 20:39:13,818 - INFO - Artifacts: start (out=/Users/nmfuphicsir.co.za/Documents/pHDProject/Results/LineageBalanced)
+2026-03-11 20:39:13,818 - INFO - Artifacts: inputs kept_sites=41301 | ordered_keys=41301 | samples=13734 | ref_path=/Users/nmfuphicsir.co.za/Documents/pHDProject/Code/VCF_2_Matrix/ref/H37Rv.gbk
+2026-03-11 20:45:43,249 - INFO - Artifacts: all_snp.txt done (192.60s) rows=41301 cols=9
+2026-03-11 20:45:43,258 - INFO - Artifacts: wrote /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/LineageBalanced/vcf_counts/all_snp.txt (5.7 MB)
+2026-03-11 20:45:44,852 - INFO - Artifacts: fasta write done (1.59s) sequences=13735 (includes REF) | length=41301
+2026-03-11 20:45:44,853 - INFO - Artifacts: wrote /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/LineageBalanced/fasta/matrix_alleles.fasta (541.3 MB)
+2026-03-11 20:45:44,853 - INFO - Artifacts: wrote /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/LineageBalanced/fasta/matrix_binary.fasta (541.3 MB)
+2026-03-11 20:45:59,204 - INFO - Artifacts: filtered.tsv done (14.35s) kept_positions=41119 context_ref=yes
+2026-03-11 20:45:59,205 - INFO - Artifacts: wrote /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/LineageBalanced/fasta/matrix_filtered.tsv (8.9 MB)
+2026-03-11 20:45:59,205 - INFO - Artifacts: matrices/* start (this is often the slow step)
+2026-03-11 20:45:59,205 - INFO - Matrices/*: start (base=matrix)
+2026-03-11 20:45:59,205 - INFO - Matrices stage: feature refinement prior to downstream modeling
+Purpose: structural filtering + redundancy control
+
+2026-03-11 20:45:59,205 - INFO - Matrices configuration:
+min_minor_count=10
+annotation_type_filter=all
+repeat_number=5
+forced_positions=''
+2026-03-11 20:45:59,205 - INFO - Matrices/*: inputs alleles_fasta=/Users/nmfuphicsir.co.za/Documents/pHDProject/Results/LineageBalanced/fasta/matrix_alleles.fasta | binary_fasta=/Users/nmfuphicsir.co.za/Documents/pHDProject/Results/LineageBalanced/fasta/matrix_binary.fasta | annotation_tsv=/Users/nmfuphicsir.co.za/Documents/pHDProject/Results/LineageBalanced/fasta/matrix_filtered.tsv
+2026-03-11 20:45:59,205 - INFO - Matrices/*: output_dir=/Users/nmfuphicsir.co.za/Documents/pHDProject/Results/LineageBalanced/matrices
+2026-03-11 20:46:27,356 - INFO - Matrices/*: parsed inputs genomes=13735 | markers=41301
+2026-03-11 20:46:27,357 - INFO - Matrices/*: annotation rows match markers (rows=41301)
+2026-03-11 20:46:27,357 - INFO - Matrices/*: params min_count=10 | type=all | repeat_number=5 | fix=''
+2026-03-11 21:07:51,063 - INFO - Applying minor-count filter:
+  Skipped for matrices/* outputs
+  Rationale: minor-count filtering was already applied during main matrix preprocessing
+2026-03-11 21:07:51,067 - INFO - Minor-count filter result: kept=41301/41301 (removed=0)
+2026-03-11 21:07:51,068 - INFO - Type filter skipped (either type='all' or annotation mismatch).
+2026-03-11 21:07:51,068 - INFO - Type filter result: kept=41301/41301
+2026-03-11 21:07:51,090 - INFO - Matrices/*: combined (minor AND type) kept=41301/41301
+2026-03-11 21:08:08,437 - INFO - Applying redundancy reduction (pattern grouping):
+  unique_binary_patterns=17275
+  repeat_number=5
+  Purpose: collapse perfectly collinear markers
+           (markers sharing identical cohort-level signals)
+2026-03-11 21:09:21,770 - INFO - Redundancy reduction result:
+  retained=22951/41301
+  removed_duplicate_representations=18350
+2026-03-11 21:09:21,777 - INFO - Final marker count after all filters:
+  22951/41301 retained
+2026-03-11 21:19:00,124 - INFO - Matrices/*: wrote outputs: /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/LineageBalanced/matrices/matrix_alleles.tsv | /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/LineageBalanced/matrices/matrix_binary.tsv | /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/LineageBalanced/matrices/matrix_alleles.fasta | /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/LineageBalanced/matrices/matrix_binary.fasta | /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/LineageBalanced/matrices/matrix_filtered.tsv
+2026-03-11 21:19:00,130 - INFO - Matrices/*: done
+2026-03-11 21:19:32,300 - INFO - Artifacts: matrices/* done (1243.83s)
+2026-03-11 21:19:32,307 - INFO - Artifacts: done (total 1452.39s)
+2026-03-11 21:19:48,847 - INFO - Loaded genomic matrix with shape: (13734, 41301)
+2026-03-11 21:19:48,848 - INFO - Loading metadata
+2026-03-11 21:19:49,078 - INFO - Loaded metadata with shape: (13753, 3)
+2026-03-11 21:19:49,098 - INFO - Label normalization: original_n=13753 | final_n=13737 | missing_removed=16 | unique_before=11 | unique_after=8
+2026-03-11 21:19:49,098 - WARNING - Label normalization removed 16 sample label(s) due to missing/invalid phenotype values.
+2026-03-11 21:19:54,707 - INFO - Sample alignment: genomic=13734 | meta=13753 | labels_after_norm=13737 | overlap=13718
+2026-03-11 21:20:01,157 - INFO - Pipeline mode resolved: matrix_only
+2026-03-11 21:20:01,158 - INFO - Pipeline stop point reached: matrix creation / alignment only
+2026-03-11 21:20:01,163 - INFO - Wrote JSON: /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/LineageBalanced/networkparser_results_20260311_212001.json
+2026-03-11 21:20:01,171 - INFO - Saved final results: /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/LineageBalanced/networkparser_results_20260311_212001.json
+2026-03-11 21:20:01,604 - INFO - NetworkParser pipeline completed successfully in 1h 2m 54.19s
+2026-03-12 00:12:01,782 - INFO - Starting NetworkParser pipeline
+2026-03-12 00:12:01,783 - INFO - Genomic input:    /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/AFRO_TB_ANNOTATION_VCF
+2026-03-12 00:12:01,783 - INFO - Metadata:         /Users/nmfuphicsir.co.za/Documents/data/AFRO_TB/AFRO_dataset_meta.csv
+2026-03-12 00:12:01,783 - INFO - Label column:     Lineage
+2026-03-12 00:12:01,783 - INFO - Output directory: /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/10_threshold
+2026-03-12 00:12:01,783 - INFO - Pipeline mode:    both
+2026-03-12 00:12:01,783 - INFO - ML algorithm:     auto
+2026-03-12 00:12:01,783 - INFO - ML sensitivity:   min=0.500 max=1.000 step=0.100
+2026-03-12 00:12:01,783 - INFO - Reference:        /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/VCF_2_Matrix/ref/H37Rv.gbk
+2026-03-12 00:12:01,783 - INFO - Initializing NetworkParser with config: {'include_intermediate_files': True, 'generic_name': 'matrix', 'qual_threshold': 30.0, 'min_dp_per_sample': 10, 'min_gq_per_sample': 20, 'mq_threshold': 40.0, 'mq0f_threshold': 0.1, 'biallelic_only': True, 'max_missing_fraction': 0.1, 'min_spacing_bp': 10, 'min_sample_presence': 10, 'ancestral_allele': 'Y', 'remove_invariant': True, 'min_minor_count': 10, 'matrices_min_count': 10, 'matrices_repeat_number': 5, 'matrices_type': 'all', 'matrices_fix': '', 'statistical_test': 'chi2', 'significance_level': 0.05, 'fdr_alpha': 0.05, 'fdr_threshold': 0.05, 'chi2_min_expected': 5, 'n_permutation_tests': 100, 'prefilter_alpha': 0.05, 'min_nonmissing_prefilter': 0.95, 'min_maf_prefilter': 0.005, 'max_prefiltered_features': 5000, 'multiple_testing_method': 'fdr_bh', 'max_depth': None, 'max_branch_depth': 3, 'min_samples_split': 2, 'min_samples_leaf': 1, 'min_information_gain': 0.001, 'min_group_size': 2, 'epistasis_strength_threshold': 0.05, 'max_epistatic_interactions': 50, 'n_bootstrap': 10, 'bootstrap_sample_fraction': 0.8, 'n_bootstrap_samples': 10, 'bootstrap_samples_per_iter': 10, 'bootstrap_outer_iters': 1, 'min_bootstrap_support': 0.7, 'use_integer_variant_ids': False, 'n_jobs': 12, 'random_state': 42, 'memory_efficient': True, 'pipeline_mode': 'both', 'run_ml_protocol': False, 'ml_algorithm': 'auto', 'ml_min_sensitivity': 0.5, 'ml_max_sensitivity': 1.0, 'ml_step_sensitivity': 0.1, 'ml_empty_symbol': '', 'ml_remove_empty_field_threshold': 1.0}
+2026-03-12 00:12:01,784 - INFO - Initialized StatisticalValidatorBranch.
+2026-03-12 00:12:01,784 - INFO - Stage 1: Loading genomic matrix
+2026-03-12 00:12:01,784 - INFO - DataLoader: input=/Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/AFRO_TB_ANNOTATION_VCF
+2026-03-12 00:12:01,784 - INFO - DataLoader: mode=vcf_directory
+2026-03-12 00:12:01,942 - INFO - DataLoader: discovered 13734 VCF(s) in /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/AFRO_TB_ANNOTATION_VCF (biallelic_only=True)
+2026-03-12 00:12:01,942 - INFO - DataLoader: per-sample parsing plan
+  Each VCF will be scanned record-by-record using iter_sample_calls().
+  Retained calls: SNP-like, biallelic (if enabled), passing QC thresholds.
+  Per-sample output: an in-memory dict mapping site→(REF, CALLED) for retained sites.
+2026-03-12 00:12:01,942 - INFO - DataLoader: record-level QC thresholds (applied during parsing)
+  QUAL>=30.0 | INFO/DP>=10 | INFO/MQ>=40.0 | INFO/MQ0F<=0.100
+2026-03-12 00:12:01,942 - INFO - DataLoader: cohort + matrix settings (applied after parsing)
+  min_sample_presence=10 | baseline=REF | min_minor_count=10
+2026-03-12 00:12:01,942 - INFO - DataLoader: starting parallel per-sample parsing (n_jobs=12)
+2026-03-12 00:13:44,953 - INFO - DataLoader: parsing complete
+  samples=13734
+  total_called_sites=16361007
+  mean_calls_per_sample=1191.28
+  storage=results list of (sample_id, calls_dict) in memory
+2026-03-12 00:13:44,954 - INFO - DataLoader: cohort merge starting
+  The per-sample call dictionaries will now be aggregated into:
+    (1) per_sample_calls[sample] → calls_dict
+    (2) site_counts[site] → carrier_count for allele-specific events
+  Alternate alleles at the same genomic position will be retained as separate features.
+2026-03-12 00:13:53,976 - INFO - DataLoader: cohort merge complete
+  per_sample_calls now holds 13734 per-genome call maps.
+  site_counts now defines the cohort-wide polymorphic site universe (pre-filter).
+2026-03-12 00:13:53,976 - INFO - DataLoader: cohort variant landscape (pre-filter)
+  The cohort comprises 13734 genomes.
+  A total of 445673 unique allele-specific polymorphic features were observed.
+  These correspond to 16361007 total mutation occurrences across genomes.
+  Alternate alleles at the same genomic position were retained as separate features.
+2026-03-12 00:13:53,976 - INFO - DataLoader: cohort artifacts
+  Output will be written to: /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/10_threshold
+  Writing occurs after presence filtering and encoding (matrices + FASTA + annotation tables).
+2026-03-12 00:13:54,014 - INFO - DataLoader: cohort presence filtering
+  A minimum of 10 genomes per site was required.
+  41301 of 445673 polymorphic sites were retained (9.27% retained).
+  Sites failing this threshold were removed from the cohort feature space.
+2026-03-12 00:18:30,969 - INFO - DataLoader: baseline encoding
+  The reference allele was used as the baseline.
+  Encoding definition: 0 indicates the reference allele; 1 indicates a non-reference allele.
+  A total of 41301 polymorphic sites were encoded.
+2026-03-12 00:23:56,494 - INFO - DataLoader: raw binary matrix (post-encoding, pre-preprocessing)
+  The matrix contains 13734 genomes (rows) and 41301 polymorphic sites (columns).
+  This corresponds to 567227934 total genotype entries.
+  A total of 14843178 entries are encoded as 1 (non-baseline alleles).
+  Matrix density (fraction of 1s) = 0.026168.
+  Mean carrier count per site = 359.39 genomes.
+  Mean variant burden per genome = 1080.76 sites.
+2026-03-12 00:23:59,044 - INFO - DataLoader: variant frequency summary (carriers per feature)
+  singleton_sites=0 (carriers==1)
+  doubleton_sites=0 (carriers==2)
+2026-03-12 00:25:31,709 - INFO - DataLoader: matrix preprocessing (post-encoding)
+  The preprocessing stage applied invariant-site removal and minor allele count filtering.
+  Invariant removal enabled: True.
+  Rationale: remove markers with no variation across samples
+  Purpose: eliminate non-informative genomic features before downstream analysis
+  Minimum minor allele count threshold: 10.
+  Rationale: remove markers where minority state appears
+  Purpose: avoids instability from extremely rare variants in small cohorts
+  The matrix contained 41301 features prior to preprocessing.
+  0 invariant features were removed.
+  0 features were removed due to insufficient minor allele count.
+  41301 features remain after preprocessing.
+2026-03-12 00:25:31,713 - INFO - DataLoader: wrote config snapshot /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/10_threshold/dataloader_config.snapshot.json
+2026-03-12 00:25:31,714 - INFO - DataLoader: writing artifacts
+output_dir=/Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/10_threshold
+
+2026-03-12 00:25:31,796 - INFO - Artifacts: start (out=/Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/10_threshold)
+2026-03-12 00:25:31,796 - INFO - Artifacts: inputs kept_sites=41301 | ordered_keys=41301 | samples=13734 | ref_path=/Users/nmfuphicsir.co.za/Documents/pHDProject/Code/VCF_2_Matrix/ref/H37Rv.gbk
+2026-03-12 00:28:06,282 - INFO - Artifacts: all_snp.txt done (154.49s) rows=41301 cols=9
+2026-03-12 00:28:06,282 - INFO - Artifacts: wrote /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/10_threshold/vcf_counts/all_snp.txt (5.7 MB)
+2026-03-12 00:28:07,614 - INFO - Artifacts: fasta write done (1.33s) sequences=13735 (includes REF) | length=41301
+2026-03-12 00:28:07,615 - INFO - Artifacts: wrote /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/10_threshold/fasta/matrix_alleles.fasta (541.3 MB)
+2026-03-12 00:28:07,615 - INFO - Artifacts: wrote /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/10_threshold/fasta/matrix_binary.fasta (541.3 MB)
+2026-03-12 00:28:22,146 - INFO - Artifacts: filtered.tsv done (14.53s) kept_positions=41119 context_ref=yes
+2026-03-12 00:28:22,147 - INFO - Artifacts: wrote /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/10_threshold/fasta/matrix_filtered.tsv (8.9 MB)
+2026-03-12 00:28:22,147 - INFO - Artifacts: matrices/* start (this is often the slow step)
+2026-03-12 00:28:22,147 - INFO - Matrices/*: start (base=matrix)
+2026-03-12 00:28:22,147 - INFO - Matrices stage: feature refinement prior to downstream modeling
+Purpose: structural filtering + redundancy control
+
+2026-03-12 00:28:22,147 - INFO - Matrices configuration:
+min_minor_count=10
+annotation_type_filter=all
+repeat_number=5
+forced_positions=''
+2026-03-12 00:28:22,147 - INFO - Matrices/*: inputs alleles_fasta=/Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/10_threshold/fasta/matrix_alleles.fasta | binary_fasta=/Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/10_threshold/fasta/matrix_binary.fasta | annotation_tsv=/Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/10_threshold/fasta/matrix_filtered.tsv
+2026-03-12 00:28:22,147 - INFO - Matrices/*: output_dir=/Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/10_threshold/matrices
+2026-03-12 00:29:29,225 - INFO - Matrices/*: parsed inputs genomes=13735 | markers=41301
+2026-03-12 00:29:29,226 - INFO - Matrices/*: annotation rows match markers (rows=41301)
+2026-03-12 00:29:29,226 - INFO - Matrices/*: params min_count=10 | type=all | repeat_number=5 | fix=''
+2026-03-12 00:39:34,725 - INFO - Applying minor-count filter:
+  Skipped for matrices/* outputs
+  Rationale: minor-count filtering was already applied during main matrix preprocessing
+2026-03-12 00:39:34,746 - INFO - Minor-count filter result: kept=41301/41301 (removed=0)
+2026-03-12 00:39:34,750 - INFO - Type filter skipped (either type='all' or annotation mismatch).
+2026-03-12 00:39:34,750 - INFO - Type filter result: kept=41301/41301
+2026-03-12 00:39:34,780 - INFO - Matrices/*: combined (minor AND type) kept=41301/41301
+2026-03-12 00:39:50,436 - INFO - Applying redundancy reduction (pattern grouping):
+  unique_binary_patterns=17275
+  repeat_number=5
+  Purpose: collapse perfectly collinear markers
+           (markers sharing identical cohort-level signals)
+2026-03-12 00:40:05,859 - INFO - Redundancy reduction result:
+  retained=22951/41301
+  removed_duplicate_representations=18350
+2026-03-12 00:40:05,873 - INFO - Final marker count after all filters:
+  22951/41301 retained
+2026-03-12 06:33:25,165 - INFO - Matrices/*: wrote outputs: /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/10_threshold/matrices/matrix_alleles.tsv | /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/10_threshold/matrices/matrix_binary.tsv | /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/10_threshold/matrices/matrix_alleles.fasta | /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/10_threshold/matrices/matrix_binary.fasta | /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/10_threshold/matrices/matrix_filtered.tsv
+2026-03-12 06:33:25,173 - INFO - Matrices/*: done
+2026-03-12 06:34:56,045 - INFO - Artifacts: matrices/* done (1458.05s)
+2026-03-12 06:34:56,065 - INFO - Artifacts: done (total 1628.42s)
+2026-03-12 06:35:15,233 - INFO - Loaded genomic matrix with shape: (13734, 41301)
+2026-03-12 06:35:15,233 - INFO - Loading metadata
+2026-03-12 06:35:15,489 - INFO - Loaded metadata with shape: (13753, 3)
+2026-03-12 06:35:15,514 - INFO - Label normalization: original_n=13753 | final_n=13737 | missing_removed=16 | unique_before=11 | unique_after=8
+2026-03-12 06:35:15,514 - WARNING - Label normalization removed 16 sample label(s) due to missing/invalid phenotype values.
+2026-03-12 06:35:21,599 - INFO - Sample alignment: genomic=13734 | meta=13753 | labels_after_norm=13737 | overlap=13718
+2026-03-12 06:35:28,645 - INFO - Pipeline mode resolved: both
+2026-03-12 06:35:28,647 - INFO - Stage 3: Decision Tree Feature Discovery
+2026-03-12 06:35:28,686 - INFO - Input features: 41301 features → M.tuberculosis_H37Rv:11:A:C, M.tuberculosis_H37Rv:29:C:G, M.tuberculosis_H37Rv:45:G:A ... +41298 more
+2026-03-12 06:35:36,413 - INFO - Prefilter: skipped 27701 feature(s) in missing/MAF gating.
+2026-03-12 06:35:38,021 - INFO - Prefilter: reduced candidates to top 10000 by variance for tests.
+2026-03-12 06:36:38,269 - INFO - Prefilter: capped significant set to max_prefiltered_features=5000.
+2026-03-12 06:36:38,270 - INFO - Prefiltered features: 5000 features → M.tuberculosis_H37Rv:1993808:A:T, M.tuberculosis_H37Rv:4359165:G:C, M.tuberculosis_H37Rv:338453:A:G ... +4997 more
+2026-03-12 06:36:38,926 - INFO - Labels encoded: n_classes=8
+2026-03-12 06:37:56,592 - INFO - Stage 5: ML protocol branch
+2026-03-12 06:38:14,192 - INFO - ML protocol alignment | genomic=13718 | labels=13718 | overlap=13718
+2026-04-09 09:58:28,854 - INFO - Starting NetworkParser pipeline
+2026-04-09 09:58:28,854 - INFO - Genomic input:    /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/AFRO_TB_ANNOTATION_VCF
+2026-04-09 09:58:28,855 - INFO - Metadata:         /Users/nmfuphicsir.co.za/Documents/data/AFRO_TB/AFRO_dataset_meta.csv
+2026-04-09 09:58:28,855 - INFO - Label column:     Lineage
+2026-04-09 09:58:28,855 - INFO - Output directory: /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/10_threshold
+2026-04-09 09:58:28,855 - INFO - Pipeline mode:    both
+2026-04-09 09:58:28,855 - INFO - ML algorithm:     auto
+2026-04-09 09:58:28,855 - INFO - ML sensitivity:   min=0.500 max=1.000 step=0.100
+2026-04-09 09:58:28,855 - INFO - Reference:        /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/VCF_2_Matrix/ref/H37Rv.gbk
+2026-04-09 09:58:28,855 - INFO - Initializing NetworkParser with config: {'include_intermediate_files': True, 'generic_name': 'matrix', 'qual_threshold': 30.0, 'min_dp_per_sample': 10, 'min_gq_per_sample': 20, 'mq_threshold': 40.0, 'mq0f_threshold': 0.1, 'biallelic_only': True, 'max_missing_fraction': 0.1, 'min_spacing_bp': 10, 'min_sample_presence': 10, 'ancestral_allele': 'Y', 'remove_invariant': True, 'min_minor_count': 10, 'matrices_min_count': 10, 'matrices_repeat_number': 5, 'matrices_type': 'all', 'matrices_fix': '', 'statistical_test': 'chi2', 'significance_level': 0.05, 'fdr_alpha': 0.05, 'fdr_threshold': 0.05, 'chi2_min_expected': 5, 'n_permutation_tests': 100, 'prefilter_alpha': 0.05, 'min_nonmissing_prefilter': 0.95, 'min_maf_prefilter': 0.005, 'max_prefiltered_features': 5000, 'multiple_testing_method': 'fdr_bh', 'max_depth': None, 'max_branch_depth': 3, 'min_samples_split': 2, 'min_samples_leaf': 1, 'min_information_gain': 0.001, 'min_group_size': 2, 'epistasis_strength_threshold': 0.05, 'max_epistatic_interactions': 50, 'n_bootstrap': 10, 'bootstrap_sample_fraction': 0.8, 'n_bootstrap_samples': 10, 'bootstrap_samples_per_iter': 10, 'bootstrap_outer_iters': 1, 'min_bootstrap_support': 0.7, 'use_integer_variant_ids': False, 'n_jobs': 12, 'random_state': 42, 'memory_efficient': True, 'pipeline_mode': 'both', 'run_ml_protocol': False, 'ml_algorithm': 'auto', 'ml_min_sensitivity': 0.5, 'ml_max_sensitivity': 1.0, 'ml_step_sensitivity': 0.1, 'ml_empty_symbol': '', 'ml_remove_empty_field_threshold': 1.0}
+2026-04-09 09:58:28,855 - INFO - Initialized StatisticalValidatorBranch.
+2026-04-09 09:58:28,856 - INFO - Stage 1: Loading genomic matrix
+2026-04-09 09:58:28,856 - INFO - DataLoader: input=/Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/AFRO_TB_ANNOTATION_VCF
+2026-04-09 09:58:28,856 - INFO - DataLoader: mode=vcf_directory
+2026-04-09 09:58:29,014 - INFO - DataLoader: discovered 13734 VCF(s) in /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/AFRO_TB_ANNOTATION_VCF (biallelic_only=True)
+2026-04-09 09:58:29,014 - INFO - DataLoader: per-sample parsing plan
+  Each VCF will be scanned record-by-record using iter_sample_calls().
+  Retained calls: SNP-like, biallelic (if enabled), passing QC thresholds.
+  Per-sample output: an in-memory dict mapping site→(REF, CALLED) for retained sites.
+2026-04-09 09:58:29,014 - INFO - DataLoader: record-level QC thresholds (applied during parsing)
+  QUAL>=30.0 | INFO/DP>=10 | INFO/MQ>=40.0 | INFO/MQ0F<=0.100
+2026-04-09 09:58:29,015 - INFO - DataLoader: cohort + matrix settings (applied after parsing)
+  min_sample_presence=10 | baseline=REF | min_minor_count=10
+2026-04-09 09:58:29,015 - INFO - DataLoader: starting parallel per-sample parsing (n_jobs=12)
+2026-04-09 10:00:30,837 - INFO - DataLoader: parsing complete
+  samples=13734
+  total_called_sites=16361007
+  mean_calls_per_sample=1191.28
+  storage=results list of (sample_id, calls_dict) in memory
+2026-04-09 10:00:30,838 - INFO - DataLoader: cohort merge starting
+  The per-sample call dictionaries will now be aggregated into:
+    (1) per_sample_calls[sample] → calls_dict
+    (2) site_counts[site] → carrier_count for allele-specific events
+  Alternate alleles at the same genomic position will be retained as separate features.
+2026-04-09 10:00:41,912 - INFO - DataLoader: cohort merge complete
+  per_sample_calls now holds 13734 per-genome call maps.
+  site_counts now defines the cohort-wide polymorphic site universe (pre-filter).
+2026-04-09 10:00:41,914 - INFO - DataLoader: cohort variant landscape (pre-filter)
+  The cohort comprises 13734 genomes.
+  A total of 445673 unique allele-specific polymorphic features were observed.
+  These correspond to 16361007 total mutation occurrences across genomes.
+  Alternate alleles at the same genomic position were retained as separate features.
+2026-04-09 10:00:41,915 - INFO - DataLoader: cohort artifacts
+  Output will be written to: /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/10_threshold
+  Writing occurs after presence filtering and encoding (matrices + FASTA + annotation tables).
+2026-04-09 10:00:41,991 - INFO - DataLoader: cohort presence filtering
+  A minimum of 10 genomes per site was required.
+  41301 of 445673 polymorphic sites were retained (9.27% retained).
+  Sites failing this threshold were removed from the cohort feature space.
+2026-04-09 10:05:33,508 - INFO - DataLoader: baseline encoding
+  The reference allele was used as the baseline.
+  Encoding definition: 0 indicates the reference allele; 1 indicates a non-reference allele.
+  A total of 41301 polymorphic sites were encoded.
+2026-04-09 10:11:20,639 - INFO - DataLoader: raw binary matrix (post-encoding, pre-preprocessing)
+  The matrix contains 13734 genomes (rows) and 41301 polymorphic sites (columns).
+  This corresponds to 567227934 total genotype entries.
+  A total of 14843178 entries are encoded as 1 (non-baseline alleles).
+  Matrix density (fraction of 1s) = 0.026168.
+  Mean carrier count per site = 359.39 genomes.
+  Mean variant burden per genome = 1080.76 sites.
+2026-04-09 10:11:23,259 - INFO - DataLoader: variant frequency summary (carriers per feature)
+  singleton_sites=0 (carriers==1)
+  doubleton_sites=0 (carriers==2)
+2026-04-09 10:12:52,766 - INFO - DataLoader: matrix preprocessing (post-encoding)
+  The preprocessing stage applied invariant-site removal and minor allele count filtering.
+  Invariant removal enabled: True.
+  Rationale: remove markers with no variation across samples
+  Purpose: eliminate non-informative genomic features before downstream analysis
+  Minimum minor allele count threshold: 10.
+  Rationale: remove markers where minority state appears
+  Purpose: avoids instability from extremely rare variants in small cohorts
+  The matrix contained 41301 features prior to preprocessing.
+  0 invariant features were removed.
+  0 features were removed due to insufficient minor allele count.
+  41301 features remain after preprocessing.
+2026-04-09 10:12:52,770 - INFO - DataLoader: wrote config snapshot /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/10_threshold/dataloader_config.snapshot.json
+2026-04-09 10:12:52,770 - INFO - DataLoader: writing artifacts
+output_dir=/Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/10_threshold
+
+2026-04-09 10:12:52,859 - INFO - Artifacts: start (out=/Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/10_threshold)
+2026-04-09 10:12:52,859 - INFO - Artifacts: inputs kept_sites=41301 | ordered_keys=41301 | samples=13734 | ref_path=/Users/nmfuphicsir.co.za/Documents/pHDProject/Code/VCF_2_Matrix/ref/H37Rv.gbk
+2026-04-09 10:15:32,083 - INFO - Artifacts: all_snp.txt done (159.22s) rows=41301 cols=9
+2026-04-09 10:15:32,085 - INFO - Artifacts: wrote /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/10_threshold/vcf_counts/all_snp.txt (5.7 MB)
+2026-04-09 10:15:33,633 - INFO - Artifacts: fasta write done (1.55s) sequences=13735 (includes REF) | length=41301
+2026-04-09 10:15:33,635 - INFO - Artifacts: wrote /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/10_threshold/fasta/matrix_alleles.fasta (541.3 MB)
+2026-04-09 10:15:33,635 - INFO - Artifacts: wrote /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/10_threshold/fasta/matrix_binary.fasta (541.3 MB)
+2026-04-09 10:15:47,127 - INFO - Artifacts: filtered.tsv done (13.49s) kept_positions=41119 context_ref=yes
+2026-04-09 10:15:47,128 - INFO - Artifacts: wrote /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/10_threshold/fasta/matrix_filtered.tsv (8.9 MB)
+2026-04-09 10:15:47,128 - INFO - Artifacts: matrices/* start (this is often the slow step)
+2026-04-09 10:15:47,128 - INFO - Matrices/*: start (base=matrix)
+2026-04-09 10:15:47,128 - INFO - Matrices stage: feature refinement prior to downstream modeling
+Purpose: structural filtering + redundancy control
+
+2026-04-09 10:15:47,128 - INFO - Matrices configuration:
+min_minor_count=10
+annotation_type_filter=all
+repeat_number=5
+forced_positions=''
+2026-04-09 10:15:47,128 - INFO - Matrices/*: inputs alleles_fasta=/Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/10_threshold/fasta/matrix_alleles.fasta | binary_fasta=/Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/10_threshold/fasta/matrix_binary.fasta | annotation_tsv=/Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/10_threshold/fasta/matrix_filtered.tsv
+2026-04-09 10:15:47,128 - INFO - Matrices/*: output_dir=/Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/10_threshold/matrices
+2026-04-09 10:16:47,181 - INFO - Matrices/*: parsed inputs genomes=13735 | markers=41301
+2026-04-09 10:16:47,182 - INFO - Matrices/*: annotation rows match markers (rows=41301)
+2026-04-09 10:16:47,183 - INFO - Matrices/*: params min_count=10 | type=all | repeat_number=5 | fix=''
+2026-04-09 10:25:45,660 - INFO - Applying minor-count filter:
+  Skipped for matrices/* outputs
+  Rationale: minor-count filtering was already applied during main matrix preprocessing
+2026-04-09 10:25:45,663 - INFO - Minor-count filter result: kept=41301/41301 (removed=0)
+2026-04-09 10:25:45,663 - INFO - Type filter skipped (either type='all' or annotation mismatch).
+2026-04-09 10:25:45,663 - INFO - Type filter result: kept=41301/41301
+2026-04-09 10:25:45,685 - INFO - Matrices/*: combined (minor AND type) kept=41301/41301
+2026-04-09 10:25:59,748 - INFO - Applying redundancy reduction (pattern grouping):
+  unique_binary_patterns=17275
+  repeat_number=5
+  Purpose: collapse perfectly collinear markers
+           (markers sharing identical cohort-level signals)
+2026-04-09 10:26:15,476 - INFO - Redundancy reduction result:
+  retained=22951/41301
+  removed_duplicate_representations=18350
+2026-04-09 10:26:15,481 - INFO - Final marker count after all filters:
+  22951/41301 retained
+2026-04-09 10:34:26,351 - INFO - Matrices/*: wrote outputs: /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/10_threshold/matrices/matrix_alleles.tsv | /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/10_threshold/matrices/matrix_binary.tsv | /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/10_threshold/matrices/matrix_alleles.fasta | /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/10_threshold/matrices/matrix_binary.fasta | /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/10_threshold/matrices/matrix_filtered.tsv
+2026-04-09 10:34:26,364 - INFO - Matrices/*: done
+2026-04-09 10:35:02,808 - INFO - Artifacts: matrices/* done (1155.66s)
+2026-04-09 10:35:02,816 - INFO - Artifacts: done (total 1329.94s)
+2026-04-09 10:42:04,448 - INFO - Loaded genomic matrix with shape: (13734, 41301)
+2026-04-09 10:42:04,449 - INFO - Loading metadata
+2026-04-09 10:42:04,663 - INFO - Loaded metadata with shape: (13753, 3)
+2026-04-09 10:42:04,686 - INFO - Label normalization: original_n=13753 | final_n=13737 | missing_removed=16 | unique_before=11 | unique_after=8
+2026-04-09 10:42:04,686 - WARNING - Label normalization removed 16 sample label(s) due to missing/invalid phenotype values.
+2026-04-09 10:42:11,386 - INFO - Sample alignment: genomic=13734 | meta=13753 | labels_after_norm=13737 | overlap=13718
+2026-04-09 10:42:16,841 - INFO - Pipeline mode resolved: both
+2026-04-09 10:42:16,842 - INFO - Stage 3: Decision Tree Feature Discovery
+2026-04-09 10:42:16,880 - INFO - Input features: 41301 features → M.tuberculosis_H37Rv:11:A:C, M.tuberculosis_H37Rv:29:C:G, M.tuberculosis_H37Rv:45:G:A ... +41298 more
+2026-04-09 10:42:25,404 - INFO - Prefilter: skipped 27701 feature(s) in missing/MAF gating.
+2026-04-09 10:42:28,281 - INFO - Prefilter: reduced candidates to top 10000 by variance for tests.
+2026-04-09 10:43:31,768 - INFO - Prefilter: capped significant set to max_prefiltered_features=5000.
+2026-04-09 10:43:31,770 - INFO - Prefiltered features: 5000 features → M.tuberculosis_H37Rv:1993808:A:T, M.tuberculosis_H37Rv:4359165:G:C, M.tuberculosis_H37Rv:338453:A:G ... +4997 more
+2026-04-09 10:43:32,611 - INFO - Labels encoded: n_classes=8
+2026-04-09 10:44:50,567 - INFO - Stage 5: ML protocol branch
+2026-04-09 10:45:08,387 - INFO - ML protocol alignment | genomic=13718 | labels=13718 | overlap=13718
