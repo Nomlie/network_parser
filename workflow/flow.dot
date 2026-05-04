@@ -1,217 +1,424 @@
-digraph DataLoader_Flow_AlignedToCode {
+digraph NetworkParser_TwoLevel {
   rankdir=TB;
-  splines=ortho;
-  bgcolor="white";
   labelloc="t";
-  fontsize=20;
-  fontname="Helvetica,Arial,sans-serif";
-  label="DataLoader (VCF dir) → Sample×Variant Binary Matrix\n(INFO/QC → cohort presence → baseline → encode → light preprocessing → optional artifacts)";
+  fontsize=22;
+  fontname="Helvetica";
 
-  node [shape=box, style="rounded,filled", fontname="Helvetica,Arial,sans-serif", fontsize=11, penwidth=1.2];
-  edge [fontname="Helvetica,Arial,sans-serif", fontsize=10, penwidth=1.1, arrowsize=0.9];
+  label=<
+    <B>NetworkParser — Two-Level Workflow</B><BR/>
+    Training/discovery pipeline for strain placement and resistance profile prediction
+  >;
 
-  // ───────────────────────────────────────────────
-  // INPUT + DISCOVERY
-  // ───────────────────────────────────────────────
-  subgraph cluster_input {
-    label="Input Discovery";
-    color="#CFE8FF";
-    style="rounded";
+  graph [
+    splines=ortho,
+    nodesep=0.45,
+    ranksep=0.70,
+    pad=0.25,
+    bgcolor="white"
+  ];
 
-    Start [label="Start\n(directory of per-sample VCFs)", fillcolor="#D7F7D7"];
-    FindVCFs [label="Scan directory\ncollect *.vcf / *.vcf.gz", fillcolor="#E7F2FF"];
-    NoVCFs [label="Error\nno VCFs found", fillcolor="#F5D0D0"];
+  node [
+    shape=box,
+    style="rounded,filled",
+    fontname="Helvetica",
+    fontsize=10,
+    color="#4F6D8A",
+    penwidth=1.1,
+    fillcolor="#EEF5FF"
+  ];
 
-    Start -> FindVCFs;
-    FindVCFs -> NoVCFs [label="none", style=dashed, color="gray50"];
+  edge [
+    fontname="Helvetica",
+    fontsize=9,
+    color="#444444",
+    penwidth=1.0,
+    arrowsize=0.8
+  ];
+
+  // ============================================================
+  // STAGE 0 — ENTRY / CONFIG / ORCHESTRATION
+  // ============================================================
+  subgraph cluster_orch {
+    label="Stage 0 — Entry, configuration, and orchestration";
+    style="rounded,filled";
+    color="#D6E4F0";
+    fillcolor="#F8FBFF";
+    fontsize=14;
+
+    cli [label=<
+      <B>cli.py</B><BR ALIGN="LEFT"/>
+      Command-line entry point<BR ALIGN="LEFT"/>
+      • genomic input<BR ALIGN="LEFT"/>
+      • metadata<BR ALIGN="LEFT"/>
+      • Level 1 label column<BR ALIGN="LEFT"/>
+      • Level 2 label column<BR ALIGN="LEFT"/>
+      • output directory<BR ALIGN="LEFT"/>
+      • pipeline mode / config
+    >];
+
+    config [label=<
+      <B>config.py</B><BR ALIGN="LEFT"/>
+      Central settings<BR ALIGN="LEFT"/>
+      • preprocessing / artifact controls<BR ALIGN="LEFT"/>
+      • RF-FDR parameters<BR ALIGN="LEFT"/>
+      • ML protocol settings<BR ALIGN="LEFT"/>
+      • decision-tree settings<BR ALIGN="LEFT"/>
+      • bootstrap / confidence settings<BR ALIGN="LEFT"/>
+      • two-level protocol settings
+    >];
+
+    orchestrator [label=<
+      <B>network_parser.py</B><BR ALIGN="LEFT"/>
+      Main orchestrator<BR ALIGN="LEFT"/>
+      • receives CLI + config<BR ALIGN="LEFT"/>
+      • runs data loading<BR ALIGN="LEFT"/>
+      • routes into two-level protocol<BR ALIGN="LEFT"/>
+      • collects final outputs
+    > fillcolor="#E2F0FF"];
+
+    cli -> orchestrator;
+    config -> orchestrator;
   }
 
-  // ───────────────────────────────────────────────
-  // PARALLEL PER-SAMPLE PARSE (iter_sample_calls)
-  // ───────────────────────────────────────────────
-  subgraph cluster_parse {
-    label="Parallel per-sample parsing (iter_sample_calls)";
-    color="#FFE6B3";
-    style="rounded";
+  // ============================================================
+  // STAGE 1 — DATA LOADING / ALIGNMENT
+  // ============================================================
+  subgraph cluster_data {
+    label="Stage 1 — Data loading and preprocessing";
+    style="rounded,filled";
+    color="#D6E4F0";
+    fillcolor="#F8FBFF";
+    fontsize=14;
 
-    Parallel [label="Parallel parse VCFs\n(joblib Parallel; n_jobs)", shape=ellipse, fillcolor="#FFD48A"];
-    PerVCF [label="For each sample VCF\nopen_any() + iterate records", fillcolor="#FFF1C9"];
+    genomic_input [label=<
+      <B>Genomic input</B><BR ALIGN="LEFT"/>
+      • VCFs / VCF directory<BR ALIGN="LEFT"/>
+      • or existing genomic matrix
+    > shape=parallelogram fillcolor="#FFF8DC"];
 
-    IsHeader [label="Skip header lines\n(#...)", shape=diamond, fillcolor="#FFF7DB"];
-    IsSNP [label="is_snp_like?\n(single-base REF & ALT;\noptionally biallelic-only)", shape=diamond, fillcolor="#FFF7DB"];
-    ParseINFO [label="parse_info_field(INFO)\n→ dict", fillcolor="#FFF1C9"];
-    InfoQC [label="passes_info_qc?\nQUAL + INFO(DP,MQ,MQ0F)\n(thresholds from config)", shape=diamond, fillcolor="#FFF7DB"];
-    ChooseAllele [label="choose_called_allele()\nGT-aware when FORMAT present\nelse presence-based ALT", fillcolor="#FFF1C9"];
-    StoreCall [label="Store per-sample call\n(chrom,pos) → (ref, called)", fillcolor="#FFF1C9"];
+    metadata_input [label=<
+      <B>Metadata input</B><BR ALIGN="LEFT"/>
+      sample IDs + supervised labels<BR ALIGN="LEFT"/>
+      • Level 1 label = strain / lineage / group<BR ALIGN="LEFT"/>
+      • Level 2 label = AMR phenotype
+    > shape=parallelogram fillcolor="#FFF8DC"];
 
-    Discard [label="Discard record", fillcolor="#E9E9E9", fontcolor="gray35"];
+    data_loader [label=<
+      <B>data_loader.py</B><BR ALIGN="LEFT"/>
+      Build / load sample × genomic-feature matrix<BR ALIGN="LEFT"/>
+      • parse VCF or matrix<BR ALIGN="LEFT"/>
+      • remove invariant features<BR ALIGN="LEFT"/>
+      • handle missing values<BR ALIGN="LEFT"/>
+      • apply artifact / low-count controls
+    >];
 
-    FindVCFs -> Parallel;
-    Parallel -> PerVCF [label="for each VCF"];
-    PerVCF -> IsHeader;
-    IsHeader -> Discard [label="yes", style=dashed, color="gray50"];
-    IsHeader -> IsSNP [label="no"];
-    IsSNP -> Discard [label="no", style=dashed, color="gray50"];
-    IsSNP -> ParseINFO [label="yes"];
-    ParseINFO -> InfoQC;
-    InfoQC -> Discard [label="no", style=dashed, color="gray50"];
-    InfoQC -> ChooseAllele [label="yes"];
-    ChooseAllele -> StoreCall;
+    aligned_matrix [label=<
+      <B>Aligned supervised matrix</B><BR ALIGN="LEFT"/>
+      Output:<BR ALIGN="LEFT"/>
+      • X = sample × genomic-feature matrix<BR ALIGN="LEFT"/>
+      • metadata aligned by sample ID
+    > fillcolor="#DDF5DD"];
+
+    genomic_input -> data_loader;
+    metadata_input -> data_loader;
+    data_loader -> aligned_matrix;
   }
 
-  // ───────────────────────────────────────────────
-  // MERGE ACROSS SAMPLES + COHORT FILTER
-  // ───────────────────────────────────────────────
-  subgraph cluster_merge {
-    label="Cohort merge + presence filtering";
-    color="#D9F0FF";
-    style="rounded";
+  // ============================================================
+  // STAGE 2 — TWO-LEVEL CONTROLLER
+  // ============================================================
+  subgraph cluster_twolevel {
+    label="Stage 2 — Two-level protocol controller";
+    style="rounded,filled";
+    color="#D9EAD3";
+    fillcolor="#FAFFFA";
+    fontsize=14;
 
-    Gather [label="Collect results\nper_sample_calls[sample] = calls", fillcolor="#E7F2FF"];
-
-    CountCarriers [label="Build site_counts\ncount carriers where called ≠ ref\n+ track ref & ALT", fillcolor="#E7F2FF"];
-    BiallelicCons [label="biallelic_only?\nALT must be consistent across samples\n(other ALT discarded)", shape=diamond, fillcolor="#F2FAFF"];
-
-    Presence [label="Filter sites:\ncount ≥ min_sample_presence", shape=diamond, fillcolor="#F2FAFF"];
-    NoSites [label="Error\nno sites remain\n(after QC + presence)", fillcolor="#F5D0D0"];
-
-    SortSites [label="Sort retained sites\nby (chrom, pos)", fillcolor="#E7F2FF"];
-
-    StoreCall -> Gather [label="all samples done"];
-    Gather -> CountCarriers;
-    CountCarriers -> BiallelicCons;
-    BiallelicCons -> CountCarriers [label="continue", style=dashed, color="gray50"];
-    BiallelicCons -> Presence [label="done"];
-    Presence -> NoSites [label="none", style=dashed, color="gray50"];
-    Presence -> SortSites [label="kept"];
+    two_level_controller [label=<
+      <B>two_level_protocol.py</B><BR ALIGN="LEFT"/>
+      Coordinates the two biological tasks<BR ALIGN="LEFT"/>
+      • Level 1: strain/sample placement<BR ALIGN="LEFT"/>
+      • Level 2: resistance profile prediction
+    > fillcolor="#E9FFF2"];
   }
 
-  // ───────────────────────────────────────────────
-  // BUILD ALLELE STRINGS + BASELINE
-  // ───────────────────────────────────────────────
-  subgraph cluster_baseline {
-    label="Allele matrix + baseline selection";
-    color="#E6FFE6";
-    style="rounded";
+  orchestrator -> data_loader;
+  aligned_matrix -> two_level_controller;
 
-    RefLine [label="ref_line = join REF bases\n(ordered sites)", fillcolor="#D7F7D7"];
-    SampleAlleles [label="For each sample:\nallele_string[j] = called if in {REF,ALT}\nelse fallback REF\n(+ per-position Counter)", fillcolor="#D7F7D7"];
+  // ============================================================
+  // LEVEL 1
+  // ============================================================
+  subgraph cluster_level1 {
+    label="Level 1 — Strain / sample identification";
+    style="rounded,filled";
+    color="#CFE2F3";
+    fillcolor="#F8FCFF";
+    fontsize=14;
 
-    BaselineChoice [label="ancestral_allele?", shape=diamond, fillcolor="#ECFFEC"];
-    BaselineREF [label="Baseline = REF (ref_line)\n(ancestral_allele='Y')", fillcolor="#D7F7D7"];
-    BaselineMODE [label="Baseline = cohort mode base\nper position\n(ancestral_allele!='Y')", fillcolor="#D7F7D7"];
+    lvl1_label [label=<
+      <B>Level 1 supervised target</B><BR ALIGN="LEFT"/>
+      strain / lineage / clade / cluster / group label
+    > shape=parallelogram fillcolor="#FFF8DC"];
 
-    SortSites -> RefLine;
-    RefLine -> SampleAlleles;
-    SampleAlleles -> BaselineChoice;
-    BaselineChoice -> BaselineREF [label="Y"];
-    BaselineChoice -> BaselineMODE [label="mode"];
+    lvl1_rf [label=<
+      <B>statistical_validation_branch.py</B><BR ALIGN="LEFT"/>
+      <B>RF-FDR for Level 1</B><BR ALIGN="LEFT"/>
+      Input:<BR ALIGN="LEFT"/>
+      • aligned X<BR ALIGN="LEFT"/>
+      • Level 1 labels<BR ALIGN="LEFT"/>
+      Steps:<BR ALIGN="LEFT"/>
+      • Random Forest feature scoring<BR ALIGN="LEFT"/>
+      • empirical permutation p-values<BR ALIGN="LEFT"/>
+      • FDR-BH correction<BR ALIGN="LEFT"/>
+      Output:<BR ALIGN="LEFT"/>
+      • Level 1 filtered matrix<BR ALIGN="LEFT"/>
+      • ranked placement markers
+    > fillcolor="#E7F2FF"];
+
+    lvl1_selector [label=<
+      <B>model_selector.py</B><BR ALIGN="LEFT"/>
+      Assess Level 1 matrix / label structure<BR ALIGN="LEFT"/>
+      and recommend suitable model family
+    >];
+
+    lvl1_ml [label=<
+      <B>ml_protocol.py</B><BR ALIGN="LEFT"/>
+      <B>Level 1 ML protocol</B><BR ALIGN="LEFT"/>
+      Train strain-placement model<BR ALIGN="LEFT"/>
+      • training / evaluation<BR ALIGN="LEFT"/>
+      • metrics / predictions
+    >];
+
+    lvl1_backend [label=<
+      <B>neural_network.py</B><BR ALIGN="LEFT"/>
+      Backend learners / model wrappers<BR ALIGN="LEFT"/>
+      used by the ML protocol
+    >];
+
+    lvl1_dt_gate [label=<
+      <B>Run Level 1 decision tree?</B>
+    > shape=diamond fillcolor="#FFF2CC"];
+
+    lvl1_dt [label=<
+      <B>decision_tree_branch.py</B><BR ALIGN="LEFT"/>
+      <B>Level 1 decision tree</B><BR ALIGN="LEFT"/>
+      Interpret strain-placement rules<BR ALIGN="LEFT"/>
+      • root/branch features<BR ALIGN="LEFT"/>
+      • rule extraction<BR ALIGN="LEFT"/>
+      • path-based interactions
+    > fillcolor="#E7F2FF"];
+
+    lvl1_conf [label=<
+      <B>Level 1 post-tree confidence</B><BR ALIGN="LEFT"/>
+      Happens after tree construction<BR ALIGN="LEFT"/>
+      • bootstrap stability<BR ALIGN="LEFT"/>
+      • mutual information<BR ALIGN="LEFT"/>
+      • feature confidence scores
+    > fillcolor="#E7F2FF"];
+
+    lvl1_output [label=<
+      <B>Level 1 outputs</B><BR ALIGN="LEFT"/>
+      • trained Level 1 model<BR ALIGN="LEFT"/>
+      • predicted strain/group<BR ALIGN="LEFT"/>
+      • selected placement markers<BR ALIGN="LEFT"/>
+      • optional DT explanations
+    > fillcolor="#DDF5DD"];
+
+    lvl1_label -> lvl1_rf;
+    lvl1_rf -> lvl1_selector;
+    lvl1_selector -> lvl1_ml;
+    lvl1_ml -> lvl1_backend;
+    lvl1_backend -> lvl1_dt_gate;
+    lvl1_dt_gate -> lvl1_dt [label="yes"];
+    lvl1_dt_gate -> lvl1_output [label="no"];
+    lvl1_dt -> lvl1_conf;
+    lvl1_conf -> lvl1_output;
   }
 
-  // ───────────────────────────────────────────────
-  // BINARY ENCODING + DATAFRAME
-  // ───────────────────────────────────────────────
-  subgraph cluster_encode {
-    label="Binary encoding + DataFrame";
-    color="#CFF7F7";
-    style="rounded";
+  two_level_controller -> lvl1_label;
 
-    Encode [label="Binary encode per site:\n0 = matches baseline\n1 = differs", fillcolor="#CFF7F7"];
-    VariantIDs [label="Variant IDs:\nCHROM:POS:REF:ALT", fillcolor="#CFF7F7"];
-    BuildDF [label="Build DataFrame\nrows=samples, cols=variant IDs\nvalues ∈ {0,1}", fillcolor="#CFF7F7"];
+  // ============================================================
+  // LEVEL 2
+  // ============================================================
+  subgraph cluster_level2 {
+    label="Level 2 — Resistance profile prediction";
+    style="rounded,filled";
+    color="#F4CCCC";
+    fillcolor="#FFF9F9";
+    fontsize=14;
 
-    BaselineREF -> Encode;
-    BaselineMODE -> Encode;
-    Encode -> VariantIDs;
-    VariantIDs -> BuildDF;
+    lvl2_label [label=<
+      <B>Level 2 supervised target</B><BR ALIGN="LEFT"/>
+      AMR phenotype / resistant / susceptible / class label
+    > shape=parallelogram fillcolor="#FFF8DC"];
+
+    lvl2_rf [label=<
+      <B>statistical_validation_branch.py</B><BR ALIGN="LEFT"/>
+      <B>RF-FDR for Level 2</B><BR ALIGN="LEFT"/>
+      Input:<BR ALIGN="LEFT"/>
+      • aligned X<BR ALIGN="LEFT"/>
+      • Level 2 labels<BR ALIGN="LEFT"/>
+      Steps:<BR ALIGN="LEFT"/>
+      • Random Forest feature scoring<BR ALIGN="LEFT"/>
+      • empirical permutation p-values<BR ALIGN="LEFT"/>
+      • FDR-BH correction<BR ALIGN="LEFT"/>
+      Output:<BR ALIGN="LEFT"/>
+      • Level 2 filtered matrix<BR ALIGN="LEFT"/>
+      • ranked AMR-associated markers
+    > fillcolor="#FCE8E8"];
+
+    lvl2_selector [label=<
+      <B>model_selector.py</B><BR ALIGN="LEFT"/>
+      Assess Level 2 matrix / label structure<BR ALIGN="LEFT"/>
+      and recommend suitable model family
+    >];
+
+    lvl2_ml [label=<
+      <B>ml_protocol.py</B><BR ALIGN="LEFT"/>
+      <B>Level 2 ML protocol</B><BR ALIGN="LEFT"/>
+      Train resistance-profile model<BR ALIGN="LEFT"/>
+      • training / evaluation<BR ALIGN="LEFT"/>
+      • metrics / predictions
+    >];
+
+    lvl2_backend [label=<
+      <B>neural_network.py</B><BR ALIGN="LEFT"/>
+      Backend learners / model wrappers<BR ALIGN="LEFT"/>
+      used by the ML protocol
+    >];
+
+    lvl2_dt_gate [label=<
+      <B>Run Level 2 decision tree?</B>
+    > shape=diamond fillcolor="#FFF2CC"];
+
+    lvl2_dt [label=<
+      <B>decision_tree_branch.py</B><BR ALIGN="LEFT"/>
+      <B>Level 2 decision tree</B><BR ALIGN="LEFT"/>
+      Interpret AMR-associated rules<BR ALIGN="LEFT"/>
+      • root/branch features<BR ALIGN="LEFT"/>
+      • rule extraction<BR ALIGN="LEFT"/>
+      • path-based interactions
+    > fillcolor="#FCE8E8"];
+
+    lvl2_conf [label=<
+      <B>Level 2 post-tree confidence</B><BR ALIGN="LEFT"/>
+      Happens after tree construction<BR ALIGN="LEFT"/>
+      • bootstrap stability<BR ALIGN="LEFT"/>
+      • mutual information<BR ALIGN="LEFT"/>
+      • feature confidence scores
+    > fillcolor="#FCE8E8"];
+
+    lvl2_output [label=<
+      <B>Level 2 outputs</B><BR ALIGN="LEFT"/>
+      • trained Level 2 model<BR ALIGN="LEFT"/>
+      • predicted AMR phenotype<BR ALIGN="LEFT"/>
+      • selected AMR markers<BR ALIGN="LEFT"/>
+      • optional DT explanations
+    > fillcolor="#DDF5DD"];
+
+    lvl2_label -> lvl2_rf;
+    lvl2_rf -> lvl2_selector;
+    lvl2_selector -> lvl2_ml;
+    lvl2_ml -> lvl2_backend;
+    lvl2_backend -> lvl2_dt_gate;
+    lvl2_dt_gate -> lvl2_dt [label="yes"];
+    lvl2_dt_gate -> lvl2_output [label="no"];
+    lvl2_dt -> lvl2_conf;
+    lvl2_conf -> lvl2_output;
   }
 
-  // ───────────────────────────────────────────────
-  // LIGHT PREPROCESSING (NOT statistical validation)
-  // ───────────────────────────────────────────────
-  subgraph cluster_pre {
-    label="Light preprocessing (DataLoader only)";
-    color="#FFE0F0";
-    style="rounded";
+  lvl1_output -> lvl2_label [label="context for Level 2"];
+  two_level_controller -> lvl2_label [style=dashed];
 
-    Preprocess [label="_preprocess_binary_matrix()", fillcolor="#FFE0F0"];
-    Invariant [label="remove_invariant?\ndrop columns all-0 or all-1", shape=diamond, fillcolor="#FFF0F8"];
-    Minor [label="min_minor_count > 0?\nkeep if min(count0,count1) ≥ threshold", shape=diamond, fillcolor="#FFF0F8"];
-    PreDone [label="Preprocessed binary matrix", fillcolor="#FFE0F0"];
+  // ============================================================
+  // COMBINED RESULTS
+  // ============================================================
+  subgraph cluster_results {
+    label="Stage 3 — Combined training outputs";
+    style="rounded,filled";
+    color="#D6E4F0";
+    fillcolor="#F8FBFF";
+    fontsize=14;
 
-    BuildDF -> Preprocess;
-    Preprocess -> Invariant;
-    Invariant -> Minor [label="done"];
-    Minor -> PreDone [label="done"];
+    combined_output [label=<
+      <B>Combined two-level result</B><BR ALIGN="LEFT"/>
+      • strain/group assignment model<BR ALIGN="LEFT"/>
+      • resistance profile model<BR ALIGN="LEFT"/>
+      • selected feature sets for both levels<BR ALIGN="LEFT"/>
+      • DT rules / interactions where enabled<BR ALIGN="LEFT"/>
+      • confidence summaries
+    > fillcolor="#CFEFD0"];
+
+    final_outputs [label=<
+      <B>Final exported outputs</B><BR ALIGN="LEFT"/>
+      • filtered matrices<BR ALIGN="LEFT"/>
+      • RF-FDR statistics<BR ALIGN="LEFT"/>
+      • trained model artifacts<BR ALIGN="LEFT"/>
+      • decision-tree rules<BR ALIGN="LEFT"/>
+      • confidence summaries<BR ALIGN="LEFT"/>
+      • run summary JSON
+    > fillcolor="#E9FFF2"];
+
+    gnn_outputs [label=<
+      <B>Network / GNN-ready outputs</B><BR ALIGN="LEFT"/>
+      • ranked feature list<BR ALIGN="LEFT"/>
+      • interaction graph<BR ALIGN="LEFT"/>
+      • sample-feature network<BR ALIGN="LEFT"/>
+      • adjacency matrices
+    > fillcolor="#E9FFF2"];
+
+    lvl1_output -> combined_output;
+    lvl2_output -> combined_output;
+    combined_output -> final_outputs;
+    final_outputs -> gnn_outputs;
   }
 
-  // ───────────────────────────────────────────────
-  // OPTIONAL COMPACT IDS
-  // ───────────────────────────────────────────────
-  CompactQ [label="use_integer_variant_ids?", shape=diamond, fillcolor="#EDEDED"];
-  CompactYes [label="Rename columns → v0,v1,...\nSave lookup (variant_id_lookup.json)", fillcolor="#EDEDED"];
-  CompactNo [label="Keep full variant IDs", fillcolor="#EDEDED"];
+  // ============================================================
+  // USER-FACING QUERY / PREDICTION MODE
+  // ============================================================
+  subgraph cluster_query {
+    label="Stage 4 — User-facing query / prediction mode";
+    style="rounded,filled";
+    color="#EAD1DC";
+    fillcolor="#FFF8FC";
+    fontsize=14;
 
-  PreDone -> CompactQ;
-  CompactQ -> CompactYes [label="yes"];
-  CompactQ -> CompactNo [label="no"];
+    new_sample [label=<
+      <B>New user sample</B><BR ALIGN="LEFT"/>
+      • new VCF<BR ALIGN="LEFT"/>
+      • or new genomic feature row
+    > shape=parallelogram fillcolor="#FFF8DC"];
 
-  // ───────────────────────────────────────────────
-  // OPTIONAL ARTIFACT OUTPUT (matches legacy script outputs)
-  // ───────────────────────────────────────────────
-  subgraph cluster_artifacts {
-    label="Optional artifact output (when output_dir is provided)";
-    color="#FFD6C9";
-    style="rounded";
+    query_pre [label=<
+      <B>Preprocess / encode new sample</B><BR ALIGN="LEFT"/>
+      use the same genomic feature representation
+    >];
 
-    OutDirQ [label="output_dir provided?", shape=diamond, fillcolor="#FFE7E0"];
-    WriteAll [label="_write_all_artifacts()", fillcolor="#FFD6C9"];
+    query_lvl1 [label=<
+      <B>Apply saved Level 1 model</B><BR ALIGN="LEFT"/>
+      Answer:<BR ALIGN="LEFT"/>
+      “Where does this strain belong?”
+    > fillcolor="#E7F2FF"];
 
-    AllSNP [label="vcf_counts/all_snp.txt\n(minimal or annotated)", fillcolor="#FFD6C9"];
-    SNPAnnotQ [label="GenBank ref provided\n& Biopython available?", shape=diamond, fillcolor="#FFE7E0"];
-    Annotate [label="annotate_snps_genbank()\nadds region/codon/AA change\ngene annotation", fillcolor="#FFD6C9"];
-    Minimal [label="minimal table\n(Position, Count)", fillcolor="#FFD6C9"];
+    query_lvl2 [label=<
+      <B>Apply saved Level 2 model</B><BR ALIGN="LEFT"/>
+      Answer:<BR ALIGN="LEFT"/>
+      “What resistance profile is predicted?”
+    > fillcolor="#FCE8E8"];
 
-    FastaA [label="fasta/<generic>_alleles.fasta\nREF + sample allele strings", fillcolor="#FFD6C9"];
-    FastaB [label="fasta/<generic>_binary.fasta\nREF + sample binary strings", fillcolor="#FFD6C9"];
+    query_report [label=<
+      <B>User-facing report</B><BR ALIGN="LEFT"/>
+      • predicted strain/group<BR ALIGN="LEFT"/>
+      • predicted resistance profile<BR ALIGN="LEFT"/>
+      • support/confidence<BR ALIGN="LEFT"/>
+      • supporting selected markers
+    > fillcolor="#DDF5DD"];
 
-    FilteredTSV [label="fasta/<generic>_filtered.tsv\n(filtered copy of SNP table)", fillcolor="#FFD6C9"];
-    ContextQ [label="Reference sequence loadable?\n(FASTA/GBK + Biopython)", shape=diamond, fillcolor="#FFE7E0"];
-    AddContext [label="append Context_±flank\n(circular context_around)", fillcolor="#FFD6C9"];
-    NoContext [label="write without context", fillcolor="#FFD6C9"];
-
-    Matrices [label="matrices/* outputs\n(filtering + redundancy reduction)\n(min_count/type/repeat/fix)", fillcolor="#FFD6C9"];
-
-    CfgSnap [label="Write config snapshot\n(dataloader_config.snapshot.json)", fillcolor="#FFD6C9"];
-
-    CompactYes -> OutDirQ;
-    CompactNo  -> OutDirQ;
-
-    OutDirQ -> WriteAll [label="yes"];
-    OutDirQ -> Return [label="no"];
-
-    WriteAll -> AllSNP;
-    AllSNP -> SNPAnnotQ;
-    SNPAnnotQ -> Annotate [label="yes"];
-    SNPAnnotQ -> Minimal [label="no"];
-
-    WriteAll -> FastaA;
-    WriteAll -> FastaB;
-
-    WriteAll -> FilteredTSV;
-    FilteredTSV -> ContextQ;
-    ContextQ -> AddContext [label="yes"];
-    ContextQ -> NoContext [label="no"];
-
-    WriteAll -> Matrices;
-    WriteAll -> CfgSnap;
+    new_sample -> query_pre;
+    query_pre -> query_lvl1;
+    query_lvl1 -> query_lvl2;
+    query_lvl2 -> query_report;
   }
 
-  // ───────────────────────────────────────────────
-  // RETURN
-  // ───────────────────────────────────────────────
-  Return [label="Return binary DataFrame\n(samples × variants, 0/1)", shape=ellipse, fillcolor="#D7F7D7"];
-
-  CompactYes -> Return [label="df (compact IDs)"];
-  CompactNo  -> Return [label="df (full IDs)"];
+  combined_output -> query_lvl1 [style=dashed label="saved models + selected features"];
 }

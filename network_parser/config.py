@@ -41,7 +41,7 @@ class NetworkParserConfig:
     # -------------------------------------------------
     # 3) Cohort-level SNP filtering
     # -------------------------------------------------
-    min_sample_presence: int = 3
+    min_sample_presence: int = 10
 
     # -------------------------------------------------
     # 4) Binary encoding strategy
@@ -49,15 +49,15 @@ class NetworkParserConfig:
     ancestral_allele: Literal["Y", "N"] = "Y"
 
     # -------------------------------------------------
-    # 5) Lightweight preprocessing (NOT statistical)
+    # 5) Lightweight preprocessing 
     # -------------------------------------------------
     remove_invariant: bool = True
-    min_minor_count: int = 0
+    min_minor_count: int = 10
 
     # -------------------------------------------------
     # 6) Artifact filtering controls
     # -------------------------------------------------
-    matrices_min_count: int = 3
+    matrices_min_count: int = 10
     matrices_repeat_number: int = 5
     matrices_type: Literal["all", "coding", "sense-mutations"] = "all"
     matrices_fix: str = ""
@@ -80,7 +80,35 @@ class NetworkParserConfig:
     max_prefiltered_features: Optional[int] = 10000
 
     multiple_testing_method: Literal["fdr_bh", "bonferroni"] = "fdr_bh"
+    # -------------------------------------------------
+    # RF-FDR central feature selection
+    # -------------------------------------------------
+    run_rf_fdr_feature_selection: bool = True
 
+    rf_selector_n_estimators: int = 300
+    rf_selector_n_observed_repeats: int = 10
+
+    # Higher default gives better empirical p-value resolution for FDR-BH.
+    # This improves robust inference when RF-FDR is used as the main filter.
+    rf_selector_n_permutations: int = 1000
+
+    rf_selector_fdr_alpha: float = 0.05
+    rf_selector_max_features: str = "sqrt"
+    rf_selector_min_samples_leaf: int = 1
+    rf_selector_class_weight: Optional[str] = "balanced"
+    rf_selector_min_importance: float = 0.0
+    rf_selector_top_n: Optional[int] = None
+    rf_selector_random_state: int = 42
+
+    # stop = do not silently pass exploratory top-N features as if they were FDR-significant.
+    # Use "top_n" only for exploratory/smoke testing.
+    rf_selector_fallback_strategy: Literal["top_n", "unfiltered", "stop"] = "stop"
+    rf_selector_fallback_top_n: int = 500
+
+    # Two-level fallback control.
+    # False = fail loudly if ML training fails.
+    # True = allow RF fallback model and record it explicitly.
+    allow_two_level_rf_fallback: bool = False
     # -------------------------------------------------
     # 8) Decision Tree parameters
     # -------------------------------------------------
@@ -128,15 +156,25 @@ class NetworkParserConfig:
         "decision_tree_only",
         "ml_only",
         "both",
+        "two_level",
     ] = "both"
 
     # Backward compatibility
     run_ml_protocol: bool = False
+    # -------------------------------------------------
+    # Two-level protocol
+    # -------------------------------------------------
+    level1_label_column: Optional[str] = None
+    level2_label_column: Optional[str] = None
+    train_global_level2: bool = True
+    min_level2_samples_per_group: Optional[int] = None
 
     # -------------------------------------------------
     # 14) Updated orchestration flags
     # -------------------------------------------------
     run_model_selector: bool = True
+    run_conditional_dt: bool = True
+    disable_conditional_dt: bool = False
     trigger_decision_tree_on_selected: bool = True
     trigger_decision_tree_if_candidate: bool = True
     decision_tree_requires_selector_match: bool = False
@@ -167,11 +205,23 @@ class NetworkParserConfig:
         if self.multiple_testing_method not in {"fdr_bh", "bonferroni"}:
             raise ValueError("multiple_testing_method must be 'fdr_bh' or 'bonferroni'")
 
-        supported_modes = {"matrix_only", "decision_tree_only", "ml_only", "both"}
+        supported_modes = {
+            "matrix_only",
+            "decision_tree_only",
+            "ml_only",
+            "both",
+            "two_level",
+        }
         if self.pipeline_mode not in supported_modes:
             raise ValueError(f"pipeline_mode must be one of: {sorted(supported_modes)}")
+        if self.min_level2_samples_per_group is not None and self.min_level2_samples_per_group < 2:
+            raise ValueError("min_level2_samples_per_group must be >= 2 or None")
 
-        supported_ml = {"auto", "RF", "MLP", "LR", "MBCS", "DT", "SVC", "SCV", "DNL"}
+        # Correct common typo while preserving backward compatibility.
+        if self.ml_algorithm == "SCV":
+            self.ml_algorithm = "SVC"
+
+        supported_ml = {"auto", "RF", "MLP", "LR", "MBCS", "DT", "SVC", "DNL"}
         if self.ml_algorithm not in supported_ml:
             raise ValueError(f"ml_algorithm must be one of: {sorted(supported_ml)}")
 
@@ -250,3 +300,35 @@ class NetworkParserConfig:
             raise ValueError("ml_step_sensitivity must be > 0")
         if not 0 <= self.ml_remove_empty_field_threshold <= 1:
             raise ValueError("ml_remove_empty_field_threshold must be in [0, 1]")
+        if self.rf_selector_n_estimators < 1:
+            raise ValueError("rf_selector_n_estimators must be >= 1")
+
+        if self.rf_selector_n_observed_repeats < 1:
+            raise ValueError("rf_selector_n_observed_repeats must be >= 1")
+
+        if self.rf_selector_n_permutations < 1:
+            raise ValueError("rf_selector_n_permutations must be >= 1")
+
+        if not 0 < self.rf_selector_fdr_alpha <= 1:
+            raise ValueError("rf_selector_fdr_alpha must be in (0, 1]")
+
+        if self.rf_selector_min_samples_leaf < 1:
+            raise ValueError("rf_selector_min_samples_leaf must be >= 1")
+
+        if self.rf_selector_min_importance < 0:
+            raise ValueError("rf_selector_min_importance must be >= 0")
+
+        if self.rf_selector_top_n is not None and self.rf_selector_top_n < 1:
+            raise ValueError("rf_selector_top_n must be >= 1 or None")
+
+        if self.rf_selector_fallback_strategy not in {"top_n", "unfiltered", "stop"}:
+            raise ValueError(
+                "rf_selector_fallback_strategy must be one of: "
+                "'top_n', 'unfiltered', or 'stop'"
+            )
+
+        if self.rf_selector_fallback_top_n < 1:
+            raise ValueError("rf_selector_fallback_top_n must be >= 1")
+
+        if not isinstance(self.allow_two_level_rf_fallback, bool):
+            raise ValueError("allow_two_level_rf_fallback must be boolean")

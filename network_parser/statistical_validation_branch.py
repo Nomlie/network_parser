@@ -34,15 +34,22 @@ import pandas as pd
 from joblib import Parallel, delayed
 from scipy import stats
 from scipy.stats import chi2_contingency, fisher_exact
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import mutual_info_score
 from sklearn.tree import DecisionTreeClassifier
 from statsmodels.stats.multitest import multipletests
 
 try:
     from network_parser.config import NetworkParserConfig
+    from network_parser.feature_selection import (
+        rf_fdr_feature_selection as _shared_rf_fdr_feature_selection,
+    )
 except Exception:  # pragma: no cover
     from config import NetworkParserConfig  # type: ignore
-
+    from feature_selection import (  # type: ignore
+        rf_fdr_feature_selection as _shared_rf_fdr_feature_selection,
+    )
+from network_parser.feature_selection import rf_fdr_feature_selection as _rf_fdr_select
 
 logger = logging.getLogger(__name__)
 
@@ -66,9 +73,44 @@ class StatisticalValidatorBranch:
         self.n_bootstrap = int(getattr(self.config, "n_bootstrap_samples", 1000))
         self.n_permutations = int(getattr(self.config, "n_permutation_tests", 500))
         self.n_jobs = int(getattr(self.config, "n_jobs", -1))
-
         logger.info("Initialized StatisticalValidatorBranch.")
+    # ------------------------------------------------------------------
+    # RF-FDR central pre-ML / pre-tree feature filtering
+    # ------------------------------------------------------------------
+    def rf_fdr_feature_selection(
+        self,
+        genomic_df: pd.DataFrame,
+        labels: pd.Series,
+        output_dir: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        RF-FDR central feature selection.
 
+        This is a thin compatibility wrapper around the shared RF-FDR
+        implementation in feature_selection.py.
+
+        Purpose
+        -------
+        Keep exactly one RF-FDR implementation in the codebase so that
+        single-label and two-level protocols behave consistently.
+
+        This method is PRE-ML / PRE-tree. It does not perform decision-tree
+        construction, interaction mining, or bootstrap confidence scoring.
+        """
+        self._validate_feature_inputs(genomic_df, labels)
+
+        out_dir = Path(output_dir) if output_dir is not None else Path("central_feature_filtering")
+
+        result = _shared_rf_fdr_feature_selection(
+            X=genomic_df,
+            y=labels,
+            output_dir=out_dir,
+            config=self.config,
+            stage_name="central_feature_filtering",
+        )
+
+        result.setdefault("method", "rf_fdr")
+        return result
     # ------------------------------------------------------------------
     # Central pre-ML / pre-tree feature filtering
     # ------------------------------------------------------------------

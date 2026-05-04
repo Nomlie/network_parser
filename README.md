@@ -316,7 +316,7 @@ The single-label `run` workflow supports:
 | `ml_only` | Run central filtering and ML protocol/model selector only. |
 | `both` | Run central filtering, ML protocol/model selector, and conditional decision-tree interpretation. |
 
-The intended workflow is:
+The intended publication workflow is:
 
 ```text
 Input → preprocessing → RF-FDR feature filtering → ML protocol/model selector → conditional decision-tree interpretation → post-tree confidence and interaction outputs
@@ -594,7 +594,7 @@ The decision-tree branch assumes central filtering has already happened. It then
 - path-based interaction mining
 - post-tree confidence and stability scoring
 
-The decision tree is retained because it gives a compact, rule-based interpretation layer. It should not be replaced by a black-box model if the goal is interpretability.
+The decision tree is retained because it gives a compact, rule-based interpretation layer. It should not be replaced by a black-box model if the goal is publication-ready interpretability.
 
 ### Bootstrap and Confidence Scores
 
@@ -666,7 +666,7 @@ A group-specific Level 2 model may be skipped if there are too few samples in th
 
 ### ML protocol fails during two-level training
 
-By default, the two-level protocol should fail loudly if the configured ML protocol fails. This is safe because it avoids silently substituting an exploratory fallback model. An explicit fallback may be enabled only for exploratory runs.
+By default, the two-level protocol should fail loudly if the configured ML protocol fails. This is publication-safe because it avoids silently substituting an exploratory fallback model. An explicit fallback may be enabled only for exploratory runs.
 
 ---
 

@@ -262,7 +262,7 @@ class DecisionTreeBranch:
             "root_features": analysis["root_features"],
             "branch_features": analysis["branch_features"],
             "decision_trees": {
-                "accuracy": float(accuracy_score(y, dt.predict(X))),
+                "training_accuracy": float(accuracy_score(y, dt.predict(X))),
                 "rules": export_text(dt, feature_names=list(X.columns)),
                 "n_classes": n_classes,
             },
@@ -707,7 +707,11 @@ class DecisionTreeBranch:
         print("\n" + "=" * 70)
         print("FEATURE DISCOVERY SUMMARY (DecisionTree Branch)")
         print("=" * 70)
-        print(f"Tree Accuracy: {tree['accuracy']:.3f} | Classes: {tree['n_classes']}")
+        training_accuracy = tree.get("training_accuracy", tree.get("accuracy", float("nan")))
+        print(
+            f"Tree Training Accuracy: {training_accuracy:.3f} | "
+            f"Classes: {tree['n_classes']}"
+        )
         print(f"Root Features: {len(root_features)} | Branch Features: {len(branch_features)}")
 
         shown = root_features[:3]
