@@ -1,55 +1,53 @@
-# network_parser/__init__.py
 """
-NetworkParser: Interpretable Genomic Feature Discovery Framework
+NetworkParser: Interpretable Genomic Feature Discovery Framework.
 
-A scalable, modular pipeline for identifying statistically validated genomic markers
-and epistatic interactions driving phenotype segregation (e.g., antimicrobial resistance,
-lineage diversification in microbes).
-
-Core features:
-- End-to-end processing from VCF/CSV/FASTA → clean binary SNP matrix
-- High-quality biallelic SNP filtering (bcftools-based)
-- Optional consensus pseudogenome FASTA generation (bcftools consensus)
-- Interpretable decision tree-based feature discovery
-- Rigorous statistical validation (bootstrap, permutation tests)
-- Network integration and GNN-ready outputs
-- Designed for microbial genomics (e.g., TB, Staphylococcus, etc.)
-
-Author: Nomlindelo Mfuphi
-GitHub: https://github.com/Nomlie/network_parser/
+NetworkParser converts genomic variant matrices or VCF-derived feature spaces
+into statistically defensible marker rankings, interpretable decision-tree
+outputs, interaction summaries, and ML-ready matrices.
 """
 
 from .config import NetworkParserConfig
-from .network_parser import NetworkParser, run_networkparser_analysis
 from .data_loader import DataLoader
-from network_parser.decision_tree_branch import DecisionTreeBranch, StatisticalValidatorBranch
-from network_parser.ml_protocol import MLProtocolRunner
+from .statistical_validation_branch import StatisticalValidatorBranch
+from .ml_protocol import MLProtocolRunner
+from .network_parser import (
+    NetworkParser,
+    run_networkparser_analysis,
+    normalize_labels,
+)
+from .utils import normalize_sample_id
 
-# Package version (update this as you develop!)
-__version__ = "0.2.0"  # Increment from 0.1.0 to reflect VCF + FASTA support
+try:
+    from .decision_tree_branch import DecisionTreeBranch
+except ImportError:  # pragma: no cover
+    DecisionTreeBranch = None  # type: ignore
 
-# Define what gets imported with "from network_parser import *"
+try:
+    from .two_level_protocol import TwoLevelProtocol
+except ImportError:  # pragma: no cover
+    TwoLevelProtocol = None  # type: ignore
+
+try:
+    from .query_engine import NetworkParserQueryEngine
+except ImportError:  # pragma: no cover
+    NetworkParserQueryEngine = None  # type: ignore
+
+NetworkParserPipeline = NetworkParser
+
+__version__ = "0.1.0"
+
 __all__ = [
     "NetworkParserConfig",
-    "NetworkParser",
-    "run_networkparser_analysis",
     "DataLoader",
-    "StatisticalValidator",
-    "EnhancedDecisionTreeBuilder",
-    "__version__"
+    "StatisticalValidatorBranch",
+    "DecisionTreeBranch",
+    "MLProtocolRunner",
+    "NetworkParser",
+    "NetworkParserPipeline",
+    "run_networkparser_analysis",
+    "normalize_sample_id",
+    "normalize_labels",
+    "TwoLevelProtocol",
+    "NetworkParserQueryEngine",
+    "__version__",
 ]
-
-# Optional: Friendly welcome message when imported
-def _welcome():
-    print("""
-╔═══════════════════════════════════════════════════════════╗
-║             Welcome to NetworkParser v{}             ║
-║  Interpretable genomic feature discovery for microbes     ║
-║                                                           ║
-║  Now with full VCF → SNP matrix + consensus FASTA support ║
-║  Perfect for AMR surveillance and lineage analysis        ║
-╚═══════════════════════════════════════════════════════════╝
-    """.format(__version__))
-
-
-

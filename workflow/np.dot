@@ -1,131 +1,691 @@
-digraph DataLoader_VCF_Directory_Workflow {
+digraph NetworkParser_Flow_Detailed {
+  // ─────────────────────────────────────────────────────────────
+  // NetworkParser — detailed, script-faithful pipeline flow
+  // Updated to reflect:
+  // DataLoader → central statistical filtering → ML protocol/model selector
+  // → conditional predictive branch and/or DT interpretability branch
+  // → optional downstream validation → final synthesis
+  // ─────────────────────────────────────────────────────────────
+
   rankdir=TB;
-  splines=ortho;
-  bgcolor="white";
   labelloc="t";
   fontsize=20;
   fontname="Helvetica,Arial,sans-serif";
-  label="DataLoader: VCF directory → Cohort site universe → Binary matrix\n(Per-sample parsing → Cohort merge → Presence filter → Baseline encoding → Matrix → Preprocessing)";
+  label="NetworkParser — Detailed Pipeline Flow \nInput → Matrix construction → Central statistical filtering → ML protocol / model selection → Conditional predictive / DT branches → Optional validation → Final synthesis";
 
-  node [
-    shape=box,
-    style="rounded,filled",
-    fontname="Helvetica,Arial,sans-serif",
-    fontsize=11,
-    penwidth=1.2,
-    fillcolor="lightblue"
-  ];
+  graph [splines=ortho, nodesep=0.45, ranksep=0.7];
+  node  [shape=box, style="rounded,filled", fontname="Helvetica,Arial,sans-serif", fontsize=10, penwidth=1.15, fillcolor="#eef5ff"];
+  edge  [fontname="Helvetica,Arial,sans-serif", fontsize=9, penwidth=1.1, arrowsize=0.9, color="#444"];
 
-  edge [
-    fontname="Helvetica,Arial,sans-serif",
-    fontsize=10,
-    penwidth=1.2,
-    arrowsize=0.9
-  ];
+  // ─────────────────────────────────────────────────────────────
+  // STAGE 0 — CLI
+  // ─────────────────────────────────────────────────────────────
+  subgraph cluster_cli {
+    label="Stage 0 — CLI entry (cli.py)";
+    labelloc="t";
+    fontsize=14;
+    style="rounded";
+    color="#c9d7f0";
 
-  // ─────────────────────────────────────────────
-  // Inputs
-  // ─────────────────────────────────────────────
-  Start [label="Start\nVCF directory (per-sample .vcf/.vcf.gz)", fillcolor="lightgreen"];
-  Discover [label="Discover VCF files\n(sorted list)", fillcolor="lightgreen"];
-  Config [label="Log configuration\n• record-level QC thresholds (applied during parsing)\n• cohort/matrix settings (applied after parsing)", fillcolor="lightyellow"];
+    cli_args [label=<
+      <B>Parse CLI args</B><BR ALIGN="LEFT"/>
+      • --genomic: file OR directory (VCF/VCF.gz/CSV/TSV)<BR ALIGN="LEFT"/>
+      • --meta: optional metadata table (CSV/TSV)<BR ALIGN="LEFT"/>
+      • --label: metadata column for phenotype / group<BR ALIGN="LEFT"/>
+      • --known_markers: optional marker list<BR ALIGN="LEFT"/>
+      • --ref_fasta: optional FASTA for normalization / annotation context<BR ALIGN="LEFT"/>
+      • --config: JSON overrides<BR ALIGN="LEFT"/>
+      • --validate_statistics / --validate_interactions flags<BR ALIGN="LEFT"/>
+      • --pipeline_mode: matrix_only / decision_tree_only / ml_only / both
+    >];
 
-  Start -> Discover;
-  Discover -> Config;
+    cli_cfg [label=<
+      <B>Load config</B><BR ALIGN="LEFT"/>
+      NetworkParserConfig() defaults<BR ALIGN="LEFT"/>
+      Apply JSON overrides<BR ALIGN="LEFT"/>
+      Apply CLI overrides
+    >];
 
-  // ─────────────────────────────────────────────
-  // Parallel per-sample parsing
-  // ─────────────────────────────────────────────
-  subgraph cluster_parsing {
-    label="Stage A: Parallel per-sample parsing";
-    color="gray70";
-    style="rounded,dashed";
+    cli_call [label=<
+      <B>Call pipeline</B><BR ALIGN="LEFT"/>
+      run_networkparser_analysis(...) → NetworkParser.run_pipeline(...)
+    >];
 
-    ParseStart [label="Start parallel parsing\nParallel(n_jobs)\nfor each VCF", fillcolor="orange"];
-
-    IterCalls [label="iter_sample_calls(vcf)\nscan records & apply QC\nretain SNP-like calls\n(biallelic-only if enabled)", fillcolor="orange"];
-
-    CallsDict [label="Per-sample output (in memory)\ncalls_dict:\nsite → (REF, CALLED)", fillcolor="white"];
-
-    ResultsList [label="Collected parsed results (in memory)\nresults: list of\n(sample_id, calls_dict)", fillcolor="white"];
-
-    ParseStart -> IterCalls -> CallsDict -> ResultsList;
+    cli_args -> cli_cfg -> cli_call;
   }
 
-  Config -> ParseStart;
+  // ─────────────────────────────────────────────────────────────
+  // ORCHESTRATOR
+  // ─────────────────────────────────────────────────────────────
+  subgraph cluster_orch {
+    label="Orchestrator (network_parser.py)";
+    labelloc="t";
+    fontsize=14;
+    style="rounded";
+    color="#c9d7f0";
 
-  ParseSummary [label="Parsing complete (log summary)\n• samples\n• total_called_sites\n• mean_calls_per_sample\n• storage: results list", fillcolor="lightgrey"];
-  ResultsList -> ParseSummary;
+    np_init [label=<
+      <B>Instantiate components</B><BR ALIGN="LEFT"/>
+      • DataLoader(config)<BR ALIGN="LEFT"/>
+      • StatisticalValidator(config)<BR ALIGN="LEFT"/>
+      • MLProtocol(config)<BR ALIGN="LEFT"/>
+      • DecisionTreeBranch(config)
+    >];
 
-  // ─────────────────────────────────────────────
-  // Cohort merge
-  // ─────────────────────────────────────────────
-  subgraph cluster_merge {
-    label="Stage B: Cohort merge (define site universe)";
-    color="gray70";
-    style="rounded,dashed";
+    np_run [label=<
+      <B>run_pipeline()</B><BR ALIGN="LEFT"/>
+      1) Build genomic matrix (DataLoader)<BR ALIGN="LEFT"/>
+      2) Load metadata + align labels<BR ALIGN="LEFT"/>
+      3) Central statistical feature filtering<BR ALIGN="LEFT"/>
+      4) Run ML protocol + model selector<BR ALIGN="LEFT"/>
+      5) Conditionally trigger predictive branch and/or DT branch<BR ALIGN="LEFT"/>
+      6) Optional downstream validation<BR ALIGN="LEFT"/>
+      7) Save final synthesis outputs
+    >];
 
-    MergeStart [label="Cohort merge starting\naggregate per-sample calls", fillcolor="khaki1"];
-
-    BuildPerSample [label="Build in-memory map\nper_sample_calls[sample] → calls_dict", fillcolor="white"];
-
-    BuildSiteCounts [label="Build cohort site counts\nsite_counts[site] →\n[carrier_count, REF, ALT]\n(ALT conflicts discarded if biallelic)", fillcolor="white"];
-
-    MergeDone [label="Cohort merge complete\nsite_counts defines cohort site universe (pre-filter)", fillcolor="khaki1"];
-
-    MergeStart -> BuildPerSample -> BuildSiteCounts -> MergeDone;
+    cli_call -> np_init -> np_run;
   }
 
-  ParseSummary -> MergeStart;
+  // ─────────────────────────────────────────────────────────────
+  // STAGE 1 — DATA LOADER
+  // ─────────────────────────────────────────────────────────────
+  subgraph cluster_loader {
+    label="Stage 1 — Matrix construction (data_loader.py) — per-sample parse → cohort merge → baseline → encode";
+    labelloc="t";
+    fontsize=14;
+    style="rounded";
+    color="#d7e3f7";
 
-  CohortLandscape [label="Cohort variant landscape (pre-filter)\n• unique polymorphic sites\n• total mutation occurrences\n• ALT conflicts discarded", fillcolor="khaki1"];
-  MergeDone -> CohortLandscape;
+    dl_route [label=<
+      <B>load_genomic_matrix(genomic_path)</B><BR ALIGN="LEFT"/>
+      Route by input type:<BR ALIGN="LEFT"/>
+      • directory → folder-of-VCFs mode<BR ALIGN="LEFT"/>
+      • .vcf / .vcf.gz → single-VCF mode<BR ALIGN="LEFT"/>
+      • .csv / .tsv → prebuilt matrix mode
+    >];
 
-  ArtifactsNote [label="Artifacts note (log)\nOutput written later (after filtering/encoding)\n• matrices + FASTA + annotation tables", fillcolor="lightyellow"];
-  CohortLandscape -> ArtifactsNote;
+    dl_dir [label=<
+      <B>Directory input</B><BR ALIGN="LEFT"/>
+      Collect *.vcf / *.vcf.gz<BR ALIGN="LEFT"/>
+      No bcftools merge step
+    >];
 
-  // ─────────────────────────────────────────────
-  // Presence filtering
-  // ─────────────────────────────────────────────
-  Presence [label="Cohort presence filtering\nKeep sites with carrier_count ≥ min_sample_presence\n(log retained %)", fillcolor="palegreen"];
-  ArtifactsNote -> Presence;
+    dl_par [label=<
+      <B>Parallel per-sample parsing</B><BR ALIGN="LEFT"/>
+      Parallel(n_jobs): parse each VCF independently<BR ALIGN="LEFT"/>
+      Output per sample: {(chrom,pos) → (ref, called)}
+    > shape=ellipse fillcolor="#FFD48A"];
 
-  NoSites [label="If no sites retained → error\n(relax thresholds)", fillcolor="mistyrose"];
-  Presence -> NoSites [style=dashed, color="gray60", label="kept_sites empty"];
+    iter0 [label=<
+      <B>iter_sample_calls()</B><BR ALIGN="LEFT"/>
+      Stream records from a single sample VCF<BR ALIGN="LEFT"/>
+      Apply record-level gates + choose allele
+    > fillcolor="#fff7db"];
 
-  KeptSites [label="kept_sites (in memory)\nsite → (carrier_count, REF, ALT)", fillcolor="white"];
-  Presence -> KeptSites;
+    gate_snp [label=<
+      <B>is_snp_like?</B><BR ALIGN="LEFT"/>
+      single-base REF &amp; ALT<BR ALIGN="LEFT"/>
+      optionally enforce biallelic-only
+    > shape=diamond fillcolor="#fff7db"];
 
-  // ─────────────────────────────────────────────
-  // Allele strings and baseline selection
-  // ─────────────────────────────────────────────
-  AlleleStrings [label="Build allele strings\nsample_allele_strings[sample]\nper retained site list", fillcolor="lightblue"];
-  KeptSites -> AlleleStrings;
+    gate_info [label=<
+      <B>passes_info_qc?</B><BR ALIGN="LEFT"/>
+      QUAL + INFO(DP, MQ, MQ0F) thresholds<BR ALIGN="LEFT"/>
+      config-driven
+    > shape=diamond fillcolor="#fff7db"];
 
-  Baseline [label="Baseline selection\nREF baseline: reference allele\nMODE baseline: cohort-majority allele\n(log meaning of 0/1)", fillcolor="lightblue"];
-  AlleleStrings -> Baseline;
+    choose0 [label=<
+      <B>choose_called_allele()</B><BR ALIGN="LEFT"/>
+      Prefer GT when available<BR ALIGN="LEFT"/>
+      Else treat ALT presence as called<BR ALIGN="LEFT"/>
+      Fallback to REF when needed
+    >];
 
-  // ─────────────────────────────────────────────
-  // Encoding + matrix assembly
-  // ─────────────────────────────────────────────
-  Encode [label="Binary encoding\n0=baseline allele\n1=non-baseline allele\n(sample_binary_strings)", fillcolor="lightblue"];
-  Baseline -> Encode;
+    store0 [label=<
+      <B>Store sample calls</B><BR ALIGN="LEFT"/>
+      (chrom,pos) → (ref, called)
+    >];
 
-  VariantIDs [label="Feature IDs\nCHROM:POS:REF:ALT\n(variant-centric identifiers)", fillcolor="white"];
-  Encode -> VariantIDs;
+    discard [label="discard record" fillcolor="#E9E9E9" fontcolor="gray35"];
 
-  Matrix [label="Assemble binary matrix\nDataFrame: samples × features\n(values 0/1)", fillcolor="lightblue"];
-  VariantIDs -> Matrix;
+    merge_calls [label=<
+      <B>Cohort merge + carrier counts</B><BR ALIGN="LEFT"/>
+      Merge all per-sample call maps<BR ALIGN="LEFT"/>
+      Count carriers only where called ≠ ref
+    > fillcolor="#E7F2FF"];
 
-  MatrixStats [label="Raw matrix stats (log)\n• density\n• mean carriers per site\n• mean burden per genome\n• singleton/doubleton counts", fillcolor="lightgrey"];
-  Matrix -> MatrixStats;
+    bial_cons [label=<
+      <B>Optional ALT consistency gate</B><BR ALIGN="LEFT"/>
+      If biallelic-only, enforce consistent ALT per site
+    > shape=diamond fillcolor="#F2FAFF"];
 
-  // ─────────────────────────────────────────────
-  // Preprocessing
-  // ─────────────────────────────────────────────
-  Preprocess [label="Matrix preprocessing (post-encoding)\n• remove_invariant\n• min_minor_count\n(log removals by step)", fillcolor="lightgoldenrod1"];
-  MatrixStats -> Preprocess;
+    pres [label=<
+      <B>Cohort presence filter</B><BR ALIGN="LEFT"/>
+      keep sites where carrier_count ≥ min_sample_presence
+    > shape=diamond fillcolor="#F2FAFF"];
 
-  OutputDF [label="Output\nFiltered binary matrix (df)\nready for downstream analysis", fillcolor="lightgreen"];
-  Preprocess -> OutputDF;
+    sort_sites [label=<
+      <B>Sort retained sites</B><BR ALIGN="LEFT"/>
+      sort by chrom, pos
+    > fillcolor="#E7F2FF"];
+
+    refline [label=<
+      <B>Build ref_line</B><BR ALIGN="LEFT"/>
+      join REF bases across ordered sites
+    > fillcolor="#D7F7D7"];
+
+    alleles [label=<
+      <B>Build per-sample allele strings</B><BR ALIGN="LEFT"/>
+      called if valid else fallback REF<BR ALIGN="LEFT"/>
+      collect per-position base counts
+    > fillcolor="#D7F7D7"];
+
+    baseQ [label=<
+      <B>Choose baseline</B><BR ALIGN="LEFT"/>
+      ancestral_allele == 'Y' ? REF : MODE
+    > shape=diamond fillcolor="#ECFFEC"];
+
+    base_ref [label="baseline = ref_line" fillcolor="#D7F7D7"];
+    base_mode [label="baseline = per-position mode base" fillcolor="#D7F7D7"];
+
+    encode [label=<
+      <B>Binary encode</B><BR ALIGN="LEFT"/>
+      0 = matches baseline<BR ALIGN="LEFT"/>
+      1 = differs
+    > fillcolor="#CFF7F7"];
+
+    varids [label=<
+      <B>Variant IDs</B><BR ALIGN="LEFT"/>
+      CHROM:POS:REF:ALT
+    > fillcolor="#CFF7F7"];
+
+    build_df [label=<
+      <B>Build DataFrame</B><BR ALIGN="LEFT"/>
+      rows = samples<BR ALIGN="LEFT"/>
+      cols = variant IDs<BR ALIGN="LEFT"/>
+      values ∈ {0,1}
+    > fillcolor="#CFF7F7"];
+
+    pre0 [label=<
+      <B>_preprocess_binary_matrix()</B><BR ALIGN="LEFT"/>
+      optional: drop invariant cols<BR ALIGN="LEFT"/>
+      optional: min_minor_count filter
+    > fillcolor="#FFE0F0"];
+
+    compactQ [label="use_integer_variant_ids?" shape=diamond fillcolor="#EDEDED"];
+    compactY [label="rename → v0,v1,... + save lookup" fillcolor="#EDEDED"];
+    compactN [label="keep full variant IDs" fillcolor="#EDEDED"];
+
+    outQ [label="output_dir provided?" shape=diamond fillcolor="#FFE7E0"];
+    write_all [label=<
+      <B>_write_all_artifacts()</B><BR ALIGN="LEFT"/>
+      • SNP table / context files<BR ALIGN="LEFT"/>
+      • alleles.fasta + binary.fasta<BR ALIGN="LEFT"/>
+      • filtered.tsv (+ optional derivatives)<BR ALIGN="LEFT"/>
+      • matrices/*<BR ALIGN="LEFT"/>
+      • config snapshot
+    > fillcolor="#FFD6C9"];
+
+    dl_return [label="Return binary DataFrame\n(samples × variants, 0/1)" shape=ellipse fillcolor="#D7F7D7"];
+
+    dl_route -> dl_dir [label="if directory"];
+    dl_dir -> dl_par;
+    dl_par -> iter0 [label="for each sample VCF"];
+    iter0 -> gate_snp;
+    gate_snp -> discard [label="no" style=dashed color="gray50"];
+    gate_snp -> gate_info [label="yes"];
+    gate_info -> discard [label="no" style=dashed color="gray50"];
+    gate_info -> choose0 [label="yes"];
+    choose0 -> store0;
+    store0 -> merge_calls [label="all samples done"];
+    merge_calls -> bial_cons;
+    bial_cons -> pres [label="ok"];
+    pres -> sort_sites [label="kept"];
+    pres -> discard [label="none left" style=dashed color="gray50"];
+    sort_sites -> refline -> alleles -> baseQ;
+    baseQ -> base_ref [label="Y"];
+    baseQ -> base_mode [label="mode"];
+    base_ref -> encode;
+    base_mode -> encode;
+    encode -> varids -> build_df -> pre0;
+    pre0 -> compactQ;
+    compactQ -> compactY [label="yes"];
+    compactQ -> compactN [label="no"];
+    compactY -> outQ;
+    compactN -> outQ;
+    outQ -> write_all [label="yes"];
+    outQ -> dl_return [label="no"];
+    write_all -> dl_return;
+
+    dl_single [label=<
+      <B>Single VCF input</B><BR ALIGN="LEFT"/>
+      Reuse iter_sample_calls() → encode pipeline
+    > fillcolor="#FFF1C9"];
+
+    dl_route -> dl_single [label="if .vcf/.vcf.gz"];
+    dl_single -> iter0;
+
+    mat0 [label=<
+      <B>CSV/TSV matrix mode</B><BR ALIGN="LEFT"/>
+      Load sample × feature matrix as-is<BR ALIGN="LEFT"/>
+      assumes already numeric / binary
+    >];
+
+    dl_route -> mat0 [label="if .csv/.tsv"];
+
+    meta0 [label=<
+      <B>load_metadata(meta_path)</B><BR ALIGN="LEFT"/>
+      Read CSV/TSV<BR ALIGN="LEFT"/>
+      Index = sample column<BR ALIGN="LEFT"/>
+      normalize IDs / labels
+    > fillcolor="#e9fff2"];
+
+    km0 [label=<
+      <B>load_known_markers(known_markers_path)</B><BR ALIGN="LEFT"/>
+      Accept .txt OR .csv/.tsv<BR ALIGN="LEFT"/>
+      normalize marker list
+    > fillcolor="#e9fff2"];
+
+    np_run -> dl_route;
+    dl_route -> meta0 [style=dashed, label="if --meta"];
+    dl_route -> km0   [style=dashed, label="if --known_markers"];
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // STAGE 2 — CENTRAL FEATURE FILTERING
+  // ─────────────────────────────────────────────────────────────
+  subgraph cluster_filter {
+    label="Stage 2 — Central statistical feature filtering (statistical_validation_branch.py)";
+    labelloc="t";
+    fontsize=14;
+    style="rounded";
+    color="#d7e3f7";
+
+    filt_in [label=<
+      <B>Inputs to central filtering</B><BR ALIGN="LEFT"/>
+      • aligned genomic matrix<BR ALIGN="LEFT"/>
+      • labels = metadata[label_column]
+    >];
+
+    filt_gate [label=<
+      <B>Filtering enabled?</B><BR ALIGN="LEFT"/>
+      run_central_feature_filtering
+    > shape=diamond fillcolor="#fff2cc"];
+
+    filt_type [label=<
+      <B>Inspect phenotype structure</B><BR ALIGN="LEFT"/>
+      • binary or multi-class<BR ALIGN="LEFT"/>
+      • sufficient support per group
+    > fillcolor="#fff2cc"];
+
+    filt_test [label=<
+      <B>Per-feature association testing</B><BR ALIGN="LEFT"/>
+      • Fisher for sparse 2×2 tables<BR ALIGN="LEFT"/>
+      • χ² otherwise
+    >];
+
+    filt_effect [label=<
+      <B>Compute evidence summaries</B><BR ALIGN="LEFT"/>
+      • p-value<BR ALIGN="LEFT"/>
+      • mutual information<BR ALIGN="LEFT"/>
+      • Cramér’s V
+    >];
+
+    filt_mtest [label=<
+      <B>Multiple testing correction</B><BR ALIGN="LEFT"/>
+      FDR-BH
+    >];
+
+    filt_keep [label=<
+      <B>Retention rule</B><BR ALIGN="LEFT"/>
+      keep statistically supported features
+    > fillcolor="#fff2cc"];
+
+    filt_any [label="Any features retained?" shape=diamond fillcolor="#fff2cc"];
+
+    filt_fallback [label=<
+      <B>Fallback policy</B><BR ALIGN="LEFT"/>
+      warn clearly<BR ALIGN="LEFT"/>
+      optionally pass aligned matrix forward
+    > fillcolor="#ffe6e6"];
+
+    filt_matrix [label=<
+      <B>Construct centrally filtered matrix</B>
+    > fillcolor="#D7F7D7"];
+
+    filt_files [label=<
+      <B>Files written</B><BR ALIGN="LEFT"/>
+      • association results JSON<BR ALIGN="LEFT"/>
+      • multiple testing results JSON<BR ALIGN="LEFT"/>
+      • filtered matrix CSV / summary
+    > fillcolor="#e9fff2"];
+
+    dl_return -> filt_in [label="matrix"];
+    mat0 -> filt_in [label="matrix"];
+    meta0 -> filt_in [style=dashed, label="labels from meta[label_column]"];
+
+    filt_in -> filt_gate;
+    filt_gate -> filt_type [label="yes"];
+    filt_gate -> filt_matrix [label="no"];
+    filt_type -> filt_test -> filt_effect -> filt_mtest -> filt_keep -> filt_any;
+    filt_any -> filt_matrix [label="yes"];
+    filt_any -> filt_fallback [label="no"];
+    filt_fallback -> filt_matrix;
+    filt_matrix -> filt_files;
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // STAGE 3 — ML PROTOCOL + MODEL SELECTION
+  // ─────────────────────────────────────────────────────────────
+  subgraph cluster_mlproto {
+    label="Stage 3 — ML protocol matrix construction";
+    labelloc="t";
+    fontsize=14;
+    style="rounded";
+    color="#d7e3f7";
+
+    ml_in [label=<
+      <B>Inputs to ML protocol</B><BR ALIGN="LEFT"/>
+      • centrally filtered matrix<BR ALIGN="LEFT"/>
+      • aligned labels
+    >];
+
+    ml_build [label=<
+      <B>Build protocol dataframe</B><BR ALIGN="LEFT"/>
+      sample_id + label + feature columns
+    >];
+
+    ml_empty [label=<
+      <B>Remove overly empty feature columns</B><BR ALIGN="LEFT"/>
+      preserve identifiers + labels
+    > fillcolor="#fff2cc"];
+
+    ml_profile [label=<
+      <B>Profile matrix for model screening</B><BR ALIGN="LEFT"/>
+      inspect sparsity / dimensionality / class balance
+    >];
+
+    ml_sel_gate [label=<
+      <B>Model selector enabled?</B>
+    > shape=diamond fillcolor="#fff2cc"];
+
+    ml_selector [label=<
+      <B>Run model selector</B><BR ALIGN="LEFT"/>
+      encode features for probing<BR ALIGN="LEFT"/>
+      score candidate supported families<BR ALIGN="LEFT"/>
+      produce recommendation + ranked list
+    >];
+
+    ml_bypass [label=<
+      <B>Selector bypass</B><BR ALIGN="LEFT"/>
+      use requested / default algorithm
+    > fillcolor="#E9E9E9" fontcolor="gray35"];
+
+    ml_rank [label=<
+      <B>Resolve selected algorithm</B><BR ALIGN="LEFT"/>
+      normalize recommendation to supported downstream vocabulary
+    >];
+
+    ml_branch [label=<
+      <B>Build branch decision payload</B><BR ALIGN="LEFT"/>
+      • selected algorithm<BR ALIGN="LEFT"/>
+      • candidate algorithms<BR ALIGN="LEFT"/>
+      • dt_candidate?<BR ALIGN="LEFT"/>
+      • run_decision_tree_branch?
+    >];
+
+    ml_in -> ml_build -> ml_empty -> ml_profile -> ml_sel_gate;
+    ml_sel_gate -> ml_selector [label="yes"];
+    ml_sel_gate -> ml_bypass [label="no"];
+    ml_selector -> ml_rank;
+    ml_bypass -> ml_rank;
+    ml_rank -> ml_branch;
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // STAGE 4 — PREDICTIVE ML BRANCH
+  // ─────────────────────────────────────────────────────────────
+  subgraph cluster_pred {
+    label="Stage 4 — Predictive ML branch (supported algorithm family)";
+    labelloc="t";
+    fontsize=14;
+    style="rounded";
+    color="#d7e3f7";
+
+    pred_gate [label=<
+      <B>Run predictive ML branch?</B>
+    > shape=diamond fillcolor="#fff2cc"];
+
+    pred_entry [label=<
+      <B>Enter predictive branch</B><BR ALIGN="LEFT"/>
+      train chosen algorithm on centrally filtered matrix
+    >];
+
+    pred_family [label=<
+      <B>Selected family?</B>
+    > shape=diamond fillcolor="#fff2cc"];
+
+    pred_lr   [label="Logistic regression path" fillcolor="#E7F2FF"];
+    pred_svc  [label="Support vector classifier path" fillcolor="#E7F2FF"];
+    pred_rf   [label="Random forest path" fillcolor="#E7F2FF"];
+    pred_mlp  [label="MLP path" fillcolor="#E7F2FF"];
+    pred_mbcs [label="MBCS path" fillcolor="#E7F2FF"];
+    pred_dnl  [label="Delta nonlinear-linear path" fillcolor="#E7F2FF"];
+    pred_dtm  [label="Decision-tree model path" fillcolor="#E7F2FF"];
+
+    pred_train [label=<
+      <B>Train / evaluate model</B><BR ALIGN="LEFT"/>
+      • fit<BR ALIGN="LEFT"/>
+      • predict<BR ALIGN="LEFT"/>
+      • score
+    >];
+
+    pred_files [label=<
+      <B>Files written</B><BR ALIGN="LEFT"/>
+      • model artifact<BR ALIGN="LEFT"/>
+      • metrics / evaluation tables<BR ALIGN="LEFT"/>
+      • predictions
+    > fillcolor="#e9fff2"];
+
+    pred_done [label="Predictive branch complete" shape=ellipse fillcolor="#D7F7D7"];
+
+    ml_branch -> pred_gate;
+    pred_gate -> pred_entry [label="yes"];
+    pred_gate -> pred_done [label="no" style=dashed color="gray50"];
+
+    pred_entry -> pred_family;
+    pred_family -> pred_lr   [label="LR"];
+    pred_family -> pred_svc  [label="SVC"];
+    pred_family -> pred_rf   [label="RF"];
+    pred_family -> pred_mlp  [label="MLP"];
+    pred_family -> pred_mbcs [label="MBCS"];
+    pred_family -> pred_dnl  [label="DNL"];
+    pred_family -> pred_dtm  [label="DT"];
+
+    pred_lr -> pred_train;
+    pred_svc -> pred_train;
+    pred_rf -> pred_train;
+    pred_mlp -> pred_train;
+    pred_mbcs -> pred_train;
+    pred_dnl -> pred_train;
+    pred_dtm -> pred_train;
+
+    pred_train -> pred_files -> pred_done;
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // STAGE 5 — DT INTERPRETABILITY BRANCH
+  // ─────────────────────────────────────────────────────────────
+  subgraph cluster_dt {
+    label="Stage 5 — Decision-tree interpretability extension (decision_tree_branch.py)";
+    labelloc="t";
+    fontsize=14;
+    style="rounded";
+    color="#d7e3f7";
+
+    dt_gate [label=<
+      <B>Run DT branch?</B><BR ALIGN="LEFT"/>
+      true if selector marks DT as selected/candidate
+    > shape=diamond fillcolor="#fff2cc"];
+
+    dt_in [label=<
+      <B>Inputs to DT branch</B><BR ALIGN="LEFT"/>
+      • centrally filtered matrix<BR ALIGN="LEFT"/>
+      • labels<BR ALIGN="LEFT"/>
+      • internal prefilter skipped by default
+    >];
+
+    dt_pref [label=<
+      <B>Legacy internal prefilter requested?</B>
+    > shape=diamond fillcolor="#fff2cc"];
+
+    dt_pref_skip [label="Skip internal prefilter\ntrust central filtering" fillcolor="#E9E9E9" fontcolor="gray35"];
+    dt_pref_run [label=<
+      <B>Legacy compatibility mode</B><BR ALIGN="LEFT"/>
+      optional internal association filter
+    > fillcolor="#ffe6e6"];
+
+    dt_clean [label=<
+      <B>Prepare tree input</B><BR ALIGN="LEFT"/>
+      • NaN → 0<BR ALIGN="LEFT"/>
+      • numeric coercion<BR ALIGN="LEFT"/>
+      • drop invariant / near-monomorphic features
+    > fillcolor="#fff2cc"];
+
+    dt_tree [label=<
+      <B>Train decision tree</B><BR ALIGN="LEFT"/>
+      DecisionTreeClassifier(max_depth, min_samples_split, min_samples_leaf, random_state)<BR ALIGN="LEFT"/>
+      labels encoded with LabelEncoder
+    >];
+
+    dt_rule [label=<
+      <B>Tree hierarchy extraction</B><BR ALIGN="LEFT"/>
+      • discovered features<BR ALIGN="LEFT"/>
+      • root features<BR ALIGN="LEFT"/>
+      • branch features<BR ALIGN="LEFT"/>
+      • textual rules
+    >];
+
+    dt_conf [label=<
+      <B>Confidence scoring (post-tree)</B><BR ALIGN="LEFT"/>
+      • mutual information(feature, label)<BR ALIGN="LEFT"/>
+      • bootstrap stability<BR ALIGN="LEFT"/>
+      • Cramér’s V<BR ALIGN="LEFT"/>
+      weighted aggregate → confidence score
+    >];
+
+    dt_epi [label=<
+      <B>Epistatic interaction mining (post-tree)</B><BR ALIGN="LEFT"/>
+      traverse root→leaf paths<BR ALIGN="LEFT"/>
+      score conditional / pairwise feature pairs
+    >];
+
+    dt_files [label=<
+      <B>Files written</B><BR ALIGN="LEFT"/>
+      • decision_tree_rules.txt<BR ALIGN="LEFT"/>
+      • feature_confidence.json<BR ALIGN="LEFT"/>
+      • epistatic_interactions.json
+    > fillcolor="#e9fff2"];
+
+    dt_done [label="DT interpretability outputs" shape=ellipse fillcolor="#D7F7D7"];
+
+    ml_branch -> dt_gate;
+    dt_gate -> dt_in [label="yes"];
+    dt_gate -> dt_done [label="no" style=dashed color="gray50"];
+    dt_in -> dt_pref;
+    dt_pref -> dt_pref_skip [label="no"];
+    dt_pref -> dt_pref_run [label="yes"];
+    dt_pref_skip -> dt_clean;
+    dt_pref_run -> dt_clean;
+    dt_clean -> dt_tree -> dt_rule -> dt_conf -> dt_epi -> dt_files -> dt_done;
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // STAGE 6 — VALIDATION
+  // ─────────────────────────────────────────────────────────────
+  subgraph cluster_validation {
+    label="Stage 6 — Optional downstream validation (statistical_validation_branch.py)";
+    labelloc="t";
+    fontsize=14;
+    style="rounded";
+    color="#d7e3f7";
+
+    v_gate [label=<
+      <B>Validation enabled?</B><BR ALIGN="LEFT"/>
+      validate_statistics / validate_interactions
+    > shape=diamond fillcolor="#fff2cc"];
+
+    v_in [label=<
+      <B>Validation inputs</B><BR ALIGN="LEFT"/>
+      • selected features<BR ALIGN="LEFT"/>
+      • candidate interactions<BR ALIGN="LEFT"/>
+      • labels
+    >];
+
+    v_boot [label=<
+      <B>Bootstrap validation</B><BR ALIGN="LEFT"/>
+      stability / confidence support for selected features<BR ALIGN="LEFT"/>
+      Save bootstrap_results.json
+    >];
+
+    v_perm_gate [label=<
+      <B>Validate interactions?</B>
+    > shape=diamond fillcolor="#fff2cc"];
+
+    v_perm [label=<
+      <B>Interaction permutation tests</B><BR ALIGN="LEFT"/>
+      permutation_test_interactions(): permutation p-values for candidate pairs<BR ALIGN="LEFT"/>
+      Save interaction_permutation_results.json
+    >];
+
+    v_done [label="Validation complete" shape=ellipse fillcolor="#D7F7D7"];
+
+    dt_done -> v_gate;
+    v_gate -> v_in [label="yes"];
+    v_gate -> v_done [label="no"];
+    v_in -> v_boot -> v_perm_gate;
+    v_perm_gate -> v_perm [label="yes"];
+    v_perm_gate -> v_done [label="no"];
+    v_perm -> v_done;
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // STAGE 7 — FINAL SYNTHESIS
+  // ─────────────────────────────────────────────────────────────
+  subgraph cluster_report {
+    label="Stage 7 — Final synthesis and export";
+    labelloc="t";
+    fontsize=14;
+    style="rounded";
+    color="#c9d7f0";
+
+    out0 [label=<
+      <B>Assemble results dictionary</B><BR ALIGN="LEFT"/>
+      • config snapshot<BR ALIGN="LEFT"/>
+      • filtered-matrix outputs<BR ALIGN="LEFT"/>
+      • ML outputs<BR ALIGN="LEFT"/>
+      • DT discovery outputs<BR ALIGN="LEFT"/>
+      • validation outputs if executed
+    >];
+
+    graph0 [label=<
+      <B>Graph-ready synthesis</B><BR ALIGN="LEFT"/>
+      • ranked feature list<BR ALIGN="LEFT"/>
+      • interaction graph<BR ALIGN="LEFT"/>
+      • sample-feature network<BR ALIGN="LEFT"/>
+      • GNN-ready adjacency / sidecar exports
+    > fillcolor="#e9fff2"];
+
+    out1 [label=<
+      <B>Write final JSON / export package</B><BR ALIGN="LEFT"/>
+      ensure_dir(output_dir)
+    > fillcolor="#e9fff2"];
+  }
+
+  // wire final stage
+  filt_files -> out0 [style=dashed];
+  pred_files -> out0 [style=dashed];
+  dt_files -> out0 [style=dashed];
+  v_done -> out0 [style=dashed];
+  out0 -> graph0 -> out1;
 }

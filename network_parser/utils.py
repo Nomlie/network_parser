@@ -17,15 +17,18 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Union
 
-from .config import NetworkParserConfig
+try:
+    from .config import NetworkParserConfig
+except Exception:  # pragma: no cover - supports direct source-tree execution
+    from config import NetworkParserConfig  # type: ignore
 
 logger = logging.getLogger(__name__)
 
-# Optional dependency: PyYAML
 try:
     import yaml  # type: ignore
 except Exception:  # pragma: no cover
@@ -86,7 +89,29 @@ def save_json(data: Any, out_path: Union[str, Path], indent: int = 2) -> Path:
     logger.info("Wrote JSON: %s", out_path)
     return out_path
 
+def normalize_sample_id(
+    value: Any,
+    strip_library_suffix: bool = True,
+) -> str:
+    """
+    Normalize sample identifiers consistently across training, query, and
+    metadata-alignment stages.
 
+    This deliberately performs only conservative filename cleanup plus the
+    existing NetworkParser library-suffix cleanup. It should not rewrite
+    biologically meaningful sample names.
+    """
+    sample = str(value).strip()
+
+    if sample.lower() in {"", "nan", "none", "null", "na", "n/a"}:
+        return ""
+
+    sample = re.sub(r"(?i)(\.vcf\.gz|\.vcf|\.bcf\.gz|\.bcf|\.gz)$", "", sample)
+
+    if strip_library_suffix:
+        sample = re.sub(r"(?i)_library[0-9]+$", "", sample)
+
+    return sample
 # ──────────────────────────────────────────────────────────────
 # Config handling
 # ──────────────────────────────────────────────────────────────

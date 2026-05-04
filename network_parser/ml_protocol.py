@@ -492,7 +492,7 @@ class MLProtocolRunner:
         requested_algorithm: Optional[str] = None,
     ) -> str:
         """
-        Resolve final algorithm to one supported by neural_network.py.
+        Resolve final algorithm to one supported by model_wrapper.py.
         """
         req = "auto" if requested_algorithm is None else str(requested_algorithm).strip()
         rec = str(selector_recommendation).strip()
@@ -555,14 +555,14 @@ class MLProtocolRunner:
         return payload
 
     # ------------------------------------------------------------------
-    # neural_network.py integration
+    # model_wrapper.py integration
     # ------------------------------------------------------------------
     def import_nn(self):
         try:
-            import network_parser.neural_network as NN
+            import network_parser.model_wrapper as NN
             return NN
         except Exception:
-            import neural_network as NN
+            import network_parser.model_wrapper as NN
             return NN
 
     def select_nn_model(self, NN: Any, algorithm: str, marker_style: str = "plain"):

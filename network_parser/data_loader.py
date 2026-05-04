@@ -1212,39 +1212,79 @@ class DataLoader:
             prep_stats["removed_invariant"],
             prep_stats["removed_low_minor_count"],
             prep_stats["features_after"],
-        )
-        if self.config is not None:
-            cfg_path = out / "dataloader_config.snapshot.json"
-            payload = asdict(self.config) if hasattr(self.config, "__dataclass_fields__") else vars(self.config)
-            with open(cfg_path, "w", encoding="utf-8") as f:
-                json.dump(payload, f, indent=2)
-            logger.info("DataLoader: wrote config snapshot %s", str(cfg_path))
-            
+        )    
+        retained_variant_ids_for_artifacts = df.columns.astype(str).tolist()
+
         lookup = None
         if self.use_integer_variant_ids:
             df, lookup = self._convert_to_integer_variant_ids(df)
-            logger.info("DataLoader: compacted variant IDs (v0..vN) and created lookup")
+            logger.info(
+                "DataLoader: compacted variant IDs and created lookup table."
+            )
+
         if output_dir:
             out = Path(output_dir)
-            logger.info(
-                "DataLoader: writing artifacts\n"
-                "output_dir=%s\n",
-                output_dir,
-            )
-            matrices_final_markers = self._write_all_artifacts(
-                out_root=out,
+            out.mkdir(parents=True, exist_ok=True)
+
+            if self.config is not None:
+                cfg_path = out / "dataloader_config.snapshot.json"
+                payload = (
+                    asdict(self.config)
+                    if hasattr(self.config, "__dataclass_fields__")
+                    else vars(self.config)
+                )
+                with open(cfg_path, "w", encoding="utf-8") as f:
+                    json.dump(payload, f, indent=2)
+                logger.info("DataLoader: wrote config snapshot %s", str(cfg_path))
+
+            (
+                artifact_kept_sites,
+                artifact_ordered_keys,
+                artifact_positions_1based,
+                artifact_ref_line,
+                artifact_sample_allele_strings,
+                artifact_ref_binary,
+                artifact_sample_binary_strings,
+            ) = self._filter_artifact_inputs_to_retained_features(
                 kept_sites=kept_sites,
                 ordered_keys=ordered_keys,
-                positions_1based=[p for _, p, _, _ in ordered_keys],
                 ref_line=ref_line,
                 sample_allele_strings=sample_allele_strings,
                 ref_binary=ref_binary,
                 sample_binary_strings=sample_binary_strings,
+                retained_variant_ids=retained_variant_ids_for_artifacts,
+            )
+
+            logger.info(
+                "DataLoader: writing artifacts\n"
+                "  output_dir=%s",
+                output_dir,
+            )
+
+            matrices_final_markers = self._write_all_artifacts(
+                out_root=out,
+                kept_sites=artifact_kept_sites,
+                ordered_keys=artifact_ordered_keys,
+                positions_1based=artifact_positions_1based,
+                ref_line=artifact_ref_line,
+                sample_allele_strings=artifact_sample_allele_strings,
+                ref_binary=artifact_ref_binary,
+                sample_binary_strings=artifact_sample_binary_strings,
                 ref_path=Path(ref_path) if ref_path else None,
                 integer_id_lookup=lookup,
             )
-            return df
-    
+
+            logger.info(
+                "DataLoader: artifact writing complete | matrices_final_markers=%s",
+                str(matrices_final_markers) if matrices_final_markers is not None else "n/a",
+            )
+
+        else:
+            logger.info(
+                "DataLoader: output_dir not provided; skipping artifact writing and returning in-memory matrix."
+            )
+
+        return df
     def _preprocess_binary_matrix(self, df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
         """
         Apply lightweight, non-statistical preprocessing to the binary matrix.
@@ -1317,7 +1357,93 @@ class DataLoader:
         }
 
         return df, stats
-    
+    def _filter_artifact_inputs_to_retained_features(
+        self,
+        *,
+        kept_sites: Dict[Tuple[str, int, str, str], int],
+        ordered_keys: List[Tuple[str, int, str, str]],
+        ref_line: str,
+        sample_allele_strings: Dict[str, str],
+        ref_binary: str,
+        sample_binary_strings: Dict[str, str],
+        retained_variant_ids: List[str],
+    ) -> Tuple[
+        Dict[Tuple[str, int, str, str], int],
+        List[Tuple[str, int, str, str]],
+        List[int],
+        str,
+        Dict[str, str],
+        str,
+        Dict[str, str],
+    ]:
+        """
+        Restrict artifact-writing inputs to the exact post-preprocessing feature set.
+
+        This keeps the returned DataFrame, FASTA artifacts, annotation tables, and
+        downstream matrices/* outputs synchronized after invariant and low-count
+        feature removal.
+        """
+        retained_set = set(str(x) for x in retained_variant_ids)
+
+        keep_indices: List[int] = []
+        filtered_ordered_keys: List[Tuple[str, int, str, str]] = []
+        filtered_kept_sites: Dict[Tuple[str, int, str, str], int] = {}
+
+        for idx, key in enumerate(ordered_keys):
+            chrom, pos, ref, alt = key
+            feature_id = f"{chrom}:{pos}:{ref}:{alt}"
+
+            if feature_id in retained_set:
+                keep_indices.append(idx)
+                filtered_ordered_keys.append(key)
+                filtered_kept_sites[key] = int(kept_sites[key])
+
+        if len(filtered_ordered_keys) != len(retained_set):
+            missing_n = len(retained_set) - len(filtered_ordered_keys)
+            raise ValueError(
+                "Artifact synchronization failed: post-preprocessing feature set "
+                f"does not match ordered VCF-derived feature keys. Missing={missing_n}. "
+                "Check feature ID construction before writing artifacts."
+            )
+
+        def _slice_string(seq: str) -> str:
+            return "".join(seq[i] for i in keep_indices)
+
+        filtered_ref_line = _slice_string(ref_line)
+        filtered_ref_binary = _slice_string(ref_binary)
+
+        filtered_sample_alleles = {
+            sample: _slice_string(seq)
+            for sample, seq in sample_allele_strings.items()
+        }
+
+        filtered_sample_binary = {
+            sample: _slice_string(seq)
+            for sample, seq in sample_binary_strings.items()
+        }
+
+        filtered_positions_1based = [
+            pos for _, pos, _, _ in filtered_ordered_keys
+        ]
+
+        logger.info(
+            "DataLoader: synchronized artifact inputs to post-preprocessing feature set\n"
+            "  retained_features=%d\n"
+            "  removed_from_artifact_inputs=%d\n"
+            "  purpose=prevent preprocessed-away markers from re-entering downstream matrices",
+            len(filtered_ordered_keys),
+            len(ordered_keys) - len(filtered_ordered_keys),
+        )
+
+        return (
+            filtered_kept_sites,
+            filtered_ordered_keys,
+            filtered_positions_1based,
+            filtered_ref_line,
+            filtered_sample_alleles,
+            filtered_ref_binary,
+            filtered_sample_binary,
+        )
     def _convert_to_integer_variant_ids(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, str]]:
         """Replace long variant IDs with compact IDs and return a lookup."""
         lookup: Dict[str, str] = {}
@@ -1435,8 +1561,9 @@ class DataLoader:
         )
         dt = time.perf_counter() - t
         logger.info(
-            "Artifacts: filtered.tsv done (%.2fs) kept_positions=%d context_ref=%s",
+            "Artifacts: filtered.tsv done (%.2fs) feature_rows=%d unique_positions=%d context_ref=%s",
             dt,
+            len(all_snp_rows),
             len(set(positions_1based)),
             "yes" if ref_path else "no",
         )
@@ -1701,14 +1828,20 @@ class DataLoader:
         # and can inflate downstream splits or interactions by acting as "singletons".
         # ─────────────────────────────────────────────
         logger.info(
-            "Applying minor-count filter:\n"
-            "  Skipped for matrices/* outputs\n"
-            "  Rationale: minor-count filtering was already applied during main matrix preprocessing"
+            "Applying minor-count sanity filter:\n"
+            "  Purpose: enforce low-count stability on the actual artifact matrix\n"
+            "  Note: this should remove nothing if DataLoader artifact synchronization worked correctly."
         )
 
-        mask_minor = [True] * len(binary_cols)
+        mask_minor = minor_count_filter(binary_cols, self.matrices_min_count)
         kept_minor = int(sum(mask_minor))
 
+        logger.info(
+            "Minor-count sanity filter result: kept=%d/%d (removed=%d)",
+            kept_minor,
+            len(binary_cols),
+            len(binary_cols) - kept_minor,
+        )
         logger.info(
             "Minor-count filter result: kept=%d/%d (removed=%d)",
             kept_minor,
@@ -1809,9 +1942,15 @@ class DataLoader:
                 self.matrices_repeat_number,
             )
 
+            annotation_for_grouping = (
+                annot_rows_12
+                if annotation_matches
+                else [{"Position": str(i + 1)} for i in range(len(binary_cols_12))]
+            )
+
             mask_group = group_and_reduce_by_pattern(
                 binary_cols_12,
-                annot_rows if annotation_matches else [{"Position": str(i + 1)} for i in range(len(binary_cols_12))],
+                annotation_for_grouping,
                 self.matrices_repeat_number,
             )
 

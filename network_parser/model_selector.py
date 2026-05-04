@@ -67,10 +67,29 @@ def _cluster_scores(X: np.ndarray, n_clusters: int) -> Dict[str, float]:
     return scores
 
 
-def _cv_score(estimator, X, y, cv_splits: int = 5) -> float:
+def _cv_score(
+    estimator,
+    X,
+    y,
+    cv_splits: int = 5,
+    scoring: str = "balanced_accuracy",
+) -> float:
+    """
+    Cross-validated probe score for model selection.
+
+    Uses balanced accuracy by default because AMR phenotype matrices are often
+    class-imbalanced. Also avoids nested parallel oversubscription by keeping
+    cross_val_score single-threaded here; model-level estimators can still use
+    their own configured parallelism.
+    """
     class_counts = Counter(y)
+
+    if not class_counts:
+        return float("nan")
+
     min_class_count = min(class_counts.values())
-    n_splits = min(cv_splits, max(2, min_class_count))
+    n_splits = min(cv_splits, min_class_count)
+
     if n_splits < 2:
         return float("nan")
 
@@ -84,13 +103,12 @@ def _cv_score(estimator, X, y, cv_splits: int = 5) -> float:
                 X,
                 y,
                 cv=cv,
-                scoring="accuracy",
-                n_jobs=-1,
+                scoring=scoring,
+                n_jobs=1,
             )
         return float(np.mean(scores))
     except Exception:
         return float("nan")
-
 
 def probe_models(X: np.ndarray, y: np.ndarray) -> Dict[str, float]:
     """
@@ -214,7 +232,7 @@ def recommend_classifier(X: np.ndarray, y: np.ndarray) -> Dict[str, Any]:
         np.isnan(delta_nonlinear) or delta_nonlinear < 0.03
     ):
         rec = "LR"
-        rationale.append("High linear probe accuracy with negligible nonlinear gain.")
+        rationale.append("High linear probe balanced accuracy with negligible nonlinear gain.")
     elif not np.isnan(delta_nonlinear) and (delta_nonlinear >= 0.05) and small_medium:
         if large_data and (not np.isnan(mlp_score)) and (mlp_score >= nonlinear_score - 0.01):
             rec = "MLP"

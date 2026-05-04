@@ -11,11 +11,11 @@
   "max_missing_fraction": 0.1,
   "min_spacing_bp": 10,
 
-  "min_sample_presence": 10,
+  "min_sample_presence": 100,
   "ancestral_allele": "Y",
 
   "remove_invariant": true,
-  "min_minor_count": 10,
+  "min_minor_count": 100,
 
   "matrices_min_count": 10,
   "matrices_repeat_number": 5,
