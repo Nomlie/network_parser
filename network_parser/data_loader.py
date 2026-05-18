@@ -42,7 +42,7 @@ import logging
 from collections import Counter, OrderedDict, defaultdict
 from dataclasses import asdict
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 from concurrent.futures import ProcessPoolExecutor
 from joblib import Parallel, delayed
 import pandas as pd
@@ -332,6 +332,55 @@ def load_reference_sequence(ref_path: Path) -> Optional[str]:
     return "".join(seqs).upper()
 
 
+def load_reference_sequences(ref_path: Path) -> Dict[str, str]:
+    """Load reference records as ``record_id -> sequence`` for context extraction.
+
+    This preserves contig/chromosome identity for raw-sequence query manifests.
+    The older ``load_reference_sequence`` helper concatenates records for legacy
+    behaviour, but selected-feature context should be extracted from the same
+    reference record named in the feature manifest whenever possible.
+    """
+    if not ref_path.exists():
+        return {}
+    if not HAVE_BIO:
+        raise RuntimeError("Biopython is required for reference sequence loading but is not available.")
+
+    lower = ref_path.name.lower()
+    formats: List[str] = []
+    if lower.endswith((".fa", ".fna", ".fasta", ".fas")):
+        formats = ["fasta"]
+    elif lower.endswith((".gb", ".gbk", ".gbff")):
+        formats = ["genbank"]
+    else:
+        formats = ["fasta", "genbank"]
+
+    records: Dict[str, str] = {}
+    for fmt in formats:
+        try:
+            parsed = list(SeqIO.parse(str(ref_path), fmt))
+        except Exception:
+            parsed = []
+        if not parsed:
+            continue
+
+        for rec in parsed:
+            seq = str(rec.seq).upper()
+            if not seq:
+                continue
+            keys = {str(rec.id), str(rec.name)}
+            description_first = str(rec.description).split()[0] if str(rec.description).strip() else ""
+            if description_first:
+                keys.add(description_first)
+            for key in keys:
+                key = key.strip()
+                if key and key not in records:
+                    records[key] = seq
+        if records:
+            return records
+
+    return records
+
+
 def context_around(pos_1based: int, genome: str, flank: int = 40) -> str:
     """Extract circular ±flank context around a 1-based position."""
     n = len(genome)
@@ -408,11 +457,15 @@ def annotate_snps_genbank(
                 ref_aa = str(Seq(ref_codon).translate())
                 alt_aa = str(Seq(mut_codon).translate())
 
+                feature_id = f"{chrom}:{pos}:{ref_nt}:{alt_nt}"
                 rows.append(
                     {
+                        "Feature_ID": feature_id,
                         "Position": str(pos),
                         "Count": str(count),
                         "Sequence": chrom,
+                        "Ref_allele": ref_nt.upper(),
+                        "Alt_allele": alt_nt.upper(),
                         "Region_type": "coding",
                         "Relative_pos": str(rel_pos + 1),
                         "Codon_number": str(codon_number),
@@ -437,11 +490,15 @@ def annotate_snps_genbank(
                 label = ". | . | . | [.]"
                 rel = -1
 
+            feature_id = f"{chrom}:{pos}:{ref_nt}:{alt_nt}"
             rows.append(
                 {
+                    "Feature_ID": feature_id,
                     "Position": str(pos),
                     "Count": str(count),
                     "Sequence": chrom,
+                    "Ref_allele": ref_nt.upper(),
+                    "Alt_allele": alt_nt.upper(),
                     "Region_type": "non-coding",
                     "Relative_pos": str(rel),
                     "Codon_number": "0",
@@ -1519,10 +1576,22 @@ class DataLoader:
         # 1) vcf_counts/all_snp.txt
         t = time.perf_counter()
         all_snp_path = vcf_counts_dir / "all_snp.txt"
+        baseline_metadata: Dict[str, Dict[str, str]] = {}
+        for i, (chrom, pos, ref_nt, alt_nt) in enumerate(ordered_keys):
+            feature_id = f"{chrom}:{pos}:{ref_nt}:{alt_nt}"
+            ref_binary_value = ref_binary[i] if i < len(ref_binary) else "0"
+            baseline_nt = ref_nt if str(ref_binary_value) == "0" else alt_nt
+            baseline_metadata[feature_id] = {
+                "Baseline_allele": str(baseline_nt).upper(),
+                "Binary_reference_value": str(ref_binary_value),
+                "Encoding": "1_if_allele_differs_from_baseline",
+            }
+
         all_snp_rows, all_snp_header = self._write_all_snp_table(
             path=all_snp_path,
             kept_sites=kept_sites,
             ref_path=ref_path,
+            baseline_metadata=baseline_metadata,
         )
         dt = time.perf_counter() - t
         n_rows = len(all_snp_rows) if all_snp_rows is not None else -1
@@ -1597,16 +1666,23 @@ class DataLoader:
     def _write_all_snp_table(
         self,
         path: Path,
-        kept_sites: Dict[Tuple[str, int], Tuple[int, str, str]],
+        kept_sites: Dict[Tuple[str, int, str, str], int],
         ref_path: Optional[Path],
+        baseline_metadata: Optional[Dict[str, Dict[str, str]]] = None,
     ) -> Tuple[List[Dict[str, str]], List[str]]:
         """Write the SNP summary table, with annotation columns if GenBank is provided."""
         path.parent.mkdir(parents=True, exist_ok=True)
 
         header_annot = [
+            "Feature_ID",
             "Position",
             "Count",
             "Sequence",
+            "Ref_allele",
+            "Alt_allele",
+            "Baseline_allele",
+            "Binary_reference_value",
+            "Encoding",
             "Region_type",
             "Relative_pos",
             "Codon_number",
@@ -1624,6 +1700,14 @@ class DataLoader:
 
         if do_annotate:
             rows = annotate_snps_genbank(kept_sites, ref_path)  # type: ignore[arg-type]
+            for row in rows:
+                feature_id = str(row.get("Feature_ID", ""))
+                if baseline_metadata and feature_id in baseline_metadata:
+                    row.update(baseline_metadata[feature_id])
+                else:
+                    row.setdefault("Baseline_allele", row.get("Ref_allele", ""))
+                    row.setdefault("Binary_reference_value", "0")
+                    row.setdefault("Encoding", "1_if_allele_differs_from_baseline")
             with open(path, "w", encoding="utf-8", newline="") as out:
                 w = csv.DictWriter(out, fieldnames=header_annot, delimiter="\t", lineterminator="\n")
                 w.writeheader()
@@ -1631,13 +1715,39 @@ class DataLoader:
                     w.writerow(r)
             return rows, header_annot
 
-      # Minimal output (Position, Count) still matches the script behavior when no ref is given.
-        header_min = ["Position", "Count"]
+      # Minimal output keeps enough marker metadata for query-time raw-sequence encoding.
+        header_min = [
+            "Feature_ID",
+            "Position",
+            "Count",
+            "Sequence",
+            "Ref_allele",
+            "Alt_allele",
+            "Baseline_allele",
+            "Binary_reference_value",
+            "Encoding",
+            "Nucleotide_change",
+        ]
         rows_min: List[Dict[str, str]] = []
 
         for (chrom, pos, ref_nt, alt_nt) in sorted(kept_sites.keys(), key=lambda x: (x[0], x[1], x[2], x[3])):
             count = kept_sites[(chrom, pos, ref_nt, alt_nt)]
-            rows_min.append({"Position": str(pos), "Count": str(count)})
+            feature_id = f"{chrom}:{pos}:{ref_nt}:{alt_nt}"
+            baseline_row = baseline_metadata.get(feature_id, {}) if baseline_metadata else {}
+            rows_min.append(
+                {
+                    "Feature_ID": feature_id,
+                    "Position": str(pos),
+                    "Count": str(count),
+                    "Sequence": chrom,
+                    "Ref_allele": ref_nt.upper(),
+                    "Alt_allele": alt_nt.upper(),
+                    "Baseline_allele": baseline_row.get("Baseline_allele", ref_nt.upper()),
+                    "Binary_reference_value": baseline_row.get("Binary_reference_value", "0"),
+                    "Encoding": baseline_row.get("Encoding", "1_if_allele_differs_from_baseline"),
+                    "Nucleotide_change": f"{ref_nt}|{alt_nt}",
+                }
+            )
 
         with open(path, "w", encoding="utf-8", newline="") as out:
             w = csv.DictWriter(out, fieldnames=header_min, delimiter="\t", lineterminator="\n")
@@ -1658,21 +1768,27 @@ class DataLoader:
         """Write a filtered copy of the SNP table, optionally appending Context_±40."""
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # If we can load reference sequence, we append context column.
-        ref_seq: Optional[str] = None
+        # If we can load reference sequence records, append context columns.
+        # For multi-contig references, context is extracted from the record named
+        # in the manifest Sequence column. If no matching record is found, the
+        # legacy concatenated-reference fallback is used and explicitly recorded.
+        ref_records: Dict[str, str] = {}
+        ref_seq_fallback: Optional[str] = None
         if ref_path and ref_path.exists():
             lower = ref_path.name.lower()
             if lower.endswith((".fa", ".fna", ".fasta", ".fas", ".gb", ".gbk", ".gbff")):
                 try:
-                    ref_seq = load_reference_sequence(ref_path)
+                    ref_records = load_reference_sequences(ref_path)
+                    ref_seq_fallback = "".join(ref_records.values()).upper() if ref_records else load_reference_sequence(ref_path)
                 except Exception as e:
                     logger.warning(f"Reference loading failed; context column skipped. Reason: {e}")
-                    ref_seq = None
+                    ref_records = {}
+                    ref_seq_fallback = None
 
         out_header = list(input_header)
-        add_context = ref_seq is not None and "Position" in input_header
+        add_context = ref_seq_fallback is not None and "Position" in input_header
         if add_context:
-            out_header.append("Context_±40")
+            out_header.extend(["Context_±40", "Context_flank", "Context_center_offset", "Context_reference_record"])
 
         with open(output_path, "w", encoding="utf-8", newline="") as out:
             w = csv.writer(out, delimiter="\t", lineterminator="\n")
@@ -1687,8 +1803,19 @@ class DataLoader:
                     continue
 
                 row_vals = [str(r.get(col, "")) for col in input_header]
-                if add_context and ref_seq is not None:
-                    row_vals.append(context_around(pos, ref_seq, flank=40))
+                if add_context and ref_seq_fallback is not None:
+                    flank = 40
+                    seq_name = str(r.get("Sequence", "")).strip()
+                    ref_seq_for_row = ref_records.get(seq_name) if seq_name else None
+                    context_source = seq_name if ref_seq_for_row is not None else "concatenated_reference_fallback"
+                    if ref_seq_for_row is None:
+                        ref_seq_for_row = ref_seq_fallback
+                    row_vals.extend([
+                        context_around(pos, ref_seq_for_row, flank=flank),
+                        str(flank),
+                        str(flank),
+                        context_source,
+                    ])
                 w.writerow(row_vals)
 
     
@@ -2016,7 +2143,13 @@ class DataLoader:
         _, binary_cols_f = transpose_rows_to_columns(binary_filt)
 
         if annotation_matches:
-            positions_f = [(r.get("Position", "") or "").strip() for r in annot_filt]
+            # Carry the full marker identity into the matrix columns.  Position-only
+            # columns are ambiguous once alternate alleles and query-time raw
+            # sequence encoding are supported.
+            positions_f = [
+                (r.get("Feature_ID") or r.get("Position", "") or "").strip()
+                for r in annot_filt
+            ]
         else:
             positions_f = [str(i + 1) for i in range(len(allele_cols_f))]
 
@@ -2028,6 +2161,7 @@ class DataLoader:
         out_alleles_fa = out_dir / f"{base}_alleles.fasta"
         out_binary_fa = out_dir / f"{base}_binary.fasta"
         out_filtered_tsv = out_dir / f"{base}_filtered.tsv"
+        out_feature_manifest_tsv = out_dir / f"{base}_feature_manifest.tsv"
 
         write_matrix_tsv(out_alleles_tsv, genomes_order, positions_f, allele_cols_f)
         write_matrix_tsv(out_binary_tsv, genomes_order, positions_f, binary_cols_f)
@@ -2036,19 +2170,20 @@ class DataLoader:
 
         if annotation_matches and annot_header:
             write_annotation_tsv(out_filtered_tsv, annot_filt, annot_header)
+            write_annotation_tsv(out_feature_manifest_tsv, annot_filt, annot_header)
         else:
-            out_filtered_tsv.write_text(
-                annotation_tsv.read_text(encoding="utf-8", errors="replace"),
-                encoding="utf-8",
-            )
+            copied_annotation = annotation_tsv.read_text(encoding="utf-8", errors="replace")
+            out_filtered_tsv.write_text(copied_annotation, encoding="utf-8")
+            out_feature_manifest_tsv.write_text(copied_annotation, encoding="utf-8")
 
         logger.info(
-            "Matrices/*: wrote outputs: %s | %s | %s | %s | %s",
+            "Matrices/*: wrote outputs: %s | %s | %s | %s | %s | %s",
             str(out_alleles_tsv),
             str(out_binary_tsv),
             str(out_alleles_fa),
             str(out_binary_fa),
             str(out_filtered_tsv),
+            str(out_feature_manifest_tsv),
         )
         logger.info("Matrices/*: done")
         return kept_final

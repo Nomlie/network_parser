@@ -27,3 +27,43 @@ git remote set-url origin https://github.com/Nomlie/network_parser.git
 --label Lineage \
 --ref_fasta /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/VCF_2_Matrix/ref/H37Rv.gbk \
 --output_dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/LineageBalanced
+
+python -m network_parser.cli train-two-level \
+--genomic  /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/ALL_Lineage_Balanced \
+--meta /Users/nmfuphicsir.co.za/Documents/data/AFRO_TB/AFRO_dataset_meta.csv \
+--level1_label Lineage \
+--level2_label Pheno \
+--central_feature_filter_method chi2_fdr \
+--ref_fasta /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/VCF_2_Matrix/ref/H37Rv.gbk \
+--output_dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_Lineage_Balanced/chi2_fdr \
+--n_jobs 6
+
+python -m network_parser.cli train-two-level \
+--genomic  /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/ALL_Lineage_Balanced \
+--meta /Users/nmfuphicsir.co.za/Documents/data/AFRO_TB/AFRO_dataset_meta.csv \
+--level1_label Lineage \
+--level2_label Pheno \
+--central_feature_filter_method chi2_fdr \
+--ref_fasta /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/VCF_2_Matrix/ref/H37Rv.gbk \
+--output_dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_Lineage_Balanced/chi2_fdr \
+--n_jobs 6
+
+python -m network_parser.cli train-two-level \
+--genomic  /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/ALL_Lineage_Balanced \
+--meta /Users/nmfuphicsir.co.za/Documents/data/AFRO_TB/AFRO_dataset_meta.csv \
+--level1_label Lineage \
+--level2_label Pheno \
+--central_feature_filter_method chi2_perm_fdr  \
+--ref_fasta /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/VCF_2_Matrix/ref/H37Rv.gbk \
+--output_dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_Lineage_Balanced/chi2_perm_fdr  \
+--n_jobs 6
+
+python -m network_parser.cli train-two-level \
+--genomic  /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/ALL_Lineage_Balanced \
+--meta /Users/nmfuphicsir.co.za/Documents/data/AFRO_TB/AFRO_dataset_meta.csv \
+--level1_label Lineage \
+--level2_label Pheno \
+--central_feature_filter_method rf_fdr  \
+--ref_fasta /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/VCF_2_Matrix/ref/H37Rv.gbk \
+--output_dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_Lineage_Balanced/rf_fdr  \
+--n_jobs 6

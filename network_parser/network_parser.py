@@ -267,11 +267,14 @@ class NetworkParser:
 
         Preferred current behaviour
         ---------------------------
-        If config.run_rf_fdr_feature_selection is True:
-            Run RF-FDR feature selection.
+        config.central_feature_filter_method controls the central filter:
+            - rf_fdr
+            - chi2_fdr
+            - fisher_fdr
+            - chi2_perm_fdr
 
-        Otherwise:
-            Fall back to classical association testing with FDR correction.
+        The legacy run_rf_fdr_feature_selection flag is still honoured when
+        central_feature_filter_method="auto".
 
         This stage is PRE-ML / PRE-tree.
 
@@ -309,11 +312,23 @@ class NetworkParser:
             int(X.shape[1]),
         )
 
-        use_rf_fdr = bool(
-            getattr(self.config, "run_rf_fdr_feature_selection", False)
-        )
+        filter_method = str(
+            getattr(
+                self.config,
+                "resolved_central_feature_filter_method",
+                getattr(self.config, "central_feature_filter_method", "auto"),
+            )
+        ).lower()
 
-        if use_rf_fdr:
+        if filter_method == "auto":
+            if bool(getattr(self.config, "run_rf_fdr_feature_selection", False)):
+                filter_method = "rf_fdr"
+            elif str(getattr(self.config, "statistical_test", "chi2")).lower() == "fisher":
+                filter_method = "fisher_fdr"
+            else:
+                filter_method = "chi2_fdr"
+
+        if filter_method == "rf_fdr":
             logger.info(
                 "Central feature filtering method: RF-FDR feature selection."
             )
@@ -346,8 +361,45 @@ class NetworkParser:
 
             return X_filtered, summary
 
+        if filter_method == "chi2_perm_fdr":
+            logger.info(
+                "Central feature filtering method: chi-square permutation testing + FDR correction."
+            )
+
+            perm_result = self.validator.chi2_permutation_feature_selection(
+                genomic_df=X,
+                labels=y,
+                output_dir=str(stats_dir),
+                stage_name="central_feature_filtering",
+            )
+
+            X_filtered = perm_result["filtered_matrix"].copy()
+            summary = dict(perm_result.get("summary", {}))
+            summary.setdefault("method", "chi2_perm_fdr")
+            summary.setdefault("status", "success")
+            summary.setdefault("artifacts", {})
+            summary["artifacts"].setdefault("filter_dir", str(stats_dir))
+            summary["artifacts"].setdefault("filtered_matrix", str(stats_dir / "filtered_matrix.csv"))
+
+            logger.info(
+                "Central chi2 permutation-FDR filtering complete | retained_features=%d / %d",
+                int(X_filtered.shape[1]),
+                int(X.shape[1]),
+            )
+
+            return X_filtered, summary
+
+        if filter_method not in {"chi2_fdr", "fisher_fdr"}:
+            raise ValueError(
+                "central_feature_filter_method must resolve to one of: "
+                "'rf_fdr', 'chi2_fdr', 'fisher_fdr', or 'chi2_perm_fdr'"
+            )
+
+        self.config.statistical_test = "fisher" if filter_method == "fisher_fdr" else "chi2"
+
         logger.info(
-            "Central feature filtering method: association testing + multiple testing correction."
+            "Central feature filtering method: %s association testing + multiple testing correction.",
+            self.config.statistical_test,
         )
 
         assoc = self.validator.association_tests(
@@ -407,7 +459,7 @@ class NetworkParser:
         X_filtered.to_csv(filtered_matrix_path)
 
         summary = {
-            "method": "association_fdr",
+            "method": filter_method,
             "status": "success",
             "input_features": int(X.shape[1]),
             "tested_features": int(len(assoc)),

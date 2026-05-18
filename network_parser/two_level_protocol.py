@@ -13,15 +13,17 @@ Train and apply a hierarchical genomic classifier:
 
 The protocol keeps the NetworkParser architecture explicit:
 
-    input -> DataLoader/preprocessing -> RF-FDR feature filtering -> level-1 model
-                                              -> level-specific RF-FDR filtering -> level-2 models
+    input -> DataLoader/preprocessing -> configurable central feature filtering -> level-1 model
+                                              -> level-specific configurable filtering -> level-2 models
                                               -> optional global level-2 fallback model
 
 Important
 ---------
-RF-FDR is used here as a central feature-selection stage. It is not used as the
-post-tree confidence layer. Decision-tree interpretability can still be run
-elsewhere on the filtered matrices when required.
+The configured central feature-selection method is used here. RF-FDR remains the
+default, but chi-square/Fisher with multiple-testing correction or chi-square
+permutation-FDR can be selected for faster statistically defensible screening. This is not the post-tree
+confidence layer. Decision-tree interpretability can still be run elsewhere on
+the filtered matrices when required.
 """
 
 from __future__ import annotations
@@ -46,13 +48,18 @@ try:
     from network_parser.data_loader import DataLoader
     from network_parser.ml_protocol import MLProtocolRunner
     from network_parser.network_parser import normalize_labels
+    from network_parser.statistical_validation_branch import StatisticalValidatorBranch
 except Exception:  # pragma: no cover - supports running from source tree
     from config import NetworkParserConfig  # type: ignore
     from data_loader import DataLoader  # type: ignore
     from ml_protocol import MLProtocolRunner  # type: ignore
     from network_parser import normalize_labels  # type: ignore
+    from statistical_validation_branch import StatisticalValidatorBranch  # type: ignore
 
-from network_parser.feature_selection import rf_fdr_feature_selection
+try:
+    from network_parser.feature_selection import rf_fdr_feature_selection
+except Exception:  # pragma: no cover - supports direct source-tree execution
+    from feature_selection import rf_fdr_feature_selection  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +77,149 @@ def write_json(payload: Dict[str, Any], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2, default=json_default)
+
+def resolve_central_filter_method(config: NetworkParserConfig) -> str:
+    """Resolve the configured central feature filter with legacy compatibility."""
+    method = str(
+        getattr(
+            config,
+            "resolved_central_feature_filter_method",
+            getattr(config, "central_feature_filter_method", "auto"),
+        )
+    ).lower()
+
+    if method == "auto":
+        if bool(getattr(config, "run_rf_fdr_feature_selection", False)):
+            return "rf_fdr"
+        if str(getattr(config, "statistical_test", "chi2")).lower() == "fisher":
+            return "fisher_fdr"
+        return "chi2_fdr"
+
+    if method not in {"rf_fdr", "chi2_fdr", "fisher_fdr", "chi2_perm_fdr"}:
+        raise ValueError(
+            "central_feature_filter_method must resolve to one of: "
+            "'rf_fdr', 'chi2_fdr', 'fisher_fdr', or 'chi2_perm_fdr'"
+        )
+
+    return method
+
+
+def run_configured_feature_filter(
+    X: pd.DataFrame,
+    y: pd.Series,
+    output_base_dir: Path,
+    config: NetworkParserConfig,
+    stage_name: str,
+) -> Dict[str, Any]:
+    """Run RF-FDR or association-FDR according to the central filter config."""
+    method = resolve_central_filter_method(config)
+    output_base_dir = Path(output_base_dir)
+
+    if method == "rf_fdr":
+        return rf_fdr_feature_selection(
+            X=X,
+            y=y,
+            output_dir=output_base_dir / "rf_fdr_filter",
+            config=config,
+            stage_name=stage_name,
+        )
+
+    local_config = config
+    local_config.statistical_test = "fisher" if method == "fisher_fdr" else "chi2"
+
+    filter_dir = output_base_dir / f"{method}_filter"
+    filter_dir.mkdir(parents=True, exist_ok=True)
+
+    validator = StatisticalValidatorBranch(local_config)
+
+    if method == "chi2_perm_fdr":
+        return validator.chi2_permutation_feature_selection(
+            genomic_df=X,
+            labels=y,
+            output_dir=str(filter_dir),
+            stage_name=stage_name,
+        )
+    assoc = validator.association_tests(
+        data=X,
+        labels=y,
+        output_dir=str(filter_dir),
+    )
+    corrected = validator.multiple_testing_correction(
+        test_results=assoc,
+        output_dir=str(filter_dir),
+    )
+
+    retained_features = [
+        feature
+        for feature, result in corrected.items()
+        if bool(result.get("significant", False)) and feature in X.columns
+    ]
+
+    fallback_strategy = str(
+        getattr(config, "feature_filter_fallback_strategy", "stop")
+    ).lower()
+    used_fallback = False
+
+    if retained_features:
+        X_filtered = X.loc[:, retained_features].copy()
+    elif fallback_strategy == "stop":
+        raise ValueError(
+            f"{stage_name}: {method} retained no significant genomic features. "
+            "Stopping is statistically defensible for publication-grade runs. "
+            "For exploratory smoke testing only, set "
+            "feature_filter_fallback_strategy='unfiltered'."
+        )
+    elif fallback_strategy == "unfiltered":
+        logger.warning(
+            "%s %s retained no significant genomic features. Using the aligned "
+            "matrix as an exploratory fallback.",
+            stage_name,
+            method,
+        )
+        X_filtered = X.copy()
+        retained_features = list(X_filtered.columns)
+        used_fallback = True
+    else:
+        raise ValueError(
+            "feature_filter_fallback_strategy must be one of: 'stop' or 'unfiltered'"
+        )
+
+    filtered_matrix_path = filter_dir / "filtered_matrix.csv"
+    X_filtered.to_csv(filtered_matrix_path)
+
+    summary = {
+        "method": method,
+        "status": "success",
+        "stage_name": stage_name,
+        "input_features": int(X.shape[1]),
+        "tested_features": int(len(assoc)),
+        "significant_features": int(
+            sum(1 for result in corrected.values() if bool(result.get("significant", False)))
+        ),
+        "retained_features": int(X_filtered.shape[1]),
+        "fallback_strategy": fallback_strategy,
+        "used_fallback_unfiltered_matrix": bool(used_fallback),
+        "retention_fraction": float(X_filtered.shape[1] / max(1, X.shape[1])),
+        "retained_feature_names": list(X_filtered.columns),
+        "artifacts": {
+            "filter_dir": str(filter_dir),
+            "association_json": str(filter_dir / "chi_squared_results.json"),
+            "multiple_testing_json": str(filter_dir / "multiple_testing_results.json"),
+            "filtered_matrix": str(filtered_matrix_path),
+            "summary_json": str(filter_dir / "feature_filtering_summary.json"),
+        },
+    }
+
+    write_json(summary, filter_dir / "feature_filtering_summary.json")
+
+    return {
+        "method": method,
+        "summary": summary,
+        "association": assoc,
+        "multiple_testing": corrected,
+        "retained_features": list(X_filtered.columns),
+        "filtered_matrix": X_filtered,
+    }
 
 def load_artifact_filtered_binary_matrix(
     artifact_root: Path,
@@ -179,6 +329,91 @@ def load_artifact_filtered_binary_matrix(
     )
 
     return X_artifact
+
+def find_feature_manifest(artifact_root: Path) -> Optional[Path]:
+    """
+    Locate the final DataLoader feature manifest synchronized to the artifact-filtered
+    binary matrix used by model training.
+    """
+    artifact_root = Path(artifact_root)
+    candidates = sorted(artifact_root.rglob("*_feature_manifest.tsv"))
+    if not candidates:
+        candidates = sorted(artifact_root.rglob("*_filtered.tsv"))
+
+    for candidate in candidates:
+        try:
+            header = pd.read_csv(candidate, sep="\t", nrows=0).columns.astype(str).tolist()
+        except Exception:
+            continue
+        if "Feature_ID" in header or "Position" in header:
+            return candidate
+    return None
+
+
+def load_feature_manifest(manifest_path: Optional[Path]) -> Optional[pd.DataFrame]:
+    if manifest_path is None:
+        return None
+    path = Path(manifest_path)
+    if not path.exists():
+        return None
+    df = pd.read_csv(path, sep="\t", dtype=str).fillna("")
+    if "Feature_ID" not in df.columns and "Position" in df.columns:
+        df["Feature_ID"] = df["Position"].astype(str)
+    return df
+
+
+def write_selected_feature_manifest(
+    *,
+    features: List[str],
+    source_manifest: Optional[pd.DataFrame],
+    output_path: Path,
+) -> Dict[str, Any]:
+    """Write an ordered manifest for the exact features retained by a model."""
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    summary: Dict[str, Any] = {
+        "manifest_file": str(output_path),
+        "requested_features": int(len(features)),
+        "features_with_metadata": 0,
+        "features_missing_metadata": int(len(features)),
+        "status": "missing_source_manifest",
+    }
+
+    if source_manifest is None or source_manifest.empty:
+        pd.DataFrame({"Feature_ID": [str(f) for f in features]}).to_csv(output_path, sep="\t", index=False)
+        return summary
+
+    manifest = source_manifest.copy()
+    feature_col = "Feature_ID" if "Feature_ID" in manifest.columns else "Position"
+    manifest[feature_col] = manifest[feature_col].astype(str)
+    manifest = manifest.drop_duplicates(subset=[feature_col], keep="first")
+    lookup = manifest.set_index(feature_col, drop=False)
+
+    ordered_rows: List[Dict[str, Any]] = []
+    missing: List[str] = []
+    for feature in [str(f) for f in features]:
+        if feature in lookup.index:
+            row = lookup.loc[feature].to_dict()
+            row["Feature_ID"] = str(row.get("Feature_ID") or feature)
+            ordered_rows.append(row)
+        else:
+            ordered_rows.append({"Feature_ID": feature})
+            missing.append(feature)
+
+    selected = pd.DataFrame(ordered_rows)
+    selected.to_csv(output_path, sep="\t", index=False)
+
+    summary.update(
+        {
+            "features_with_metadata": int(len(features) - len(missing)),
+            "features_missing_metadata": int(len(missing)),
+            "missing_feature_ids": missing,
+            "status": "success" if not missing else "partial",
+        }
+    )
+    return summary
+
 def json_default(obj: Any) -> Any:
     if isinstance(obj, (np.integer,)):
         return int(obj)
@@ -480,6 +715,17 @@ class TwoLevelProtocol:
             fallback_matrix=X_raw_unfiltered,
         )
 
+        feature_manifest_path = find_feature_manifest(matrices_dir)
+        feature_manifest_df = load_feature_manifest(feature_manifest_path)
+        if feature_manifest_path is None:
+            logger.warning(
+                "No feature manifest was found under %s. Raw-sequence query mode "
+                "will be unavailable for this registry unless a manifest is supplied.",
+                str(matrices_dir),
+            )
+        else:
+            logger.info("Using feature manifest for query annotation: %s", str(feature_manifest_path))
+
         logger.info("Two-level training: loading metadata")
         meta = self.loader.load_metadata(meta_path, output_dir=str(out))
 
@@ -508,14 +754,19 @@ class TwoLevelProtocol:
         # ------------------------------------------------------------------
         # Level 1: strain / lineage / group placement
         # ------------------------------------------------------------------
-        level1_filter = rf_fdr_feature_selection(
+        level1_filter = run_configured_feature_filter(
             X=X,
             y=y_level1,
-            output_dir=level1_dir / "rf_fdr_filter",
+            output_base_dir=level1_dir,
             config=self.config,
             stage_name="level1_strain_identity",
         )
         X_level1 = level1_filter["filtered_matrix"]
+        level1_manifest = write_selected_feature_manifest(
+            features=list(X_level1.columns),
+            source_manifest=feature_manifest_df,
+            output_path=level1_dir / "selected_feature_manifest.tsv",
+        )
 
         level1_model = train_model_safely(
             X=X_level1,
@@ -532,14 +783,19 @@ class TwoLevelProtocol:
         global_level2_payload: Dict[str, Any] = {"status": "skipped"}
         if train_global_level2 and y_level2.nunique(dropna=True) >= 2:
             global_dir = ensure_dir(level2_dir / "global_fallback")
-            global_filter = rf_fdr_feature_selection(
+            global_filter = run_configured_feature_filter(
                 X=X,
                 y=y_level2,
-                output_dir=global_dir / "rf_fdr_filter",
+                output_base_dir=global_dir,
                 config=self.config,
                 stage_name="level2_global_resistance_profile",
             )
             X_global = global_filter["filtered_matrix"]
+            global_manifest = write_selected_feature_manifest(
+                features=list(X_global.columns),
+                source_manifest=feature_manifest_df,
+                output_path=global_dir / "selected_feature_manifest.tsv",
+            )
             global_model = train_model_safely(
                 X=X_global,
                 y=y_level2.loc[X_global.index],
@@ -554,6 +810,7 @@ class TwoLevelProtocol:
                 "model": global_model,
                 "features": list(X_global.columns),
                 "model_file": get_model_file(global_model),
+                "feature_manifest": global_manifest,
             }
 
         # ------------------------------------------------------------------
@@ -586,14 +843,19 @@ class TwoLevelProtocol:
                 subgroup_payload[str(group_value)] = group_summary
                 continue
 
-            group_filter = rf_fdr_feature_selection(
+            group_filter = run_configured_feature_filter(
                 X=X_group,
                 y=y2_group,
-                output_dir=group_dir / "rf_fdr_filter",
+                output_base_dir=group_dir,
                 config=self.config,
                 stage_name=f"level2_resistance_profile__{safe_group_name}",
             )
             X_group_filtered = group_filter["filtered_matrix"]
+            group_manifest = write_selected_feature_manifest(
+                features=list(X_group_filtered.columns),
+                source_manifest=feature_manifest_df,
+                output_path=group_dir / "selected_feature_manifest.tsv",
+            )
             group_model = train_model_safely(
                 X=X_group_filtered,
                 y=y2_group.loc[X_group_filtered.index],
@@ -610,6 +872,7 @@ class TwoLevelProtocol:
                     "model": group_model,
                     "features": list(X_group_filtered.columns),
                     "model_file": get_model_file(group_model),
+                    "feature_manifest": group_manifest,
                 }
             )
             write_json(group_summary, group_dir / "group_summary.json")
@@ -624,6 +887,7 @@ class TwoLevelProtocol:
                 "model": level1_model,
                 "features": list(X_level1.columns),
                 "model_file": get_model_file(level1_model),
+                "feature_manifest": level1_manifest,
             },
             "level2": {
                 "label_column": level2_label,
@@ -634,6 +898,7 @@ class TwoLevelProtocol:
             "training_matrix": {
                 "aligned_matrix_csv": str(out / "aligned_two_level_matrix.csv"),
                 "aligned_labels_csv": str(out / "aligned_two_level_labels.csv"),
+                "feature_manifest_file": str(feature_manifest_path) if feature_manifest_path else None,
             },
             "config": asdict(self.config) if is_dataclass(self.config) else vars(self.config),
         }

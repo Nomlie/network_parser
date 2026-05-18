@@ -100,6 +100,7 @@ def set_if_provided(config: NetworkParserConfig, key: str, value: Any) -> None:
 def apply_common_overrides(config: NetworkParserConfig, args: argparse.Namespace) -> NetworkParserConfig:
     """Apply CLI overrides that are shared across commands."""
     set_if_provided(config, "n_jobs", getattr(args, "n_jobs", None))
+    set_if_provided(config, "central_feature_filter_method", getattr(args, "central_feature_filter_method", None))
 
     # RF-FDR selector controls. These are optional so config files remain the
     # canonical place for tuned runs, while CLI remains convenient for testing.
@@ -113,6 +114,9 @@ def apply_common_overrides(config: NetworkParserConfig, args: argparse.Namespace
     set_if_provided(config, "rf_selector_fallback_strategy", getattr(args, "rf_selector_fallback_strategy", None))
     set_if_provided(config, "rf_selector_fallback_top_n", getattr(args, "rf_selector_fallback_top_n", None))
     set_if_provided(config, "feature_filter_fallback_strategy", getattr(args, "feature_filter_fallback_strategy", None))
+    set_if_provided(config, "n_permutation_tests", getattr(args, "n_permutation_tests", None))
+    set_if_provided(config, "fdr_alpha", getattr(args, "fdr_alpha", None))
+    set_if_provided(config, "multiple_testing_method", getattr(args, "multiple_testing_method", None))
 
     if hasattr(config, "__post_init__"):
         config.__post_init__()
@@ -130,7 +134,24 @@ def add_config_args(parser: argparse.ArgumentParser) -> None:
 
 
 def add_rf_fdr_args(parser: argparse.ArgumentParser) -> None:
-    group = parser.add_argument_group("RF-FDR feature-selection controls")
+    group = parser.add_argument_group("Central feature-selection controls")
+    group.add_argument(
+        "--central_feature_filter_method",
+        "--central_filter_method",
+        dest="central_feature_filter_method",
+        choices=["rf_fdr", "chi2_fdr", "fisher_fdr", "chi2_perm_fdr"],
+        default=None,
+        help=(
+            "Central feature-filtering method. "
+            "rf_fdr uses RF importance with permutation-derived empirical p-values and FDR correction; "
+            "chi2_fdr uses chi-square association testing plus multiple-testing correction; "
+            "fisher_fdr uses Fisher where appropriate plus multiple-testing correction; "
+            "chi2_perm_fdr uses chi-square label permutations, empirical p-values, and FDR correction."
+        ),
+    )
+    group.add_argument("--n_permutation_tests", type=int, default=None, help="Label permutations for chi2_perm_fdr and downstream permutation utilities.")
+    group.add_argument("--fdr_alpha", type=float, default=None, help="FDR alpha used by association-FDR and chi2_perm_fdr.")
+    group.add_argument("--multiple_testing_method", choices=["fdr_bh", "bonferroni"], default=None, help="Multiple-testing correction method for association-FDR and chi2_perm_fdr.")
     group.add_argument("--rf_selector_n_estimators", type=int, default=None, help="Random Forest trees used during RF-FDR scoring.")
     group.add_argument("--rf_selector_n_observed_repeats", type=int, default=None, help="Observed RF importance repeats.")
     group.add_argument("--rf_selector_n_permutations", type=int, default=None, help="Label permutations for empirical p-values.")
@@ -188,7 +209,7 @@ def build_run_parser(prog: Optional[str] = None, add_help: bool = True) -> argpa
     parser.add_argument("--validate_interactions", action="store_true", help="Run optional post-tree interaction validation when available.")
 
     parser.add_argument("--run_ml_protocol", action="store_true", help="Force ML protocol branch on through config.")
-    parser.add_argument("--disable_central_feature_filtering", action="store_true", help="Pass aligned matrix forward without RF-FDR central filtering.")
+    parser.add_argument("--disable_central_feature_filtering", action="store_true", help="Pass aligned matrix forward without central feature filtering.")
     parser.add_argument("--disable_model_selector", action="store_true", help="Disable automatic model-selector behaviour where supported.")
     parser.add_argument("--disable_conditional_dt", action="store_true", help="Prevent selector-driven decision-tree triggering where supported.")
 
@@ -237,11 +258,23 @@ def build_query_parser(prog: Optional[str] = None, add_help: bool = True) -> arg
         add_help=add_help,
     )
 
-    parser.add_argument("--genomic", required=True, help="New genomic input file or directory: VCF/VCF.gz/CSV/TSV.")
+    parser.add_argument("--genomic", required=True, help="New genomic input file or directory: VCF/VCF.gz/CSV/TSV/FASTA.")
     parser.add_argument("--registry", required=True, help="Path to two_level_model_registry.json from training.")
     parser.add_argument("--output_dir", required=True, help="Prediction output directory.")
     parser.add_argument("--ref_fasta", default=None, help="Optional reference FASTA/GenBank context for VCF-oriented workflows.")
     parser.add_argument("--max_markers", type=int, default=10, help="Maximum supporting markers to report per prediction level.")
+    parser.add_argument(
+        "--query_input_type",
+        choices=["auto", "matrix", "vcf", "raw_sequence"],
+        default="auto",
+        help="How to interpret --genomic. Use raw_sequence for raw FASTA DNA queries.",
+    )
+    parser.add_argument(
+        "--raw_sequence_mapping_mode",
+        choices=["auto", "blast", "exact"],
+        default="auto",
+        help="How raw FASTA query sequences are mapped to selected feature contexts.",
+    )
 
     add_config_args(parser)
     add_logging_args(parser)
@@ -360,6 +393,8 @@ def run_query(args: argparse.Namespace) -> Any:
         ref_fasta=args.ref_fasta,
         max_markers=int(args.max_markers),
         n_jobs=args.n_jobs,
+        query_input_type=args.query_input_type,
+        raw_sequence_mapping_mode=args.raw_sequence_mapping_mode,
     )
 
 

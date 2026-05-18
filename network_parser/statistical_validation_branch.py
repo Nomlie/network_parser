@@ -49,7 +49,13 @@ except Exception:  # pragma: no cover
     from feature_selection import (  # type: ignore
         rf_fdr_feature_selection as _shared_rf_fdr_feature_selection,
     )
-from network_parser.feature_selection import rf_fdr_feature_selection as _rf_fdr_select
+try:
+    from network_parser.feature_selection import rf_fdr_feature_selection as _rf_fdr_select
+except Exception:  # pragma: no cover
+    try:
+        from feature_selection import rf_fdr_feature_selection as _rf_fdr_select  # type: ignore
+    except Exception:  # pragma: no cover
+        _rf_fdr_select = None  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -310,6 +316,428 @@ class StatisticalValidatorBranch:
         )
 
         return results
+
+    # ------------------------------------------------------------------
+    # Chi-square permutation-FDR central feature filtering
+    # ------------------------------------------------------------------
+    def chi2_permutation_feature_selection(
+        self,
+        genomic_df: pd.DataFrame,
+        labels: pd.Series,
+        output_dir: Optional[str] = None,
+        stage_name: str = "central_feature_filtering",
+    ) -> Dict[str, Any]:
+        """
+        Chi-square permutation-FDR central feature selection.
+
+        Purpose
+        -------
+        Provide a faster classical-statistics alternative to RF-FDR while
+        preserving the same core idea: compare each feature's observed
+        association statistic against a label-permutation null, convert that
+        into empirical p-values, and apply multiple-testing correction before
+        model screening or decision-tree construction.
+
+        Notes
+        -----
+        - This is PRE-ML / PRE-tree central filtering.
+        - The empirical p-value resolution is 1 / (n_permutations + 1).
+        - A feature with zero permutation exceedances receives the minimum
+          possible empirical p-value, not p=0.
+        """
+        self._validate_feature_inputs(genomic_df, labels)
+
+        X = genomic_df.copy()
+        y = labels.copy()
+        X.index = X.index.astype(str)
+        X.columns = X.columns.astype(str)
+        y.index = y.index.astype(str)
+
+        common = X.index.intersection(y.index)
+        X = X.loc[common].copy()
+        y = y.loc[common].copy()
+
+        valid_label_mask = ~y.isna()
+        X = X.loc[valid_label_mask].copy()
+        y = y.loc[valid_label_mask].copy()
+
+        if X.empty or X.shape[1] == 0:
+            raise ValueError(f"{stage_name}: empty feature matrix – cannot run chi2 permutation-FDR.")
+        if y.nunique(dropna=True) < 2:
+            raise ValueError(
+                f"{stage_name}: chi2 permutation-FDR requires at least two label classes "
+                f"(found {y.nunique(dropna=True)})."
+            )
+
+        n_permutations = int(getattr(self.config, "n_permutation_tests", 1000))
+        if n_permutations < 1:
+            raise ValueError("n_permutation_tests must be >= 1 for chi2_perm_fdr.")
+
+        fdr_alpha = float(getattr(self.config, "fdr_alpha", self.fdr_alpha))
+        multiple_method = str(getattr(self.config, "multiple_testing_method", "fdr_bh"))
+        random_state = int(getattr(self.config, "random_state", 42))
+        rng = np.random.default_rng(random_state)
+
+        out_dir = Path(output_dir) if output_dir is not None else Path(stage_name)
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        logger.info(
+            "%s chi2 permutation-FDR started | samples=%d | features=%d | permutations=%d",
+            stage_name,
+            int(X.shape[0]),
+            int(X.shape[1]),
+            int(n_permutations),
+        )
+
+        results_df = self._chi2_permutation_results(
+            X=X,
+            y=y,
+            n_permutations=n_permutations,
+            rng=rng,
+            stage_name=stage_name,
+        )
+
+        if results_df.empty:
+            raise ValueError(f"{stage_name}: no valid chi-square tests were produced.")
+
+        reject, corrected_p, _, _ = multipletests(
+            results_df["empirical_p_value"].astype(float).values,
+            alpha=fdr_alpha,
+            method=multiple_method,
+        )
+
+        results_df["multiple_testing_method"] = multiple_method
+        results_df["corrected_p_value"] = corrected_p.astype(float)
+        results_df["significant"] = reject.astype(bool)
+
+        results_df = results_df.sort_values(
+            ["significant", "corrected_p_value", "empirical_p_value", "chi2_statistic"],
+            ascending=[False, True, True, False],
+        ).reset_index(drop=True)
+
+        significant_features = [
+            str(feature)
+            for feature in results_df.loc[results_df["significant"], "feature"].tolist()
+            if str(feature) in X.columns
+        ]
+
+        fallback_strategy = str(
+            getattr(self.config, "feature_filter_fallback_strategy", "stop")
+        ).lower()
+        used_fallback = False
+
+        if significant_features:
+            X_filtered = X.loc[:, significant_features].copy()
+            retained_feature_names = list(X_filtered.columns)
+        elif fallback_strategy == "stop":
+            raise ValueError(
+                f"{stage_name}: chi2 permutation-FDR retained no significant genomic features. "
+                "Stopping is statistically defensible for publication-grade runs. "
+                "For exploratory smoke testing only, set "
+                "feature_filter_fallback_strategy='unfiltered'."
+            )
+        elif fallback_strategy == "unfiltered":
+            logger.warning(
+                "%s chi2 permutation-FDR retained no significant genomic features. "
+                "Using the aligned matrix as an exploratory fallback. Do not report "
+                "downstream markers from this fallback as FDR-supported discoveries.",
+                stage_name,
+            )
+            X_filtered = X.copy()
+            retained_feature_names = list(X_filtered.columns)
+            used_fallback = True
+        else:
+            raise ValueError(
+                "feature_filter_fallback_strategy must be one of: 'stop' or 'unfiltered'."
+            )
+
+        filtered_matrix_path = out_dir / "filtered_matrix.csv"
+        results_csv_path = out_dir / "chi2_permutation_results.csv"
+        results_json_path = out_dir / "chi2_permutation_results.json"
+        summary_json_path = out_dir / "feature_filtering_summary.json"
+
+        X_filtered.to_csv(filtered_matrix_path)
+        results_df.to_csv(results_csv_path, index=False)
+
+        feature_records = results_df.to_dict(orient="records")
+        feature_results = {
+            str(row["feature"]): {k: v for k, v in row.items() if k != "feature"}
+            for row in feature_records
+        }
+        results_json_path.write_text(json.dumps(feature_results, indent=2, default=self._json_default))
+
+        summary = {
+            "method": "chi2_perm_fdr",
+            "status": "success",
+            "stage_name": stage_name,
+            "input_features": int(X.shape[1]),
+            "tested_features": int(results_df.shape[0]),
+            "significant_features": int(len(significant_features)),
+            "retained_features": int(X_filtered.shape[1]),
+            "fallback_strategy": fallback_strategy,
+            "used_fallback_unfiltered_matrix": bool(used_fallback),
+            "retention_fraction": float(X_filtered.shape[1] / max(1, X.shape[1])),
+            "n_permutations": int(n_permutations),
+            "empirical_p_resolution": float(1.0 / (n_permutations + 1.0)),
+            "fdr_alpha": float(fdr_alpha),
+            "multiple_testing_method": multiple_method,
+            "retained_feature_names": retained_feature_names,
+            "artifacts": {
+                "filter_dir": str(out_dir),
+                "chi2_permutation_results_csv": str(results_csv_path),
+                "chi2_permutation_results_json": str(results_json_path),
+                "filtered_matrix": str(filtered_matrix_path),
+                "summary_json": str(summary_json_path),
+            },
+        }
+        summary_json_path.write_text(json.dumps(summary, indent=2, default=self._json_default))
+
+        logger.info(
+            "%s chi2 permutation-FDR complete | retained_features=%d / %d | empirical_p_resolution=%.6g",
+            stage_name,
+            int(X_filtered.shape[1]),
+            int(X.shape[1]),
+            float(summary["empirical_p_resolution"]),
+        )
+
+        return {
+            "method": "chi2_perm_fdr",
+            "summary": summary,
+            "association": feature_results,
+            "multiple_testing": feature_results,
+            "retained_features": list(X_filtered.columns),
+            "filtered_matrix": X_filtered,
+            "feature_results": results_df,
+        }
+
+    def _chi2_permutation_results(
+        self,
+        X: pd.DataFrame,
+        y: pd.Series,
+        n_permutations: int,
+        rng: np.random.Generator,
+        stage_name: str,
+    ) -> pd.DataFrame:
+        """Dispatch to a binary-matrix fast path when possible."""
+        X_numeric = X.apply(pd.to_numeric, errors="coerce")
+        numeric_values = X_numeric.to_numpy(dtype=float, copy=False)
+        non_missing_values = np.unique(numeric_values[~np.isnan(numeric_values)]) if numeric_values.size else np.array([])
+        is_binary_matrix = len(non_missing_values) > 0 and set(map(float, non_missing_values)).issubset({0.0, 1.0})
+
+        if is_binary_matrix:
+            return self._chi2_permutation_binary_results(
+                X_numeric.fillna(0).astype(np.int8),
+                y,
+                n_permutations,
+                rng,
+                stage_name,
+            )
+
+        logger.info(
+            "%s chi2 permutation-FDR using generic categorical path. "
+            "For binary matrices, numeric 0/1 encoding is faster.",
+            stage_name,
+        )
+        return self._chi2_permutation_generic_results(X, y, n_permutations, rng)
+
+    def _chi2_permutation_binary_results(
+        self,
+        X_binary: pd.DataFrame,
+        y: pd.Series,
+        n_permutations: int,
+        rng: np.random.Generator,
+        stage_name: str,
+    ) -> pd.DataFrame:
+        """Vectorized chi-square permutation test for numeric 0/1 matrices."""
+        X_arr = X_binary.to_numpy(dtype=np.float64, copy=True)
+        feature_names = list(map(str, X_binary.columns))
+
+        y_codes, y_levels = pd.factorize(y.astype(str), sort=True)
+        y_codes = np.asarray(y_codes, dtype=np.int64)
+        n_classes = int(len(y_levels))
+        n_samples = int(X_arr.shape[0])
+
+        class_counts = np.bincount(y_codes, minlength=n_classes).astype(np.float64)
+
+        def counts1_for_codes(codes: np.ndarray) -> np.ndarray:
+            out = np.empty((X_arr.shape[1], n_classes), dtype=np.float64)
+            for k in range(n_classes):
+                mask = codes == k
+                if np.any(mask):
+                    out[:, k] = X_arr[mask, :].sum(axis=0)
+                else:
+                    out[:, k] = 0.0
+            return out
+
+        def chi2_stats_from_counts1(counts1: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+            row1 = counts1.sum(axis=1)
+            row0 = float(n_samples) - row1
+            counts0 = class_counts.reshape(1, -1) - counts1
+
+            expected1 = row1.reshape(-1, 1) * class_counts.reshape(1, -1) / float(n_samples)
+            expected0 = row0.reshape(-1, 1) * class_counts.reshape(1, -1) / float(n_samples)
+
+            stat = np.zeros(counts1.shape[0], dtype=np.float64)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                part1 = np.where(expected1 > 0, ((counts1 - expected1) ** 2) / expected1, 0.0)
+                part0 = np.where(expected0 > 0, ((counts0 - expected0) ** 2) / expected0, 0.0)
+            stat = part1.sum(axis=1) + part0.sum(axis=1)
+
+            valid = (row0 > 0) & (row1 > 0) & (n_classes >= 2)
+            stat[~valid] = 0.0
+            return stat, valid
+
+        observed_counts1 = counts1_for_codes(y_codes)
+        observed_stat, valid = chi2_stats_from_counts1(observed_counts1)
+        dof = max(1, n_classes - 1)
+        asymptotic_p = stats.chi2.sf(observed_stat, dof)
+        asymptotic_p[~valid] = 1.0
+
+        exceedances = np.zeros(X_arr.shape[1], dtype=np.int64)
+        progress_step = max(1, n_permutations // 10)
+
+        for perm_idx in range(n_permutations):
+            permuted_codes = rng.permutation(y_codes)
+            perm_counts1 = counts1_for_codes(permuted_codes)
+            perm_stat, _ = chi2_stats_from_counts1(perm_counts1)
+            exceedances += (perm_stat >= observed_stat).astype(np.int64)
+
+            if (perm_idx + 1) % progress_step == 0 or (perm_idx + 1) == n_permutations:
+                logger.info(
+                    "%s chi2 permutation progress | %d / %d",
+                    stage_name,
+                    int(perm_idx + 1),
+                    int(n_permutations),
+                )
+
+        empirical_p = (1.0 + exceedances.astype(float)) / float(n_permutations + 1)
+        empirical_p[~valid] = 1.0
+
+        # For a 2 x K table, min_dim is 1 when K >= 2.
+        cramers_v = np.sqrt(np.maximum(observed_stat, 0.0) / max(1.0, float(n_samples)))
+        cramers_v[~valid] = 0.0
+
+        mutual_info = [
+            float(mutual_info_score(y_codes, X_arr[:, j].astype(int)))
+            for j in range(X_arr.shape[1])
+        ]
+
+        return pd.DataFrame(
+            {
+                "feature": feature_names,
+                "test": "chi2_permutation",
+                "chi2_statistic": observed_stat.astype(float),
+                "asymptotic_p_value": asymptotic_p.astype(float),
+                "empirical_p_value": empirical_p.astype(float),
+                "permutation_exceedances": exceedances.astype(int),
+                "n_permutations": int(n_permutations),
+                "empirical_p_resolution": float(1.0 / (n_permutations + 1.0)),
+                "dof": int(dof),
+                "cramers_v": cramers_v.astype(float),
+                "mutual_info": mutual_info,
+                "n_rows": int(n_samples),
+                "n_feature_states": np.where(valid, 2, 1).astype(int),
+                "n_label_states": int(n_classes),
+            }
+        )
+
+    def _chi2_permutation_generic_results(
+        self,
+        X: pd.DataFrame,
+        y: pd.Series,
+        n_permutations: int,
+        rng: np.random.Generator,
+    ) -> pd.DataFrame:
+        """Generic categorical chi-square permutation test, feature by feature."""
+        feature_names = list(map(str, X.columns))
+        base_seeds = rng.integers(0, 2**31 - 1, size=len(feature_names), dtype=np.int64)
+
+        def chi2_stat_from_table(table: np.ndarray) -> float:
+            table = np.asarray(table, dtype=np.float64)
+            n = float(table.sum())
+            if n <= 0 or min(table.shape) < 2:
+                return 0.0
+            row_sum = table.sum(axis=1, keepdims=True)
+            col_sum = table.sum(axis=0, keepdims=True)
+            expected = row_sum @ col_sum / n
+            with np.errstate(divide="ignore", invalid="ignore"):
+                stat = np.where(expected > 0, ((table - expected) ** 2) / expected, 0.0).sum()
+            return float(stat)
+
+        def process_feature(feature: str, seed: int) -> Optional[Dict[str, Any]]:
+            series = X[feature]
+            valid = ~(series.isna() | y.isna())
+            if int(valid.sum()) == 0:
+                return None
+
+            x_values = series.loc[valid].astype(str)
+            y_values = y.loc[valid].astype(str)
+            x_codes, x_levels = pd.factorize(x_values, sort=True)
+            y_codes, y_levels = pd.factorize(y_values, sort=True)
+
+            n_feature_states = int(len(x_levels))
+            n_label_states = int(len(y_levels))
+            if n_feature_states < 2 or n_label_states < 2:
+                return None
+
+            table = np.zeros((n_feature_states, n_label_states), dtype=np.float64)
+            np.add.at(table, (x_codes, y_codes), 1.0)
+            observed_stat = chi2_stat_from_table(table)
+            dof = int((n_feature_states - 1) * (n_label_states - 1))
+            asymptotic_p = float(stats.chi2.sf(observed_stat, max(1, dof)))
+
+            local_rng = np.random.default_rng(int(seed))
+            exceedances = 0
+            for _ in range(n_permutations):
+                perm_y = local_rng.permutation(y_codes)
+                perm_table = np.zeros_like(table)
+                np.add.at(perm_table, (x_codes, perm_y), 1.0)
+                perm_stat = chi2_stat_from_table(perm_table)
+                if perm_stat >= observed_stat:
+                    exceedances += 1
+
+            empirical_p = float((1.0 + exceedances) / (n_permutations + 1.0))
+            cramers_v = self._cramers_v_from_table(pd.DataFrame(table))
+            mi = mutual_info_score(y_codes, x_codes)
+
+            return {
+                "feature": str(feature),
+                "test": "chi2_permutation",
+                "chi2_statistic": float(observed_stat),
+                "asymptotic_p_value": asymptotic_p,
+                "empirical_p_value": empirical_p,
+                "permutation_exceedances": int(exceedances),
+                "n_permutations": int(n_permutations),
+                "empirical_p_resolution": float(1.0 / (n_permutations + 1.0)),
+                "dof": int(dof),
+                "cramers_v": float(cramers_v),
+                "mutual_info": float(mi),
+                "n_rows": int(valid.sum()),
+                "n_feature_states": n_feature_states,
+                "n_label_states": n_label_states,
+            }
+
+        rows = Parallel(n_jobs=self.n_jobs)(
+            delayed(process_feature)(feature, int(seed))
+            for feature, seed in zip(feature_names, base_seeds)
+        )
+        return pd.DataFrame([row for row in rows if row is not None])
+
+    @staticmethod
+    def _json_default(obj: Any) -> Any:
+        if isinstance(obj, (np.integer,)):
+            return int(obj)
+        if isinstance(obj, (np.floating,)):
+            return float(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        if isinstance(obj, (pd.Series, pd.Index)):
+            return obj.tolist()
+        if isinstance(obj, pd.DataFrame):
+            return obj.to_dict(orient="records")
+        if isinstance(obj, Path):
+            return str(obj)
+        return str(obj)
 
     # ------------------------------------------------------------------
     # Multiple testing correction
