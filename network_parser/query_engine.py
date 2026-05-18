@@ -51,10 +51,12 @@ import pandas as pd
 try:
     from network_parser.config import NetworkParserConfig
     from network_parser.data_loader import DataLoader
+    from network_parser.sequence_query_encoder import encode_raw_sequence_query
     from network_parser.utils import normalize_sample_id
 except Exception:  # pragma: no cover - supports direct source-tree execution
     from config import NetworkParserConfig  # type: ignore
     from data_loader import DataLoader  # type: ignore
+    from sequence_query_encoder import encode_raw_sequence_query  # type: ignore
     from utils import normalize_sample_id  # type: ignore
 
 
@@ -176,6 +178,83 @@ def load_query_matrix(
     X.index = X.index.astype(str).map(normalize_sample_id)
     return X
 
+
+
+
+def collect_required_features_from_registry(registry: Dict[str, Any]) -> List[str]:
+    """Collect the union of every feature required by Level 1 and Level 2 models."""
+    ordered: List[str] = []
+    seen = set()
+
+    def _add(features: Iterable[Any]) -> None:
+        for feature in features or []:
+            f = str(feature)
+            if f and f not in seen:
+                seen.add(f)
+                ordered.append(f)
+
+    level1 = registry.get("level1", {}) if isinstance(registry, dict) else {}
+    _add(level1.get("features", []))
+
+    level2 = registry.get("level2", {}) if isinstance(registry, dict) else {}
+    global_payload = level2.get("global_fallback", {}) if isinstance(level2, dict) else {}
+    _add(global_payload.get("features", []))
+
+    by_group = level2.get("by_level1_group", {}) if isinstance(level2, dict) else {}
+    if isinstance(by_group, dict):
+        for payload in by_group.values():
+            if isinstance(payload, dict):
+                _add(payload.get("features", []))
+
+    return ordered
+
+
+def resolve_registry_feature_manifest(registry: Dict[str, Any], registry_base: Path) -> Optional[Path]:
+    """Resolve the all-feature manifest saved during training."""
+    candidates: List[Optional[str]] = []
+    training_matrix = registry.get("training_matrix", {}) if isinstance(registry, dict) else {}
+    candidates.append(training_matrix.get("feature_manifest_file"))
+
+    level1 = registry.get("level1", {}) if isinstance(registry, dict) else {}
+    l1_manifest = level1.get("feature_manifest", {}) if isinstance(level1, dict) else {}
+    if isinstance(l1_manifest, dict):
+        candidates.append(l1_manifest.get("manifest_file"))
+
+    level2 = registry.get("level2", {}) if isinstance(registry, dict) else {}
+    global_payload = level2.get("global_fallback", {}) if isinstance(level2, dict) else {}
+    g_manifest = global_payload.get("feature_manifest", {}) if isinstance(global_payload, dict) else {}
+    if isinstance(g_manifest, dict):
+        candidates.append(g_manifest.get("manifest_file"))
+
+    by_group = level2.get("by_level1_group", {}) if isinstance(level2, dict) else {}
+    if isinstance(by_group, dict):
+        for payload in by_group.values():
+            if not isinstance(payload, dict):
+                continue
+            group_manifest = payload.get("feature_manifest", {})
+            if isinstance(group_manifest, dict):
+                candidates.append(group_manifest.get("manifest_file"))
+
+    for candidate in candidates:
+        resolved = resolve_path(candidate, registry_base)
+        if resolved is not None and resolved.exists():
+            return resolved
+    return None
+
+
+def feature_call_metadata_by_sample(calls: Optional[pd.DataFrame]) -> Dict[str, Dict[str, Dict[str, Any]]]:
+    if calls is None or calls.empty:
+        return {}
+    if "sample_id" not in calls.columns or "feature_id" not in calls.columns:
+        return {}
+    out: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    for _, row in calls.iterrows():
+        sample_id = str(row.get("sample_id", ""))
+        feature_id = str(row.get("feature_id", ""))
+        if not sample_id or not feature_id:
+            continue
+        out.setdefault(sample_id, {})[feature_id] = row.to_dict()
+    return out
 
 def align_to_training_features(
     X_new: pd.DataFrame,
@@ -396,12 +475,45 @@ def supporting_markers_for_sample(
     ranked_features: Optional[pd.DataFrame],
     model_importance: Optional[pd.DataFrame],
     max_markers: int = 10,
+    feature_metadata: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Return top active markers for a sample, prioritising RF-FDR ranking if
     available, otherwise model feature importance, otherwise column order.
     """
     active_features = set(sample_values.index[pd.to_numeric(sample_values, errors="coerce").fillna(0).values != 0])
+    feature_metadata = feature_metadata or {}
+
+    def _attach_metadata(record: Dict[str, Any]) -> Dict[str, Any]:
+        feature_id = str(record.get("feature", ""))
+        meta = feature_metadata.get(feature_id, {})
+        for key in (
+            "observed_allele",
+            "mapping_status",
+            "mapping_quality",
+            "allele_call",
+            "ref_allele",
+            "alt_allele",
+            "baseline_allele",
+            "sequence",
+            "position",
+            "gene_annotation",
+            "nucleotide_change",
+            "amino_acid_change",
+            "subject_id",
+            "subject_position",
+            "strand",
+            "mapping_method",
+            "n_context_hits",
+            "n_blast_hits",
+            "n_equivalent_best_hits",
+            "blast_pident",
+            "blast_query_coverage",
+            "blast_bitscore",
+        ):
+            if key in meta and meta.get(key) not in (None, ""):
+                record[key] = meta.get(key)
+        return record
 
     if ranked_features is not None and "feature" in ranked_features.columns:
         df = ranked_features.copy()
@@ -411,13 +523,15 @@ def supporting_markers_for_sample(
             for _, row in df.head(max_markers).iterrows():
                 feature = str(row["feature"])
                 records.append(
-                    {
-                        "feature": feature,
-                        "value": float(sample_values.get(feature, 0)),
-                        "rf_mean_importance": _safe_float(row.get("rf_mean_importance")),
-                        "empirical_p_value": _safe_float(row.get("empirical_p_value")),
-                        "corrected_p_value": _safe_float(row.get("corrected_p_value")),
-                    }
+                    _attach_metadata(
+                        {
+                            "feature": feature,
+                            "value": float(sample_values.get(feature, 0)),
+                            "rf_mean_importance": _safe_float(row.get("rf_mean_importance")),
+                            "empirical_p_value": _safe_float(row.get("empirical_p_value")),
+                            "corrected_p_value": _safe_float(row.get("corrected_p_value")),
+                        }
+                    )
                 )
             return records
 
@@ -429,11 +543,13 @@ def supporting_markers_for_sample(
             for _, row in df.head(max_markers).iterrows():
                 feature = str(row["feature"])
                 records.append(
-                    {
-                        "feature": feature,
-                        "value": float(sample_values.get(feature, 0)),
-                        "model_importance": _safe_float(row.get("model_importance")),
-                    }
+                    _attach_metadata(
+                        {
+                            "feature": feature,
+                            "value": float(sample_values.get(feature, 0)),
+                            "model_importance": _safe_float(row.get("model_importance")),
+                        }
+                    )
                 )
             return records
 
@@ -441,7 +557,7 @@ def supporting_markers_for_sample(
     for feature in sample_values.index:
         value = _safe_float(sample_values.get(feature))
         if value is not None and value != 0:
-            fallback.append({"feature": str(feature), "value": value})
+            fallback.append(_attach_metadata({"feature": str(feature), "value": value}))
         if len(fallback) >= max_markers:
             break
     return fallback
@@ -546,15 +662,57 @@ class NetworkParserQueryEngine:
         ref_fasta: Optional[str] = None,
         max_markers: int = 10,
         n_jobs: Optional[int] = None,
+        query_input_type: str = "auto",
+        raw_sequence_mapping_mode: str = "auto",
     ) -> pd.DataFrame:
         out = ensure_dir(Path(output_dir))
-        X_raw = load_query_matrix(
-            genomic_path=genomic_path,
-            output_dir=out,
-            config=self.config,
-            ref_fasta=ref_fasta,
-            n_jobs=n_jobs,
-        )
+        query_input_type = str(query_input_type or "auto").lower()
+        if query_input_type == "auto":
+            genomic_candidate = Path(genomic_path)
+            fasta_suffixes = {".fa", ".fna", ".fasta", ".fas"}
+            if genomic_candidate.is_file() and genomic_candidate.suffix.lower() in fasta_suffixes:
+                query_input_type = "raw_sequence"
+            elif genomic_candidate.is_dir() and any(p.suffix.lower() in fasta_suffixes for p in genomic_candidate.iterdir()):
+                query_input_type = "raw_sequence"
+        raw_calls: Optional[pd.DataFrame] = None
+        raw_mapping_summary: Optional[Dict[str, Any]] = None
+
+        if query_input_type == "raw_sequence":
+            required_features = collect_required_features_from_registry(self.registry)
+            manifest_path = resolve_registry_feature_manifest(self.registry, self.registry_base)
+            if manifest_path is None:
+                raise ValueError(
+                    "Raw-sequence query mode requires a feature manifest in the model registry. "
+                    "Retrain with the updated DataLoader so selected-feature manifests are saved."
+                )
+            X_raw, raw_mapping_summary, raw_calls = encode_raw_sequence_query(
+                raw_sequence_path=genomic_path,
+                feature_manifest_path=str(manifest_path),
+                features=required_features,
+                output_dir=str(out / "raw_sequence_query_encoding"),
+                mapping_mode=raw_sequence_mapping_mode,
+            )
+            X_raw.index = X_raw.index.astype(str).map(normalize_sample_id)
+        else:
+            X_raw = load_query_matrix(
+                genomic_path=genomic_path,
+                output_dir=out,
+                config=self.config,
+                ref_fasta=ref_fasta,
+                n_jobs=n_jobs,
+            )
+
+        raw_feature_metadata = feature_call_metadata_by_sample(raw_calls)
+        if raw_feature_metadata:
+            raw_feature_metadata = {
+                normalize_sample_id(str(sample_id)): feature_map
+                for sample_id, feature_map in raw_feature_metadata.items()
+            }
+        raw_sample_quality: Dict[str, Dict[str, Any]] = {}
+        if isinstance(raw_mapping_summary, dict):
+            for item in raw_mapping_summary.get("per_sample", []) or []:
+                if isinstance(item, dict) and item.get("sample_id") is not None:
+                    raw_sample_quality[normalize_sample_id(str(item.get("sample_id")))] = item
 
         level1_features, level1_payload, level1_ranked, level1_importance = self._load_level1()
         X_l1, l1_alignment = align_to_training_features(X_raw, level1_features)
@@ -574,17 +732,20 @@ class NetworkParserQueryEngine:
             l2_pred, l2_support, l2_class_support = predict_labels_and_support(l2_payload, X_l2)
             l2_tree_paths = decision_tree_path_explanation(l2_payload, X_l2)
 
+            sample_feature_metadata = raw_feature_metadata.get(sample_id, {})
             l1_markers = supporting_markers_for_sample(
                 X_l1.loc[sample_id],
                 ranked_features=level1_ranked,
                 model_importance=level1_importance,
                 max_markers=max_markers,
+                feature_metadata=sample_feature_metadata,
             )
             l2_markers = supporting_markers_for_sample(
                 X_l2.loc[sample_id],
                 ranked_features=l2_ranked,
                 model_importance=l2_importance,
                 max_markers=max_markers,
+                feature_metadata=sample_feature_metadata,
             )
 
             row = {
@@ -606,6 +767,7 @@ class NetworkParserQueryEngine:
                     "level2_class_support": l2_class_support[0],
                     "level1_supporting_markers": l1_markers,
                     "level2_supporting_markers": l2_markers,
+                    "raw_sequence_mapping_quality": raw_sample_quality.get(sample_id, {}),
                     "level1_decision_path": l1_tree_paths.get(sample_id, []),
                     "level2_decision_path": l2_tree_paths.get(sample_id, []),
                 }
@@ -620,6 +782,8 @@ class NetworkParserQueryEngine:
             "level2_by_source": alignment_by_level2_source,
             "n_query_samples": int(X_raw.shape[0]),
             "n_query_features_raw": int(X_raw.shape[1]),
+            "query_input_type": query_input_type,
+            "raw_sequence_mapping": raw_mapping_summary,
         }
         write_json(alignment_summary, out / "query_alignment_summary.json")
 
@@ -633,6 +797,7 @@ class NetworkParserQueryEngine:
                 "Query mode is inference-only.",
                 "RF-FDR feature selection is not rerun on query samples.",
                 "Missing trained features in query samples are encoded as 0 for alignment to the saved feature space.",
+                "For raw-sequence queries, unresolved context mappings are also encoded as 0 and recorded in the raw-sequence mapping summary.",
             ],
             "artifacts": {
                 "predictions_csv": str(predictions_path),
@@ -658,6 +823,16 @@ def write_text_report(report: Dict[str, Any], path: Path) -> None:
     for sample in report.get("samples", []):
         lines.append(f"Sample: {sample.get('sample_id')}")
         lines.append("-" * (8 + len(str(sample.get("sample_id", "")))))
+        if sample.get("raw_sequence_mapping_quality"):
+            rq = sample.get("raw_sequence_mapping_quality") or {}
+            lines.append("Raw-sequence mapping quality")
+            lines.append(f"  Unique mapped calls: {rq.get('n_unique_mapped_calls', 0)} / {rq.get('n_feature_calls', 0)}")
+            lines.append(f"  Active encoded calls: {rq.get('n_encoded_active_features', 0)}")
+            if rq.get("n_multi_hit_calls", 0):
+                lines.append(f"  Multi-hit contexts filled as 0: {rq.get('n_multi_hit_calls')}")
+            if rq.get("n_unresolved_or_missing_context_calls", 0):
+                lines.append(f"  Unresolved/missing contexts filled as 0: {rq.get('n_unresolved_or_missing_context_calls')}")
+            lines.append("")
         lines.append("Level 1 — strain/sample placement")
         lines.append(f"  Prediction: {sample.get('predicted_level1_identity')}")
         if sample.get("level1_support") is not None:
@@ -665,7 +840,12 @@ def write_text_report(report: Dict[str, Any], path: Path) -> None:
         if sample.get("level1_supporting_markers"):
             lines.append("  Supporting markers:")
             for marker in sample.get("level1_supporting_markers", [])[:10]:
-                lines.append(f"    - {marker.get('feature')} = {marker.get('value')}")
+                extra = ""
+                if marker.get("observed_allele"):
+                    quality = marker.get("mapping_quality") or marker.get("allele_call") or ""
+                    quality_txt = f" | quality={quality}" if quality else ""
+                    extra = f" | observed={marker.get('observed_allele')} | status={marker.get('mapping_status', '')}{quality_txt}"
+                lines.append(f"    - {marker.get('feature')} = {marker.get('value')}{extra}")
         if sample.get("level1_decision_path"):
             lines.append("  Decision path:")
             for rule in sample.get("level1_decision_path", []):
@@ -680,7 +860,12 @@ def write_text_report(report: Dict[str, Any], path: Path) -> None:
         if sample.get("level2_supporting_markers"):
             lines.append("  Supporting markers:")
             for marker in sample.get("level2_supporting_markers", [])[:10]:
-                lines.append(f"    - {marker.get('feature')} = {marker.get('value')}")
+                extra = ""
+                if marker.get("observed_allele"):
+                    quality = marker.get("mapping_quality") or marker.get("allele_call") or ""
+                    quality_txt = f" | quality={quality}" if quality else ""
+                    extra = f" | observed={marker.get('observed_allele')} | status={marker.get('mapping_status', '')}{quality_txt}"
+                lines.append(f"    - {marker.get('feature')} = {marker.get('value')}{extra}")
         if sample.get("level2_decision_path"):
             lines.append("  Decision path:")
             for rule in sample.get("level2_decision_path", []):
@@ -714,6 +899,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ref_fasta", default=None, help="Optional reference FASTA for VCF parsing context.")
     parser.add_argument("--max_markers", type=int, default=10, help="Maximum supporting markers to show per level per sample.")
     parser.add_argument("--n_jobs", type=int, default=None, help="Runtime worker override.")
+    parser.add_argument(
+        "--query_input_type",
+        choices=["auto", "matrix", "vcf", "raw_sequence"],
+        default="auto",
+        help="Interpret --genomic as a prebuilt matrix/VCF input or as raw FASTA DNA.",
+    )
+    parser.add_argument(
+        "--raw_sequence_mapping_mode",
+        choices=["auto", "blast", "exact"],
+        default="auto",
+        help="How raw FASTA query sequences should be mapped to selected feature contexts.",
+    )
     return parser
 
 
@@ -741,6 +938,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         ref_fasta=args.ref_fasta,
         max_markers=int(args.max_markers),
         n_jobs=args.n_jobs,
+        query_input_type=args.query_input_type,
+        raw_sequence_mapping_mode=args.raw_sequence_mapping_mode,
     )
     return 0
 

@@ -66,12 +66,22 @@ class NetworkParserConfig:
     # 7) Central statistical feature filtering
     # -------------------------------------------------
     run_central_feature_filtering: bool = True
+
+    # Explicit central feature-filter choice.
+    # "auto" preserves legacy behavior:
+    #   run_rf_fdr_feature_selection=True  -> rf_fdr
+    #   run_rf_fdr_feature_selection=False -> chi2_fdr or fisher_fdr via statistical_test
+    central_feature_filter_method: Literal["auto", "rf_fdr", "chi2_fdr", "fisher_fdr", "chi2_perm_fdr"] = "auto"
+    resolved_central_feature_filter_method: str = "rf_fdr"
+
     statistical_test: Literal["chi2", "fisher"] = "chi2"
     significance_level: float = 0.05
     fdr_alpha: float = 0.05
     fdr_threshold: float = 0.05
     chi2_min_expected: int = 5
-    n_permutation_tests: int = 500
+    # Used by chi2_perm_fdr and optional downstream interaction permutation tests.
+    n_permutation_tests: int = 1000
+    feature_filter_fallback_strategy: Literal["stop", "unfiltered"] = "stop"
 
     # Legacy internal prefilter compatibility
     prefilter_alpha: float = 0.05
@@ -199,6 +209,43 @@ class NetworkParserConfig:
         if self.statistical_test not in {"chi2", "fisher"}:
             raise ValueError("statistical_test must be 'chi2' or 'fisher'")
 
+        supported_central_filters = {"auto", "rf_fdr", "chi2_fdr", "fisher_fdr", "chi2_perm_fdr"}
+        if self.central_feature_filter_method not in supported_central_filters:
+            raise ValueError(
+                "central_feature_filter_method must be one of: "
+                "'auto', 'rf_fdr', 'chi2_fdr', 'fisher_fdr', or 'chi2_perm_fdr'"
+            )
+
+        # Resolve the explicit selector into the legacy booleans/tests used by
+        # older parts of the codebase. This preserves backward compatibility
+        # while giving users a clean method switch.
+        if self.central_feature_filter_method == "auto":
+            if bool(self.run_rf_fdr_feature_selection):
+                self.resolved_central_feature_filter_method = "rf_fdr"
+            elif self.statistical_test == "fisher":
+                self.resolved_central_feature_filter_method = "fisher_fdr"
+            else:
+                self.resolved_central_feature_filter_method = "chi2_fdr"
+        else:
+            self.resolved_central_feature_filter_method = self.central_feature_filter_method
+
+        if self.resolved_central_feature_filter_method == "rf_fdr":
+            self.run_rf_fdr_feature_selection = True
+        elif self.resolved_central_feature_filter_method == "chi2_fdr":
+            self.run_rf_fdr_feature_selection = False
+            self.statistical_test = "chi2"
+        elif self.resolved_central_feature_filter_method == "fisher_fdr":
+            self.run_rf_fdr_feature_selection = False
+            self.statistical_test = "fisher"
+        elif self.resolved_central_feature_filter_method == "chi2_perm_fdr":
+            self.run_rf_fdr_feature_selection = False
+            self.statistical_test = "chi2"
+
+        if self.feature_filter_fallback_strategy not in {"stop", "unfiltered"}:
+            raise ValueError(
+                "feature_filter_fallback_strategy must be one of: 'stop' or 'unfiltered'"
+            )
+
         if self.matrices_type not in {"all", "coding", "sense-mutations"}:
             raise ValueError("matrices_type must be one of: all, coding, sense-mutations")
 
@@ -260,6 +307,8 @@ class NetworkParserConfig:
             raise ValueError("chi2_min_expected must be >= 1")
         if self.n_permutation_tests < 0:
             raise ValueError("n_permutation_tests must be >= 0")
+        if self.resolved_central_feature_filter_method == "chi2_perm_fdr" and self.n_permutation_tests < 1:
+            raise ValueError("n_permutation_tests must be >= 1 when using chi2_perm_fdr")
         if not 0 < self.prefilter_alpha <= 1:
             raise ValueError("prefilter_alpha must be in (0, 1]")
         if not 0 <= self.min_nonmissing_prefilter <= 1:

@@ -32,6 +32,11 @@ try:
 except ImportError:  # pragma: no cover
     NetworkParserQueryEngine = None  # type: ignore
 
+try:
+    from .sequence_query_encoder import encode_raw_sequence_query
+except ImportError:  # pragma: no cover
+    encode_raw_sequence_query = None  # type: ignore
+
 NetworkParserPipeline = NetworkParser
 
 __version__ = "0.1.0"
@@ -49,5 +54,6 @@ __all__ = [
     "normalize_labels",
     "TwoLevelProtocol",
     "NetworkParserQueryEngine",
+    "encode_raw_sequence_query",
     "__version__",
 ]
