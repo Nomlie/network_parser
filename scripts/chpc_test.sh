@@ -1,7 +1,7 @@
 #!/bin/bash
-#PBS -l select=1:ncpus=24:mpiprocs=24:mem=240GB
+#PBS -l select=1:ncpus=24:mem=120GB
 #PBS -P RCHPC
-#PBS -l walltime=48:00:00
+#PBS -l walltime=96:00:00
 #PBS -o /mnt/lustre/users/nmfuphi/testing_network_parser/All_VCFs/allVCFs.out
 #PBS -e /mnt/lustre/users/nmfuphi/testing_network_parser/All_VCFs/allVCFs.err
 #PBS -m abe

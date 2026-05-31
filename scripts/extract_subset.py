@@ -30,12 +30,9 @@ def print_examples():
 Examples
 --------
 # Stratified by lineage (balanced across lineage groups)
-python3 extract_subset.py \
-    --vcf-dir /mnt/lustre/users/nmfuphi/AFRO_TB/AFRO_TB_ANNOTATION_VCF \
-    --meta-file /mnt/lustre/users/nmfuphi/AFRO_TB/AFRO_dataset_meta.csv \
-    --stratify-by Lineage \
-    --n-samples 5000 \
-    --output-dir /mnt/lustre/users/nmfuphi/AFRO_TB/AFRO_TB_5000_LineageBalanced
+
+
+
 
 # Stratified by phenotype
 python3 extract_subset.py \\

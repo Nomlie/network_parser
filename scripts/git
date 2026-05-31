@@ -39,14 +39,21 @@ python -m network_parser.cli train-two-level \
 --n_jobs 6
 
 python -m network_parser.cli train-two-level \
---genomic  /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/ALL_Lineage_Balanced \
---meta /Users/nmfuphicsir.co.za/Documents/data/AFRO_TB/AFRO_dataset_meta.csv \
---level1_label Lineage \
---level2_label Pheno \
+--genomic  /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/ALL \
+--meta /Users/nmfuphicsir.co.za/Documents/data/AFRO_TB/AFRO_dataset_meta_networkparser_ready.csv \
+--level1_label Lineage_clean \
+--level2_label Resistance_Profile_Collapsed \
+--global_level2_label AMR_binary \
 --central_feature_filter_method chi2_fdr \
 --ref_fasta /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/VCF_2_Matrix/ref/H37Rv.gbk \
---output_dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_Lineage_Balanced/chi2_fdr \
---n_jobs 6
+--output_dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_with_global/chi2_fdr \
+--feature_panel_check on \
+--feature_panel_classifier rf \
+--feature_panel_sizes 100,200,500,1000 \
+--feature_panel_metric balanced_accuracy \
+--feature_panel_min_score 0.75 \
+--feature_panel_selection_rule smallest_passing \
+--n_jobs 8
 
 python -m network_parser.cli train-two-level \
 --genomic  /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/ALL_Lineage_Balanced \

@@ -4,6 +4,13 @@ python3 extract_subset.py \
     --n-samples 100 \
     --output-dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/AFRO_TB_100_VCFs
 
+
+python3 extract_subset.py \
+    --vcf-dir /mnt/lustre/users/nmfuphi/AFRO_TB/AFRO_TB_ANNOTATION_VCF \
+    --meta-file /mnt/lustre/users/nmfuphi/AFRO_TB/AFRO_dataset_meta.csv \
+    --n-samples 14000 \
+    --output-dir /mnt/lustre/users/nmfuphi/AFRO_TB/AFRO_TB_ANNOTATION_VCF
+
 python -m network_parser.cli \                                
 --genomic /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/AFRO_TB_1000_VCFs\
 --meta /Users/nmfuphicsir.co.za/Documents/data/AFRO_TB/AFRO_dataset_meta.csv \
