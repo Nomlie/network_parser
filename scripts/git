@@ -74,3 +74,8 @@ python -m network_parser.cli train-two-level \
 --ref_fasta /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/VCF_2_Matrix/ref/H37Rv.gbk \
 --output_dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_Lineage_Balanced/rf_fdr  \
 --n_jobs 6
+
+
+python -m network_parser.cli bundle \
+--registry /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_with_global/chi2_fdr/two_level_model_registry.json \
+--output /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_with_global/chi2_fdr/networkparser_model_bundle.npb
