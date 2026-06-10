@@ -36,6 +36,40 @@ def _json_default(obj: Any):
     return str(obj)
 
 
+def _label_distribution_diagnostics(
+    labels: pd.Series,
+    requested_cv_splits: int = 5,
+) -> Dict[str, Any]:
+    """Return label-balance diagnostics without exposing class names.
+
+    The model selector uses stratified CV probes. If a class has too few
+    samples, every probe can become non-finite. These diagnostics make that
+    failure explicit in logs and JSON artifacts.
+    """
+    y = pd.Series(labels).astype(str).str.strip()
+    y = y.replace({"": pd.NA, "-": pd.NA, "NA": pd.NA, "N/A": pd.NA, "None": pd.NA, "nan": pd.NA, "NaN": pd.NA})
+    y = y.dropna()
+
+    counts = y.value_counts(dropna=True)
+    count_values = [int(v) for v in counts.tolist()]
+    min_count = int(min(count_values)) if count_values else 0
+    max_count = int(max(count_values)) if count_values else 0
+    requested_cv_splits = max(2, int(requested_cv_splits))
+    feasible_cv_splits = int(min(requested_cv_splits, min_count)) if min_count > 0 else 0
+
+    return {
+        "n_samples": int(y.shape[0]),
+        "n_classes": int(counts.shape[0]),
+        "min_class_count": min_count,
+        "max_class_count": max_count,
+        "n_singleton_classes": int(sum(v == 1 for v in count_values)),
+        "class_count_values_sorted": sorted(count_values),
+        "requested_selector_cv_splits": requested_cv_splits,
+        "feasible_selector_cv_splits": feasible_cv_splits,
+        "stratified_cv_feasible": bool(counts.shape[0] >= 2 and feasible_cv_splits >= 2),
+    }
+
+
 class MLProtocolRunner:
     """
     Downstream ML protocol branch.
@@ -113,6 +147,57 @@ class MLProtocolRunner:
                 "Model selector disabled by config.run_model_selector=False; using requested algorithm pathway."
             )
             selector_result = self._selector_disabled_payload(requested_algorithm=requested_algo)
+
+        if run_selector and (requested_algo is None or str(requested_algo).lower() == "auto"):
+            probe_scores = selector_result.get("probe_scores", {})
+            finite_probe_scores = []
+            if isinstance(probe_scores, dict):
+                for key, value in probe_scores.items():
+                    if key == "delta_nonlinear_minus_linear":
+                        continue
+                    try:
+                        numeric_value = float(value)
+                    except Exception:
+                        continue
+                    if np.isfinite(numeric_value):
+                        finite_probe_scores.append(numeric_value)
+            if not finite_probe_scores:
+                diagnostics = _label_distribution_diagnostics(labels_aligned, requested_cv_splits=5)
+                diagnostics.update(
+                    {
+                        "n_features_after_ml_empty_column_filter": int(genomic_df_aligned.shape[1]),
+                        "probe_scores": probe_scores,
+                        "selector_status": selector_result.get("selector_status", "no_finite_probe_scores"),
+                        "requested_algorithm": "auto" if requested_algo is None else str(requested_algo),
+                    }
+                )
+
+                failure_path = out_dir / "ml_protocol_selector_failure.json"
+                with open(failure_path, "w", encoding="utf-8") as fh:
+                    json.dump(diagnostics, fh, indent=2, default=_json_default)
+
+                logger.error(
+                    "Model selector produced no finite probe scores | samples=%d | features=%d | "
+                    "classes=%d | min_class_count=%d | feasible_cv_splits=%d | "
+                    "singleton_classes=%d | wrote=%s",
+                    diagnostics["n_samples"],
+                    diagnostics["n_features_after_ml_empty_column_filter"],
+                    diagnostics["n_classes"],
+                    diagnostics["min_class_count"],
+                    diagnostics["feasible_selector_cv_splits"],
+                    diagnostics["n_singleton_classes"],
+                    str(failure_path),
+                )
+
+                raise RuntimeError(
+                    "Model selector produced no finite probe scores; refusing automatic model selection. "
+                    f"samples={diagnostics['n_samples']}; "
+                    f"features={diagnostics['n_features_after_ml_empty_column_filter']}; "
+                    f"classes={diagnostics['n_classes']}; "
+                    f"min_class_count={diagnostics['min_class_count']}; "
+                    f"feasible_selector_cv_splits={diagnostics['feasible_selector_cv_splits']}. "
+                    f"Diagnostics written to {failure_path}."
+                )
 
         selected_algo = self.resolve_algorithm(
             selector_recommendation=selector_result.get("recommendation", "RF"),
@@ -581,6 +666,12 @@ class MLProtocolRunner:
             raise ValueError(f"Unknown algorithm '{algo}'")
 
         model = mapping[algo](marker_style=marker_style)
+
+        if algo == "LR" and hasattr(model, "max_iter"):
+            model.max_iter = int(getattr(self.config, "ml_lr_max_iter", 2000))
+
+        if algo == "DNL" and hasattr(model, "max_iter"):
+            model.max_iter = int(getattr(self.config, "ml_lr_max_iter", 2000))
 
         if algo == "RF" and getattr(model, "max_features", None) == "auto":
             model.max_features = "sqrt"

@@ -118,6 +118,36 @@ def apply_common_overrides(config: NetworkParserConfig, args: argparse.Namespace
     set_if_provided(config, "fdr_alpha", getattr(args, "fdr_alpha", None))
     set_if_provided(config, "multiple_testing_method", getattr(args, "multiple_testing_method", None))
 
+    feature_panel_check = getattr(args, "feature_panel_check", None)
+    if feature_panel_check is not None:
+        config.run_feature_panel_separability_check = feature_panel_check == "on"
+    set_if_provided(config, "feature_panel_sizes", getattr(args, "feature_panel_sizes", None))
+    set_if_provided(config, "feature_panel_metric", getattr(args, "feature_panel_metric", None))
+    set_if_provided(config, "feature_panel_classifier", getattr(args, "feature_panel_classifier", None))
+    set_if_provided(config, "feature_panel_lr_max_iter", getattr(args, "feature_panel_lr_max_iter", None))
+    set_if_provided(config, "feature_panel_lr_tol", getattr(args, "feature_panel_lr_tol", None))
+    set_if_provided(config, "feature_panel_rf_n_estimators", getattr(args, "feature_panel_rf_n_estimators", None))
+    set_if_provided(config, "feature_panel_rf_max_features", getattr(args, "feature_panel_rf_max_features", None))
+    set_if_provided(config, "feature_panel_rf_min_samples_leaf", getattr(args, "feature_panel_rf_min_samples_leaf", None))
+    set_if_provided(config, "feature_panel_rf_class_weight", getattr(args, "feature_panel_rf_class_weight", None))
+    set_if_provided(config, "feature_panel_rf_n_jobs", getattr(args, "feature_panel_rf_n_jobs", None))
+    set_if_provided(config, "feature_panel_min_score", getattr(args, "feature_panel_min_score", None))
+    set_if_provided(config, "feature_panel_selection_rule", getattr(args, "feature_panel_selection_rule", None))
+    set_if_provided(config, "feature_panel_cv_splits", getattr(args, "feature_panel_cv_splits", None))
+
+    set_if_provided(config, "global_level2_label_column", getattr(args, "global_level2_label", None))
+
+    if bool(getattr(args, "level2_drop_low_support_classes", False)):
+        config.level2_drop_low_support_classes = True
+    set_if_provided(config, "level2_min_class_count", getattr(args, "level2_min_class_count", None))
+
+    if bool(getattr(args, "level2_train_binary_global_fallback", False)):
+        config.level2_train_binary_global_fallback = True
+    set_if_provided(config, "level2_binary_label_column", getattr(args, "level2_binary_label_column", None))
+    set_if_provided(config, "level2_binary_label_mapping_file", getattr(args, "level2_binary_label_mapping_file", None))
+    set_if_provided(config, "level2_binary_resistant_values", getattr(args, "level2_binary_resistant_values", None))
+    set_if_provided(config, "level2_binary_susceptible_values", getattr(args, "level2_binary_susceptible_values", None))
+
     if hasattr(config, "__post_init__"):
         config.__post_init__()
     return config
@@ -180,6 +210,93 @@ def add_rf_fdr_args(parser: argparse.ArgumentParser) -> None:
         help="Fallback for chi-square/Fisher central filtering when no features survive FDR.",
     )
 
+    group.add_argument(
+        "--feature_panel_check",
+        choices=["on", "off"],
+        default=None,
+        help="Enable or disable the ranked feature-panel separability check after central filtering.",
+    )
+    group.add_argument(
+        "--feature_panel_sizes",
+        default=None,
+        help="Comma-separated top-N panel sizes to evaluate after FDR filtering, for example: 100,200,500.",
+    )
+    group.add_argument(
+        "--feature_panel_metric",
+        choices=["balanced_accuracy", "adjusted_rand", "normalized_mutual_info", "silhouette"],
+        default=None,
+        help="Metric used to choose the model-ready feature panel.",
+    )
+    group.add_argument(
+        "--feature_panel_classifier",
+        choices=["lr", "rf"],
+        default=None,
+        help=(
+            "Supervised classifier used for the balanced-accuracy feature-panel probe. "
+            "lr is faster; rf is usually slower but can capture nonlinear separability."
+        ),
+    )
+    group.add_argument(
+        "--feature_panel_lr_max_iter",
+        type=int,
+        default=None,
+        help="Maximum iterations for the LR feature-panel probe.",
+    )
+    group.add_argument(
+        "--feature_panel_lr_tol",
+        type=float,
+        default=None,
+        help="Optimization tolerance for the LR feature-panel probe.",
+    )
+    group.add_argument(
+        "--feature_panel_rf_n_estimators",
+        type=int,
+        default=None,
+        help="Number of trees for the RF feature-panel probe.",
+    )
+    group.add_argument(
+        "--feature_panel_rf_max_features",
+        choices=["sqrt", "log2", "none"],
+        default=None,
+        help="Feature subsampling rule for the RF feature-panel probe.",
+    )
+    group.add_argument(
+        "--feature_panel_rf_min_samples_leaf",
+        type=int,
+        default=None,
+        help="Minimum leaf size for the RF feature-panel probe.",
+    )
+    group.add_argument(
+        "--feature_panel_rf_class_weight",
+        choices=["balanced", "balanced_subsample", "none"],
+        default=None,
+        help="Class weighting strategy for the RF feature-panel probe.",
+    )
+    group.add_argument(
+        "--feature_panel_rf_n_jobs",
+        type=int,
+        default=None,
+        help="Parallel workers used inside the RF feature-panel probe. Use -1 for all available cores.",
+    )
+    group.add_argument(
+        "--feature_panel_min_score",
+        type=float,
+        default=None,
+        help="Minimum separability score required for the selected panel threshold.",
+    )
+    group.add_argument(
+        "--feature_panel_selection_rule",
+        choices=["smallest_passing", "best_passing", "best_available"],
+        default=None,
+        help="Rule for choosing among scored feature panels.",
+    )
+    group.add_argument(
+        "--feature_panel_cv_splits",
+        type=int,
+        default=None,
+        help="Cross-validation folds used by the supervised panel diagnostic.",
+    )
+
 # -----------------------------------------------------------------------------
 # Parser builders
 # -----------------------------------------------------------------------------
@@ -238,11 +355,72 @@ def build_train_two_level_parser(prog: Optional[str] = None, add_help: bool = Tr
     parser.add_argument("--meta", required=True, help="Metadata CSV/TSV containing both supervised labels.")
     parser.add_argument("--level1_label", required=True, help="Metadata column for strain/lineage/group placement.")
     parser.add_argument("--level2_label", required=True, help="Metadata column for drug-resistance phenotype/profile.")
+    parser.add_argument(
+        "--global_level2_label",
+        default=None,
+        help=(
+            "Optional metadata column for the standard global Level 2 fallback. "
+            "Use this when group-specific Level 2 models should learn the detailed "
+            "--level2_label, but the global fallback should learn a broader endpoint "
+            "such as AMR_binary."
+        ),
+    )
     parser.add_argument("--output_dir", required=True, help="Output directory.")
     parser.add_argument("--ref_fasta", default=None, help="Optional reference FASTA/GenBank context for VCF-oriented workflows.")
     parser.add_argument("--algorithm", default=None, help="Optional ML algorithm override passed to the ML protocol.")
     parser.add_argument("--no_global_level2", action="store_true", help="Disable the global Level 2 fallback model.")
     parser.add_argument("--min_level2_samples_per_group", type=int, default=None, help="Minimum samples needed for group-specific Level 2 models.")
+    parser.add_argument(
+        "--level2_drop_low_support_classes",
+        action="store_true",
+        help=(
+            "Exclude Level 2 classes with too few samples before Level 2 statistical "
+            "filtering and model screening. This is useful when singleton or very rare "
+            "phenotype classes make stratified cross-validation impossible."
+        ),
+    )
+    parser.add_argument(
+        "--level2_min_class_count",
+        type=int,
+        default=None,
+        help="Minimum samples per Level 2 class when --level2_drop_low_support_classes is enabled.",
+    )
+    parser.add_argument(
+        "--level2_train_binary_global_fallback",
+        action="store_true",
+        help=(
+            "Train an additional global Level 2 resistant/susceptible fallback model "
+            "across all lineages. This model is used when a group-specific Level 2 "
+            "model is unavailable."
+        ),
+    )
+    parser.add_argument(
+        "--level2_binary_label_column",
+        default=None,
+        help=(
+            "Optional metadata column containing the global binary Level 2 endpoint "
+            "for the additional fallback model."
+        ),
+    )
+    parser.add_argument(
+        "--level2_binary_label_mapping_file",
+        default=None,
+        help=(
+            "Optional CSV/TSV mapping file with columns original_level2_label and "
+            "binary_level2_label. Used to collapse detailed Level 2 labels into a "
+            "resistant/susceptible endpoint when no dedicated binary column exists."
+        ),
+    )
+    parser.add_argument(
+        "--level2_binary_resistant_values",
+        default=None,
+        help="Comma-separated values interpreted as resistant for the binary Level 2 fallback.",
+    )
+    parser.add_argument(
+        "--level2_binary_susceptible_values",
+        default=None,
+        help="Comma-separated values interpreted as susceptible for the binary Level 2 fallback.",
+    )
 
     add_config_args(parser)
     add_rf_fdr_args(parser)
@@ -253,27 +431,72 @@ def build_train_two_level_parser(prog: Optional[str] = None, add_help: bool = Tr
 def build_query_parser(prog: Optional[str] = None, add_help: bool = True) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=prog,
-        description="Apply a trained two-level NetworkParser registry to new strain/sample input.",
+        description="Apply a trained two-level NetworkParser registry or binary model bundle to new strain/sample input.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         add_help=add_help,
     )
 
-    parser.add_argument("--genomic", required=True, help="New genomic input file or directory: VCF/VCF.gz/CSV/TSV/FASTA.")
-    parser.add_argument("--registry", required=True, help="Path to two_level_model_registry.json from training.")
+    parser.add_argument("--genomic", required=True, help="New genomic input file or directory: VCF/VCF.gz/CSV/TSV/FASTA/FASTQ directory.")
+    parser.add_argument(
+        "--registry",
+        default=None,
+        help="Path to two_level_model_registry.json from training. For backward compatibility, a .npb path here is treated as --bundle.",
+    )
+    parser.add_argument(
+        "--bundle",
+        default=None,
+        help="Path to networkparser_model_bundle.npb. Preferred for portable end-to-end query inference.",
+    )
     parser.add_argument("--output_dir", required=True, help="Prediction output directory.")
     parser.add_argument("--ref_fasta", default=None, help="Optional reference FASTA/GenBank context for VCF-oriented workflows.")
     parser.add_argument("--max_markers", type=int, default=10, help="Maximum supporting markers to report per prediction level.")
     parser.add_argument(
         "--query_input_type",
-        choices=["auto", "matrix", "vcf", "raw_sequence"],
+        choices=["auto", "matrix", "vcf", "fasta", "raw_sequence", "fastq"],
         default="auto",
-        help="How to interpret --genomic. Use raw_sequence for raw FASTA DNA queries.",
+        help="How to interpret --genomic. Use fasta for FASTA DNA queries or fastq for paired-end FASTQ directories. raw_sequence is kept as a deprecated alias for fasta.",
     )
     parser.add_argument(
+        "--fasta_mapping_mode",
         "--raw_sequence_mapping_mode",
+        dest="raw_sequence_mapping_mode",
         choices=["auto", "blast", "exact"],
         default="auto",
-        help="How raw FASTA query sequences are mapped to selected feature contexts.",
+        help="How FASTA query sequences are mapped to selected feature contexts. The old --raw_sequence_mapping_mode option remains as an alias.",
+    )
+    parser.add_argument(
+        "--fastq_max_parallel_samples",
+        type=int,
+        default=None,
+        help="Maximum number of paired FASTQ samples to align/call concurrently during FASTQ query mode.",
+    )
+    parser.add_argument(
+        "--fastq_threads",
+        type=int,
+        default=None,
+        help="Total threads available to FASTQ preprocessing. Per-sample threads are derived from this value.",
+    )
+    parser.add_argument(
+        "--fastq_memory_per_sample_mb",
+        type=int,
+        default=None,
+        help="Optional virtual-memory limit per FASTQ sample in MB. Leave unset unless your scheduler requires it.",
+    )
+    parser.add_argument(
+        "--fastq_clean_intermediates",
+        action="store_true",
+        help="Remove FASTQ intermediate working files after successful preprocessing. BAMs, VCFs, stats, and logs are preserved.",
+    )
+    parser.add_argument(
+        "--fastq_no_auto_index_reference",
+        action="store_true",
+        help="Do not automatically create missing BWA/samtools reference indexes for FASTQ query mode.",
+    )
+    parser.add_argument(
+        "--fastq_min_mapping_quality",
+        type=int,
+        default=None,
+        help="Minimum mapping quality passed to bcftools mpileup during FASTQ query mode.",
     )
 
     add_config_args(parser)
@@ -288,14 +511,14 @@ def build_top_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    run = subparsers.add_parser("run", help="Run the single-label NetworkParser workflow.", parents=[build_run_parser(add_help=False)], add_help=False)
+    run = subparsers.add_parser("run", help="Run the single-label NetworkParser workflow.", parents=[build_run_parser(add_help=False)], add_help=True)
     run.set_defaults(command="run")
 
     train_two = subparsers.add_parser(
         "train-two-level",
         help="Train the two-label strain-identity and resistance-profile protocol.",
         parents=[build_train_two_level_parser(add_help=False)],
-        add_help=False,
+        add_help=True,
     )
     train_two.set_defaults(command="train-two-level")
 
@@ -303,7 +526,7 @@ def build_top_parser() -> argparse.ArgumentParser:
         "query",
         help="Run user-facing prediction on new strain/sample input.",
         parents=[build_query_parser(add_help=False)],
-        add_help=False,
+        add_help=True,
     )
     query.set_defaults(command="query")
     return parser
@@ -374,6 +597,7 @@ def run_train_two_level(args: argparse.Namespace) -> Dict[str, Any]:
         level1_label=args.level1_label,
         level2_label=args.level2_label,
         output_dir=args.output_dir,
+        global_level2_label=getattr(args, "global_level2_label", None),
         ref_fasta=args.ref_fasta,
         algorithm=args.algorithm,
         train_global_level2=not bool(args.no_global_level2),
@@ -385,8 +609,53 @@ def run_query(args: argparse.Namespace) -> Any:
     config = load_config(args.config)
     config = apply_common_overrides(config, args)
 
-    LOGGER.info("Starting NetworkParser query workflow")
-    engine = NetworkParserQueryEngine(registry_path=args.registry, config=config)
+    set_if_provided(config, "fastq_max_parallel_samples", getattr(args, "fastq_max_parallel_samples", None))
+    set_if_provided(config, "fastq_threads", getattr(args, "fastq_threads", None))
+    set_if_provided(config, "fastq_memory_per_sample_mb", getattr(args, "fastq_memory_per_sample_mb", None))
+    set_if_provided(config, "fastq_min_mapping_quality", getattr(args, "fastq_min_mapping_quality", None))
+    if bool(getattr(args, "fastq_clean_intermediates", False)):
+        config.fastq_clean_intermediates = True
+    if bool(getattr(args, "fastq_no_auto_index_reference", False)):
+        config.fastq_auto_index_reference = False
+    if hasattr(config, "__post_init__"):
+        config.__post_init__()
+
+    registry_path = getattr(args, "registry", None)
+    bundle_path = getattr(args, "bundle", None)
+
+    # Backward-compatible convenience: allow users to pass the binary bundle
+    # through --registry while newer commands use the clearer --bundle flag.
+    if registry_path and str(registry_path).lower().endswith(".npb") and not bundle_path:
+        bundle_path = registry_path
+        registry_path = None
+
+    if bool(registry_path) == bool(bundle_path):
+        raise ValueError(
+            "Query mode requires exactly one trained model source: "
+            "provide --bundle networkparser_model_bundle.npb or --registry two_level_model_registry.json."
+        )
+
+    if bundle_path:
+        LOGGER.info("Starting NetworkParser bundled query workflow")
+        try:
+            from network_parser.model_bundle import query_bundle
+        except Exception:  # pragma: no cover - supports direct source-tree execution
+            from model_bundle import query_bundle  # type: ignore
+
+        return query_bundle(
+            bundle_path=bundle_path,
+            genomic_path=args.genomic,
+            output_dir=args.output_dir,
+            config=config,
+            ref_fasta=args.ref_fasta,
+            max_markers=int(args.max_markers),
+            n_jobs=args.n_jobs,
+            query_input_type=args.query_input_type,
+            raw_sequence_mapping_mode=args.raw_sequence_mapping_mode,
+        )
+
+    LOGGER.info("Starting NetworkParser registry query workflow")
+    engine = NetworkParserQueryEngine(registry_path=registry_path, config=config)
     return engine.query(
         genomic_path=args.genomic,
         output_dir=args.output_dir,

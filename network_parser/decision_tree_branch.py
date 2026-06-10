@@ -70,18 +70,18 @@ def normalize_labels(
 
 
 def log_feature_summary(name: str, features: List[str], max_show: int = 3) -> None:
+    """Log feature-set size at INFO and exact identifiers only at DEBUG."""
     n = len(features)
+    logger.info("%s: %d features", name, n)
     if n == 0:
-        logger.info("%s: 0 features", name)
         return
 
     if n <= max_show:
-        logger.info("%s: %d features -> %s", name, n, ", ".join(map(str, features)))
+        logger.debug("%s feature identifiers: %s", name, ", ".join(map(str, features)))
     else:
-        logger.info(
-            "%s: %d features -> %s ... +%d more",
+        logger.debug(
+            "%s feature identifiers: %s ... +%d more",
             name,
-            n,
             ", ".join(map(str, features[:max_show])),
             n - max_show,
         )
@@ -714,12 +714,15 @@ class DecisionTreeBranch:
         )
         print(f"Root Features: {len(root_features)} | Branch Features: {len(branch_features)}")
 
-        shown = root_features[:3]
-        if shown:
-            for i, feat in enumerate(shown, 1):
-                conf = confidence_map.get(feat, {}).get("confidence", float("nan"))
-                feat_disp = _shorten_feature_name(feat, max_len=60)
-                print(f"  {i}. {feat_disp} (conf: {conf:.3f})")
+        if root_features:
+            root_conf = [
+                confidence_map.get(feat, {}).get("confidence", float("nan"))
+                for feat in root_features
+            ]
+            finite_conf = [float(x) for x in root_conf if np.isfinite(float(x))]
+            if finite_conf:
+                print(f"Mean Root Feature Confidence: {float(np.mean(finite_conf)):.3f}")
+            print("  Exact feature identifiers were written to artifacts and DEBUG logs.")
         else:
             print("  No root features identified.")
 

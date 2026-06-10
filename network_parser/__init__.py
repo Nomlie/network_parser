@@ -37,6 +37,11 @@ try:
 except ImportError:  # pragma: no cover
     encode_raw_sequence_query = None  # type: ignore
 
+try:
+    from .fastq_processor import FastqProcessor
+except ImportError:  # pragma: no cover
+    FastqProcessor = None  # type: ignore
+
 NetworkParserPipeline = NetworkParser
 
 __version__ = "0.1.0"
@@ -55,5 +60,6 @@ __all__ = [
     "TwoLevelProtocol",
     "NetworkParserQueryEngine",
     "encode_raw_sequence_query",
+    "FastqProcessor",
     "__version__",
 ]

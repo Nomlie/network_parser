@@ -46,10 +46,11 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
 import pandas as pd
+from joblib import Parallel, delayed
 from sklearn.ensemble import RandomForestClassifier
 from statsmodels.stats.multitest import multipletests
 
@@ -86,6 +87,51 @@ def write_json(payload: Dict[str, Any], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2, default=json_default)
+
+
+def _resolve_parallel_plan(
+    *,
+    config: Any,
+    default_n_jobs: int,
+    n_tasks: int,
+) -> tuple[int, int, bool]:
+    """Return (outer_n_jobs, inner_rf_n_jobs, use_outer_parallel).
+
+    RF-FDR has two possible parallel layers: independent RF fits and trees
+    inside each RF.  Running both with all cores causes oversubscription.  The
+    default plan therefore parallelises the independent observed/permutation
+    fits and keeps each RandomForest fit single-threaded.
+    """
+    outer = getattr(config, "rf_selector_outer_n_jobs", None)
+    inner = getattr(config, "rf_selector_inner_n_jobs", None)
+
+    outer_n_jobs = int(default_n_jobs if outer is None else outer)
+    if outer_n_jobs == 0:
+        outer_n_jobs = 1
+
+    use_outer_parallel = n_tasks > 1 and outer_n_jobs != 1
+
+    if inner is not None:
+        inner_rf_n_jobs = int(inner)
+    elif use_outer_parallel:
+        inner_rf_n_jobs = 1
+    else:
+        inner_rf_n_jobs = int(default_n_jobs)
+
+    if inner_rf_n_jobs == 0:
+        inner_rf_n_jobs = 1
+
+    return outer_n_jobs, inner_rf_n_jobs, use_outer_parallel
+
+
+def _parallel_importance_map(tasks: Sequence[tuple[str, int, Optional[np.ndarray]]], func, n_jobs: int) -> List[np.ndarray]:
+    """Run RF-importance tasks with a shared-memory threading backend."""
+    if len(tasks) <= 1 or int(n_jobs) == 1:
+        return [func(kind, seed, values) for kind, seed, values in tasks]
+
+    return Parallel(n_jobs=int(n_jobs), prefer="threads")(
+        delayed(func)(kind, seed, values) for kind, seed, values in tasks
+    )
 
 
 # =====================================================================
@@ -164,35 +210,56 @@ def rf_fdr_feature_selection(
 
     feature_names = list(X.columns)
 
+    total_fits = max(1, n_observed_repeats) + max(1, n_permutations)
+    outer_n_jobs, inner_rf_n_jobs, use_outer_parallel = _resolve_parallel_plan(
+        config=config,
+        default_n_jobs=n_jobs,
+        n_tasks=total_fits,
+    )
+
     logger.info(
-        "%s RF‑FDR started | samples=%d | features=%d | observed_repeats=%d | permutations=%d",
+        "%s RF‑FDR started | samples=%d | features=%d | observed_repeats=%d | "
+        "permutations=%d | outer_n_jobs=%s | inner_rf_n_jobs=%s",
         stage_name,
         int(X.shape[0]),
         int(X.shape[1]),
         int(n_observed_repeats),
         int(n_permutations),
+        str(outer_n_jobs),
+        str(inner_rf_n_jobs),
     )
+
+    y_values = y.astype(str).to_numpy(copy=True)
 
     # ------------------------------------------------------------------
     # 2. Observed importance estimation
     # ------------------------------------------------------------------
-    def fit_importance(local_y: pd.Series, seed: int) -> np.ndarray:
+    def fit_importance(kind: str, seed: int, local_y_values: Optional[np.ndarray]) -> np.ndarray:
         """Fit a single RF and return feature importances."""
+        if kind == "permuted":
+            local_rng = np.random.default_rng(int(seed))
+            fit_y = local_rng.permutation(y_values)
+        else:
+            fit_y = y_values if local_y_values is None else local_y_values
+
         model = RandomForestClassifier(
             n_estimators=n_estimators,
             max_features=max_features,
             min_samples_leaf=min_samples_leaf,
             class_weight=class_weight,
-            random_state=seed,
-            n_jobs=n_jobs,
+            random_state=int(seed),
+            n_jobs=inner_rf_n_jobs,
         )
-        model.fit(X, local_y.astype(str))
+        model.fit(X, fit_y)
         return np.asarray(model.feature_importances_, dtype=float)
 
-    observed_list: List[np.ndarray] = []
-    for _ in range(max(1, n_observed_repeats)):
-        seed = int(rng.integers(0, 2**31 - 1))
-        observed_list.append(fit_importance(y, seed))
+    observed_seeds = [int(rng.integers(0, 2**31 - 1)) for _ in range(max(1, n_observed_repeats))]
+    observed_tasks = [("observed", seed, y_values) for seed in observed_seeds]
+    observed_list = _parallel_importance_map(
+        tasks=observed_tasks,
+        func=fit_importance,
+        n_jobs=outer_n_jobs if use_outer_parallel else 1,
+    )
 
     observed_matrix = np.vstack(observed_list)
     observed_mean = observed_matrix.mean(axis=0)
@@ -207,27 +274,28 @@ def rf_fdr_feature_selection(
 
     total_permutations = max(1, n_permutations)
     progress_step = max(1, total_permutations // 10)
+    permutation_seeds = [int(rng.integers(0, 2**31 - 1)) for _ in range(total_permutations)]
 
-    for perm_idx in range(total_permutations):
-        permuted_y = pd.Series(
-            rng.permutation(y.values),
-            index=y.index,
-            name=y.name,
+    for start in range(0, total_permutations, progress_step):
+        end = min(total_permutations, start + progress_step)
+        batch_tasks = [("permuted", seed, None) for seed in permutation_seeds[start:end]]
+        batch_importances = _parallel_importance_map(
+            tasks=batch_tasks,
+            func=fit_importance,
+            n_jobs=outer_n_jobs if use_outer_parallel else 1,
         )
-        seed = int(rng.integers(0, 2**31 - 1))
-        null_importance = fit_importance(permuted_y, seed)
 
-        null_sum              += null_importance
-        null_sum_sq           += null_importance ** 2
-        null_exceedance_counts += (null_importance >= observed_mean).astype(int)
+        for null_importance in batch_importances:
+            null_sum              += null_importance
+            null_sum_sq           += null_importance ** 2
+            null_exceedance_counts += (null_importance >= observed_mean).astype(int)
 
-        if (perm_idx + 1) % progress_step == 0 or (perm_idx + 1) == total_permutations:
-            logger.info(
-                "%s RF‑FDR permutation progress | %d / %d",
-                stage_name,
-                int(perm_idx + 1),
-                int(total_permutations),
-            )
+        logger.info(
+            "%s RF‑FDR permutation progress | %d / %d",
+            stage_name,
+            int(end),
+            int(total_permutations),
+        )
 
     # ------------------------------------------------------------------
     # 4. Empirical p‑values and FDR correction
@@ -370,6 +438,9 @@ def rf_fdr_feature_selection(
         "fdr_alpha":                      float(fdr_alpha),
         "n_observed_repeats":             int(n_observed_repeats),
         "n_permutations":                 int(n_permutations),
+        "rf_selector_outer_n_jobs":       int(outer_n_jobs),
+        "rf_selector_inner_n_jobs":       int(inner_rf_n_jobs),
+        "rf_selector_outer_parallel":     bool(use_outer_parallel),
         "min_importance":                 float(min_importance),
         "top_n":                          int(top_n) if top_n is not None else None,
         "retained_feature_names":         retained_features,

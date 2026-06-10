@@ -49,6 +49,16 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
+try:
+    from network_parser.utils import log_flow_step, log_filter_step, log_artifact
+except Exception:  # pragma: no cover - supports direct source-tree execution
+    try:
+        from utils import log_flow_step, log_filter_step, log_artifact  # type: ignore
+    except Exception:  # pragma: no cover
+        log_flow_step = None  # type: ignore
+        log_filter_step = None  # type: ignore
+        log_artifact = None  # type: ignore
+
 def _minor_count_chunk(cols: List[List[str]]) -> List[Tuple[int, int]]:
     # returns [(count0, count1), ...] for each col in chunk
     out = []
@@ -649,11 +659,23 @@ def group_and_reduce_by_pattern(
     binary_cols: List[List[str]],
     annotation_rows: List[Dict[str, str]],
     repeat_number: int,
+    sample_threshold: int = 2000,
+    sample_size: int = 256,
 ) -> List[bool]:
-    """Group identical 0/1 patterns and keep up to repeat_number columns per pattern."""
-    groups: Dict[Tuple[str, ...], List[int]] = defaultdict(list)
-    for j, col in enumerate(binary_cols):
-        groups[tuple(col)].append(j)
+    """
+    Group identical 0/1 patterns and keep up to repeat_number columns per pattern.
+
+    For large cohorts, this uses a sampled signature as an exact pre-bucketing
+    optimization, then verifies duplicate groups with the full binary pattern
+    before dropping any columns. The sampling therefore improves runtime/memory
+    without allowing approximate duplicate removal.
+    """
+    n_cols = len(binary_cols)
+    if n_cols == 0:
+        return []
+
+    repeat_number = max(1, int(repeat_number))
+    n_rows = len(binary_cols[0]) if binary_cols and binary_cols[0] is not None else 0
 
     positions: List[Optional[int]] = []
     for r in annotation_rows:
@@ -666,15 +688,60 @@ def group_and_reduce_by_pattern(
             except Exception:
                 positions.append(None)
 
-    keep = [False] * len(binary_cols)
-    for cols in groups.values():
-        cols_sorted = sorted(
+    if len(positions) < n_cols:
+        positions.extend([None] * (n_cols - len(positions)))
+
+    def _sort_cols(cols: List[int]) -> List[int]:
+        return sorted(
             cols,
             key=lambda idx: (positions[idx] is None, positions[idx] if positions[idx] is not None else idx),
         )
-        picked = even_pick_indices(cols_sorted, repeat_number)
-        for idx in picked:
-            keep[idx] = True
+
+    def _full_pattern_key(col: List[str]) -> str:
+        return "".join("1" if value == "1" else "0" for value in col)
+
+    keep = [False] * n_cols
+
+    # Large-cohort pre-bucketing. Duplicate full patterns must share the same
+    # sampled signature, while non-identical patterns are still checked exactly
+    # before any representative is dropped.
+    if n_rows >= int(sample_threshold) and n_cols >= 1000:
+        sample_size = min(max(1, int(sample_size)), n_rows)
+        sample_positions = even_pick_indices(list(range(n_rows)), sample_size)
+
+        sampled_buckets: Dict[str, List[int]] = defaultdict(list)
+        for j, col in enumerate(binary_cols):
+            sampled_key = "".join("1" if col[i] == "1" else "0" for i in sample_positions)
+            sampled_buckets[sampled_key].append(j)
+
+        bucket_iterable = sampled_buckets.values()
+        logger.debug(
+            "Redundancy reduction using sampled pre-buckets | rows=%d | columns=%d | buckets=%d | sample_size=%d",
+            n_rows,
+            n_cols,
+            len(sampled_buckets),
+            sample_size,
+        )
+    else:
+        bucket_iterable = [list(range(n_cols))]
+
+    for bucket_cols in bucket_iterable:
+        bucket_cols = list(bucket_cols)
+        if len(bucket_cols) <= repeat_number:
+            for idx in bucket_cols:
+                keep[idx] = True
+            continue
+
+        groups: Dict[str, List[int]] = defaultdict(list)
+        for idx in bucket_cols:
+            groups[_full_pattern_key(binary_cols[idx])].append(idx)
+
+        for cols in groups.values():
+            cols_sorted = _sort_cols(cols)
+            picked = even_pick_indices(cols_sorted, repeat_number)
+            for idx in picked:
+                keep[idx] = True
+
     return keep
 
 
@@ -830,7 +897,7 @@ class DataLoader:
 
         # Fasta2matrices-style filter knobs for matrices/* outputs
         self.matrices_min_count = int(getattr(config, "matrices_min_count", 3)) if config else 3
-        self.matrices_repeat_number = int(getattr(config, "matrices_repeat_number", 5)) if config else 5
+        self.matrices_repeat_number = int(getattr(config, "matrices_repeat_number", 1)) if config else 1
         self.matrices_type = str(getattr(config, "matrices_type", "all")) if config else "all"
         self.matrices_fix = str(getattr(config, "matrices_fix", "")) if config else ""
 
@@ -850,15 +917,38 @@ class DataLoader:
         if not path.exists():
             raise FileNotFoundError(f"Genomic input not found: {path}")
 
-        logger.info("DataLoader: input=%s", str(path))
+        logger.info("DataLoader input resolved | path=%s", str(path))
 
         if path.is_dir():
-            logger.info("DataLoader: mode=vcf_directory")
+            if log_flow_step is not None:
+                log_flow_step(
+                    logger,
+                    step="Input interpretation — VCF directory",
+                    happened="Detected a directory of per-sample VCF/VCF.GZ files and will construct a sample-by-feature binary variant matrix.",
+                    reason="VCF input must be quality-controlled, merged across samples, encoded against a baseline allele, and converted into the matrix representation used by downstream statistical filtering.",
+                    threshold=(
+                        f"QUAL>={self.qual_threshold}; DP>={self.dp_threshold}; "
+                        f"MQ>={self.mq_threshold}; MQ0F<={self.mq0f_threshold}; "
+                        f"min_sample_presence={self.min_sample_presence}"
+                    ),
+                    status="vcf_directory_mode",
+                )
+            else:
+                logger.info("DataLoader: mode=vcf_directory")
             return self._load_vcf_directory(path, output_dir=output_dir, ref_path=ref_fasta)
 
         suffix = "".join(path.suffixes).lower()
         if suffix.endswith((".csv", ".tsv", ".tab")):
-            logger.info("DataLoader: mode=prebuilt_matrix")
+            if log_flow_step is not None:
+                log_flow_step(
+                    logger,
+                    step="Input interpretation — prebuilt matrix",
+                    happened="Detected an existing sample-by-feature matrix and will preserve it as the starting feature representation.",
+                    reason="A prebuilt matrix is assumed to have already gone through upstream variant calling or matrix construction, so DataLoader only performs safe loading and reports the matrix shape before supervised alignment and statistical filtering.",
+                    status="matrix_mode",
+                )
+            else:
+                logger.info("DataLoader: mode=prebuilt_matrix")
             return self._load_matrix_file(path)
 
         raise ValueError(
@@ -1109,16 +1199,30 @@ class DataLoader:
         kept_n = len(kept_sites)
         retention_rate = kept_n / max(1, candidate_sites)
 
-        logger.info(
-            "DataLoader: cohort presence filtering\n"
-            "  A minimum of %d genomes per site was required.\n"
-            "  %d of %d polymorphic sites were retained (%.2f%% retained).\n"
-            "  Sites failing this threshold were removed from the cohort feature space.",
-            int(self.min_sample_presence),
-            kept_n,
-            candidate_sites,
-            retention_rate * 100,
-        )
+        if log_filter_step is not None:
+            log_filter_step(
+                logger,
+                filter_name="cohort sample presence",
+                happened="Retained only polymorphic features observed in at least the configured number of samples.",
+                reason="Features seen in too few samples provide weak cohort-level support and can make downstream association testing unstable.",
+                before_samples=int(len(per_sample_calls)),
+                before_features=int(candidate_sites),
+                after_samples=int(len(per_sample_calls)),
+                after_features=int(kept_n),
+                threshold=f"min_sample_presence >= {self.min_sample_presence}",
+                status="applied",
+            )
+        else:
+            logger.info(
+                "DataLoader: cohort presence filtering\n"
+                "  A minimum of %d genomes per site was required.\n"
+                "  %d of %d polymorphic sites were retained (%.2f%% retained).\n"
+                "  Sites failing this threshold were removed from the cohort feature space.",
+                int(self.min_sample_presence),
+                kept_n,
+                candidate_sites,
+                retention_rate * 100,
+            )
 
         if not kept_sites:
             raise ValueError(
@@ -1161,7 +1265,29 @@ class DataLoader:
 
         baseline_diff_from_ref = sum(1 for i, ch in enumerate(baseline) if ch != ref_line[i])
 
-        if baseline_strategy == "REF":
+        if log_flow_step is not None:
+            baseline_reason = (
+                "Reference-baseline encoding was requested, so 0 represents the reference allele and 1 represents a non-reference allele."
+                if baseline_strategy == "REF"
+                else "Cohort-mode baseline encoding was requested, so 0 represents the cohort-majority allele and 1 represents the minority/non-baseline allele."
+            )
+            log_flow_step(
+                logger,
+                step="Preprocessing checkpoint — binary baseline encoding",
+                happened="Converted retained polymorphic features into the binary representation required by downstream statistical filtering and model training.",
+                reason=baseline_reason,
+                before_samples=int(len(per_sample_calls)),
+                before_features=int(len(ordered_keys)),
+                after_samples=int(len(per_sample_calls)),
+                after_features=int(len(ordered_keys)),
+                threshold=f"baseline_strategy={baseline_strategy}",
+                status=(
+                    "reference_baseline"
+                    if baseline_strategy == "REF"
+                    else f"cohort_mode_baseline; mode_differs_from_ref_at={baseline_diff_from_ref}"
+                ),
+            )
+        elif baseline_strategy == "REF":
             logger.info(
                 "DataLoader: baseline encoding\n"
                 "  The reference allele was used as the baseline.\n"
@@ -1369,16 +1495,52 @@ class DataLoader:
         # 1) Remove invariant features
         # ─────────────────────────────────────────────
         if self.remove_invariant:
+            before_filter_features = int(df.shape[1])
+            before_filter_samples = int(df.shape[0])
             nunique = df.nunique(axis=0, dropna=False)
             invariant_mask = nunique <= 1
             removed_invariant = int(invariant_mask.sum())
 
             df = df.loc[:, ~invariant_mask]
 
+            if log_filter_step is not None:
+                log_filter_step(
+                    logger,
+                    filter_name="invariant genomic features",
+                    happened="Removed features with only one observed state across the cohort.",
+                    reason="Invariant features carry no discriminatory signal for AMR phenotypes or lineage placement, and keeping them only increases memory/runtime without improving robust inference.",
+                    before_samples=before_filter_samples,
+                    before_features=before_filter_features,
+                    after_samples=int(df.shape[0]),
+                    after_features=int(df.shape[1]),
+                    threshold="unique_states_per_feature > 1",
+                    status="applied",
+                )
+            else:
+                logger.info(
+                    "Invariant-feature filter applied | retained_features=%d / %d",
+                    int(df.shape[1]),
+                    before_filter_features,
+                )
+
             if df.empty:
                 raise ValueError(
                     "All polymorphic sites were removed during invariant filtering. "
                     "Check input data or relax remove_invariant setting."
+                )
+        else:
+            if log_filter_step is not None:
+                log_filter_step(
+                    logger,
+                    filter_name="invariant genomic features",
+                    happened="Skipped invariant-feature removal because remove_invariant=False.",
+                    reason="The user configuration requested that all encoded features remain available for downstream stages.",
+                    before_samples=int(df.shape[0]),
+                    before_features=int(df.shape[1]),
+                    after_samples=int(df.shape[0]),
+                    after_features=int(df.shape[1]),
+                    threshold="disabled",
+                    status="skipped",
                 )
 
         # ─────────────────────────────────────────────
@@ -1393,9 +1555,30 @@ class DataLoader:
                 count_1 = vc.get(1, 0)
                 keep_mask.append(min(count_0, count_1) >= self.min_minor_count)
 
-            before_minor = df.shape[1]
+            before_minor = int(df.shape[1])
+            before_minor_samples = int(df.shape[0])
             df = df.loc[:, keep_mask]
             removed_low_minor_count = before_minor - df.shape[1]
+
+            if log_filter_step is not None:
+                log_filter_step(
+                    logger,
+                    filter_name="low-support minor state",
+                    happened="Removed features whose minority state did not meet the configured cohort-support threshold.",
+                    reason="Extremely rare binary states are unstable in small cohorts and can inflate apparent associations before statistically defensible filtering.",
+                    before_samples=before_minor_samples,
+                    before_features=before_minor,
+                    after_samples=int(df.shape[0]),
+                    after_features=int(df.shape[1]),
+                    threshold=f"min_minor_count >= {self.min_minor_count}",
+                    status="applied",
+                )
+            else:
+                logger.info(
+                    "Minor-count filter applied | retained_features=%d / %d",
+                    int(df.shape[1]),
+                    before_minor,
+                )
 
             if df.empty:
                 raise ValueError(
@@ -1403,6 +1586,19 @@ class DataLoader:
                     f"Try lowering min_minor_count (current: {self.min_minor_count}) "
                     "or verify binary encoding."
                 )
+        elif log_filter_step is not None:
+            log_filter_step(
+                logger,
+                filter_name="low-support minor state",
+                happened="Skipped minor-count filtering because min_minor_count is not enabled.",
+                reason="No cohort-support threshold was requested at this lightweight preprocessing gate; downstream statistical filtering still controls feature retention.",
+                before_samples=int(df.shape[0]),
+                before_features=int(df.shape[1]),
+                after_samples=int(df.shape[0]),
+                after_features=int(df.shape[1]),
+                threshold=f"min_minor_count={self.min_minor_count}",
+                status="skipped",
+            )
 
         features_after = df.shape[1]
 
@@ -2079,6 +2275,8 @@ class DataLoader:
                 binary_cols_12,
                 annotation_for_grouping,
                 self.matrices_repeat_number,
+                sample_threshold=int(getattr(self.config, "matrices_redundancy_sample_threshold", 2000)),
+                sample_size=int(getattr(self.config, "matrices_redundancy_sample_size", 256)),
             )
 
             kept_group = int(sum(mask_group))
@@ -2196,6 +2394,35 @@ class DataLoader:
         """Load a prebuilt matrix from CSV/TSV with row index in the first column."""
         sep = "\t" if path.suffix.lower() in {".tsv", ".tab"} else ","
         df = pd.read_csv(path, sep=sep, index_col=0)
+
+        raw_samples = int(df.shape[0])
+        raw_features = int(df.shape[1])
+        missing_cells = int(df.isna().sum().sum())
+
         df.index = df.index.astype(str)
         df.index.name = "Sample"
+
+        if log_flow_step is not None:
+            log_flow_step(
+                logger,
+                step="Preprocessing checkpoint — prebuilt matrix loading",
+                happened="Loaded the supplied matrix and normalized the row index as sample identifiers.",
+                reason="Downstream metadata alignment depends on stable sample identifiers; feature values are preserved here so central statistical filtering receives the user-supplied feature representation.",
+                before_samples=raw_samples,
+                before_features=raw_features,
+                after_samples=int(df.shape[0]),
+                after_features=int(df.shape[1]),
+                threshold="none at load step",
+                status="missing_cells_detected" if missing_cells else "complete",
+            )
+        else:
+            logger.info("Loaded prebuilt matrix | samples=%d | features=%d", df.shape[0], df.shape[1])
+
+        if missing_cells > 0:
+            logger.info(
+                "Preprocessing note — missing values detected | cells=%d | "
+                "reason=missing values are preserved at matrix loading so downstream stages can apply their configured baseline/imputation rules",
+                missing_cells,
+            )
+
         return df
