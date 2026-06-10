@@ -37,6 +37,7 @@ Outputs
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import logging
 import pickle
@@ -51,13 +52,23 @@ import pandas as pd
 try:
     from network_parser.config import NetworkParserConfig
     from network_parser.data_loader import DataLoader
-    from network_parser.sequence_query_encoder import encode_raw_sequence_query
+    from network_parser.sequence_query_encoder import (
+        encode_raw_sequence_query,
+        encode_vcf_query_from_manifest,
+        load_feature_manifest,
+    )
     from network_parser.utils import normalize_sample_id
+    from network_parser.fastq_processor import FastqProcessor
 except Exception:  # pragma: no cover - supports direct source-tree execution
     from config import NetworkParserConfig  # type: ignore
     from data_loader import DataLoader  # type: ignore
-    from sequence_query_encoder import encode_raw_sequence_query  # type: ignore
+    from sequence_query_encoder import (  # type: ignore
+        encode_raw_sequence_query,
+        encode_vcf_query_from_manifest,
+        load_feature_manifest,
+    )
     from utils import normalize_sample_id  # type: ignore
+    from fastq_processor import FastqProcessor  # type: ignore
 
 
 logger = logging.getLogger(__name__)
@@ -165,8 +176,21 @@ def load_query_matrix(
     ref_fasta: Optional[str] = None,
     n_jobs: Optional[int] = None,
 ) -> pd.DataFrame:
-    """Load/construct the query sample × genomic-feature matrix."""
-    loader = DataLoader(config=config, n_jobs=n_jobs if n_jobs is not None else getattr(config, "n_jobs", -1))
+    """Load/construct the query sample × genomic-feature matrix.
+
+    Query inputs are not discovery cohorts. For VCF-derived query samples we
+    therefore relax cohort-level feature-retention filters so observed query
+    variants are preserved and later aligned to the trained selected-feature
+    space. Missing trained features are still filled as 0 by
+    align_to_training_features().
+    """
+    query_config = copy.copy(config)
+    query_config.min_sample_presence = 1
+    query_config.remove_invariant = False
+    query_config.min_minor_count = 0
+    query_config.matrices_min_count = 0
+
+    loader = DataLoader(config=query_config, n_jobs=n_jobs if n_jobs is not None else getattr(query_config, "n_jobs", -1))
     X = loader.load_genomic_matrix(
         file_path=genomic_path,
         output_dir=str(output_dir / "query_matrix_artifacts"),
@@ -199,6 +223,8 @@ def collect_required_features_from_registry(registry: Dict[str, Any]) -> List[st
     level2 = registry.get("level2", {}) if isinstance(registry, dict) else {}
     global_payload = level2.get("global_fallback", {}) if isinstance(level2, dict) else {}
     _add(global_payload.get("features", []))
+    global_binary_payload = level2.get("global_binary_fallback", {}) if isinstance(level2, dict) else {}
+    _add(global_binary_payload.get("features", []))
 
     by_group = level2.get("by_level1_group", {}) if isinstance(level2, dict) else {}
     if isinstance(by_group, dict):
@@ -225,6 +251,11 @@ def resolve_registry_feature_manifest(registry: Dict[str, Any], registry_base: P
     g_manifest = global_payload.get("feature_manifest", {}) if isinstance(global_payload, dict) else {}
     if isinstance(g_manifest, dict):
         candidates.append(g_manifest.get("manifest_file"))
+
+    global_binary_payload = level2.get("global_binary_fallback", {}) if isinstance(level2, dict) else {}
+    gb_manifest = global_binary_payload.get("feature_manifest", {}) if isinstance(global_binary_payload, dict) else {}
+    if isinstance(gb_manifest, dict):
+        candidates.append(gb_manifest.get("manifest_file"))
 
     by_group = level2.get("by_level1_group", {}) if isinstance(level2, dict) else {}
     if isinstance(by_group, dict):
@@ -318,6 +349,13 @@ def align_to_training_features(
 
     if warning:
         logger.warning(warning)
+
+    if missing_fraction > 0.3:
+        logger.warning(
+            "High missing-feature fraction (%.2f). "
+            "Check that query input uses the same reference/contig naming as training.",
+            missing_fraction,
+        )
 
     return X_aligned, summary
 
@@ -572,6 +610,198 @@ def _safe_float(value: Any) -> Optional[float]:
         return None
 
 
+def _status_from_unique_fraction(unique_fraction: Optional[float], has_mapping_metadata: bool) -> Tuple[str, str]:
+    """Classify whether a model-specific selected feature set was resolved in the query."""
+    if not has_mapping_metadata:
+        return (
+            "feature_space_alignment_only",
+            "No per-feature mapping metadata were available; status is based only on matrix alignment.",
+        )
+    if unique_fraction is None:
+        return (
+            "unknown_marker_recovery",
+            "Per-feature mapping metadata were present, but marker recovery fraction could not be computed.",
+        )
+    if unique_fraction >= 0.80:
+        return (
+            "adequate_marker_recovery",
+            "Most selected markers for this model were resolved in the query input.",
+        )
+    if unique_fraction >= 0.50:
+        return (
+            "partial_marker_recovery",
+            "Only part of this model's selected marker space was resolved; interpret this level with caution.",
+        )
+    return (
+        "low_marker_recovery",
+        "Most selected markers for this model were unresolved or ambiguous; prediction support is likely weak.",
+    )
+
+
+def _status_from_active_fraction(active_fraction: float, active_count: int) -> Tuple[str, str]:
+    """Classify active non-baseline evidence for a model-specific selected feature set."""
+    if active_count >= 10 or active_fraction >= 0.01:
+        return (
+            "active_marker_evidence_present",
+            "This model's selected feature set contains multiple non-baseline query states.",
+        )
+    if active_count > 0:
+        return (
+            "very_low_active_marker_evidence",
+            "Only a small number of this model's selected features are non-baseline in the query.",
+        )
+    return (
+        "no_active_marker_evidence",
+        "This model's selected features are recovered mainly as baseline/zero states in the query.",
+    )
+
+
+def summarize_feature_evidence_for_model(
+    *,
+    sample_values: pd.Series,
+    features: Sequence[str],
+    feature_metadata: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """Summarise query evidence for the exact feature list used by one model.
+
+    This separates model-specific evidence from union-level query evidence.  A
+    query can have many active markers in the global union while the Level 1
+    model, for example, still receives mostly baseline/zero states.
+    """
+    requested = [str(f) for f in features or []]
+    feature_metadata = feature_metadata or {}
+
+    values = pd.to_numeric(sample_values.reindex(requested).fillna(0), errors="coerce").fillna(0)
+    active_features = [str(f) for f, value in values.items() if float(value) != 0.0]
+    n_features = int(len(requested))
+    n_active = int(len(active_features))
+    active_fraction = float(n_active / max(1, n_features))
+
+    has_mapping_metadata = any(str(f) in feature_metadata for f in requested)
+    metadata_rows = [feature_metadata.get(str(f), {}) for f in requested]
+
+    mapping_status_values = [str(m.get("mapping_status", "")) for m in metadata_rows if m]
+    allele_call_values = [str(m.get("allele_call", "")) for m in metadata_rows if m]
+
+    mapping_status_counts = {
+        str(k): int(v)
+        for k, v in pd.Series(mapping_status_values, dtype="object").value_counts(dropna=False).to_dict().items()
+    } if mapping_status_values else {}
+    allele_call_counts = {
+        str(k): int(v)
+        for k, v in pd.Series(allele_call_values, dtype="object").value_counts(dropna=False).to_dict().items()
+    } if allele_call_values else {}
+
+    unique_mapped = int(sum(1 for status in mapping_status_values if status == "mapped_unique_context"))
+    mapped_or_reported = int(len(mapping_status_values))
+    unique_fraction = (
+        float(unique_mapped / max(1, mapped_or_reported))
+        if has_mapping_metadata else None
+    )
+
+    recovery_status, recovery_reason = _status_from_unique_fraction(unique_fraction, has_mapping_metadata)
+    active_status, active_reason = _status_from_active_fraction(active_fraction, n_active)
+
+    return {
+        "n_selected_features": n_features,
+        "n_active_features": n_active,
+        "active_feature_fraction": active_fraction,
+        "active_feature_ids": active_features,
+        "has_mapping_metadata": bool(has_mapping_metadata),
+        "n_features_with_mapping_metadata": int(mapped_or_reported),
+        "n_unique_mapped_features": int(unique_mapped),
+        "unique_mapped_fraction": unique_fraction,
+        "marker_recovery_status": recovery_status,
+        "marker_recovery_reason": recovery_reason,
+        "active_marker_evidence_status": active_status,
+        "active_marker_evidence_reason": active_reason,
+        "mapping_status_counts": mapping_status_counts,
+        "allele_call_counts": allele_call_counts,
+        "n_baseline_match_calls": int(allele_call_counts.get("baseline_match", 0)),
+        "n_alt_match_calls": int(allele_call_counts.get("alt_match", 0)),
+        "n_known_nonbaseline_match_calls": int(allele_call_counts.get("known_nonbaseline_match", 0)),
+        "n_unresolved_or_missing_calls": int(
+            allele_call_counts.get("not_called", 0)
+            + mapping_status_counts.get("missing_context_filled_as_zero", 0)
+            + mapping_status_counts.get("unresolved_context_filled_as_zero", 0)
+        ),
+        "n_multi_hit_calls": int(
+            allele_call_counts.get("not_called_multi_hit_context", 0)
+            + sum(v for k, v in mapping_status_counts.items() if str(k).startswith("multi_hit"))
+        ),
+        "n_non_training_allele_calls": int(allele_call_counts.get("non_training_allele", 0)),
+    }
+
+
+def interpretation_confidence_for_level(
+    *,
+    support: Optional[float],
+    evidence: Dict[str, Any],
+    n_supporting_markers: int,
+) -> Tuple[str, str]:
+    """Combine model support and model-specific marker evidence into a cautious label."""
+    support_value = _safe_float(support)
+    active_count = int(evidence.get("n_active_features", 0) or 0)
+    recovery_status = str(evidence.get("marker_recovery_status", ""))
+    active_status = str(evidence.get("active_marker_evidence_status", ""))
+
+    if recovery_status == "low_marker_recovery":
+        return (
+            "low_confidence",
+            "Prediction generated, but too few model-specific selected markers were resolved in the query input.",
+        )
+
+    if active_count == 0:
+        return (
+            "low_confidence",
+            "Prediction generated, but this model received no active non-baseline selected markers for this sample.",
+        )
+
+    if support_value is None:
+        return (
+            "evidence_available_support_unavailable",
+            "Model-specific active marker evidence is present, but probability-like support was unavailable from the model.",
+        )
+
+    if support_value >= 0.70 and n_supporting_markers > 0 and active_status == "active_marker_evidence_present":
+        return (
+            "high_confidence",
+            "Prediction has strong model support and active model-specific marker evidence.",
+        )
+
+    if support_value >= 0.50 and (n_supporting_markers > 0 or active_count > 0):
+        return (
+            "moderate_confidence",
+            "Prediction has some model support and model-specific marker evidence, but should still be interpreted cautiously.",
+        )
+
+    return (
+        "low_confidence",
+        "Prediction has weak probability-like support despite available marker evidence.",
+    )
+
+
+def flatten_feature_evidence(prefix: str, evidence: Dict[str, Any]) -> Dict[str, Any]:
+    """Small CSV-friendly subset of feature-evidence diagnostics."""
+    return {
+        f"{prefix}_n_selected_features": evidence.get("n_selected_features"),
+        f"{prefix}_n_active_features": evidence.get("n_active_features"),
+        f"{prefix}_active_feature_fraction": evidence.get("active_feature_fraction"),
+        f"{prefix}_n_unique_mapped_features": evidence.get("n_unique_mapped_features"),
+        f"{prefix}_unique_mapped_fraction": evidence.get("unique_mapped_fraction"),
+        f"{prefix}_marker_recovery_status": evidence.get("marker_recovery_status"),
+        f"{prefix}_marker_recovery_reason": evidence.get("marker_recovery_reason"),
+        f"{prefix}_active_marker_evidence_status": evidence.get("active_marker_evidence_status"),
+        f"{prefix}_active_marker_evidence_reason": evidence.get("active_marker_evidence_reason"),
+        f"{prefix}_n_baseline_match_calls": evidence.get("n_baseline_match_calls"),
+        f"{prefix}_n_alt_match_calls": evidence.get("n_alt_match_calls"),
+        f"{prefix}_n_known_nonbaseline_match_calls": evidence.get("n_known_nonbaseline_match_calls"),
+        f"{prefix}_n_unresolved_or_missing_calls": evidence.get("n_unresolved_or_missing_calls"),
+        f"{prefix}_n_multi_hit_calls": evidence.get("n_multi_hit_calls"),
+        f"{prefix}_n_non_training_allele_calls": evidence.get("n_non_training_allele_calls"),
+    }
+
+
 def decision_tree_path_explanation(payload: Any, X: pd.DataFrame) -> Dict[str, List[str]]:
     """
     Best-effort explanation for sklearn decision-tree-like models.
@@ -642,6 +872,9 @@ class NetworkParserQueryEngine:
         if not selected or selected.get("status") != "success" or not selected.get("model_file"):
             selected = level2.get("global_fallback", {}) if isinstance(level2, dict) else {}
             source = "global_fallback"
+            if not selected or selected.get("status") != "success" or not selected.get("model_file"):
+                selected = level2.get("global_binary_fallback", {}) if isinstance(level2, dict) else {}
+                source = "global_binary_fallback"
 
         features = [str(f) for f in selected.get("features", [])]
         model_path = resolve_path(selected.get("model_file"), self.registry_base)
@@ -667,33 +900,121 @@ class NetworkParserQueryEngine:
     ) -> pd.DataFrame:
         out = ensure_dir(Path(output_dir))
         query_input_type = str(query_input_type or "auto").lower()
+
+        # Query mode must reconstruct the *trained* feature space.  For FASTA,
+        # VCF, and FASTQ-derived VCF input we therefore use the selected-feature
+        # manifest and the union of registry features, instead of allowing a
+        # single-sample query to rediscover/filter/collapse its own feature set.
+        genomic_candidate = Path(genomic_path)
+        fasta_suffixes = {".fa", ".fna", ".fasta", ".fas"}
+        fastq_suffixes = (".fastq", ".fq", ".fastq.gz", ".fq.gz")
+        vcf_suffixes = (".vcf", ".vcf.gz")
+
         if query_input_type == "auto":
-            genomic_candidate = Path(genomic_path)
-            fasta_suffixes = {".fa", ".fna", ".fasta", ".fas"}
-            if genomic_candidate.is_file() and genomic_candidate.suffix.lower() in fasta_suffixes:
-                query_input_type = "raw_sequence"
-            elif genomic_candidate.is_dir() and any(p.suffix.lower() in fasta_suffixes for p in genomic_candidate.iterdir()):
-                query_input_type = "raw_sequence"
+            if genomic_candidate.is_file():
+                lower_name = genomic_candidate.name.lower()
+                if genomic_candidate.suffix.lower() in fasta_suffixes:
+                    query_input_type = "fasta"
+                elif lower_name.endswith(vcf_suffixes):
+                    query_input_type = "vcf"
+            elif genomic_candidate.is_dir():
+                files = [p for p in genomic_candidate.iterdir() if p.is_file()]
+                names = [p.name.lower() for p in files]
+                if any(any(name.endswith(ext) for ext in fastq_suffixes) for name in names):
+                    query_input_type = "fastq"
+                elif any(any(name.endswith(ext) for ext in vcf_suffixes) for name in names):
+                    query_input_type = "vcf"
+                elif any(p.suffix.lower() in fasta_suffixes for p in files):
+                    query_input_type = "fasta"
+            if query_input_type == "auto":
+                query_input_type = "matrix"
+
+        if query_input_type in {"raw_sequence", "raw_fasta", "sequence"}:
+            logger.warning("query_input_type=raw_sequence is deprecated; use query_input_type=fasta instead.")
+            query_input_type = "fasta"
+
         raw_calls: Optional[pd.DataFrame] = None
         raw_mapping_summary: Optional[Dict[str, Any]] = None
+        fastq_processing_summary: Optional[Dict[str, Any]] = None
 
-        if query_input_type == "raw_sequence":
-            required_features = collect_required_features_from_registry(self.registry)
-            manifest_path = resolve_registry_feature_manifest(self.registry, self.registry_base)
+        required_features = collect_required_features_from_registry(self.registry)
+        manifest_path = resolve_registry_feature_manifest(self.registry, self.registry_base)
+
+        def _require_feature_manifest(input_label: str) -> Path:
             if manifest_path is None:
                 raise ValueError(
-                    "Raw-sequence query mode requires a feature manifest in the model registry. "
-                    "Retrain with the updated DataLoader so selected-feature manifests are saved."
+                    f"{input_label} query mode requires a selected-feature manifest in the model registry. "
+                    "Retrain with a reference FASTA/GenBank so selected-feature context, REF/ALT, "
+                    "and baseline allele metadata are saved."
                 )
+            manifest = load_feature_manifest(Path(manifest_path))
+            context_columns = [
+                col
+                for col in ("Context_sequence", "Context_±40", "Context", "context_sequence")
+                if col in manifest.columns
+            ]
+            context_present = 0
+            if context_columns:
+                context_present = int(
+                    manifest[context_columns]
+                    .astype(str)
+                    .apply(lambda row: any(value.strip() for value in row), axis=1)
+                    .sum()
+                )
+            logger.info(
+                "Loaded selected-feature manifest | features=%d | context_present=%d",
+                len(manifest),
+                context_present,
+            )
+            return manifest_path
+
+        if query_input_type == "fasta":
+            resolved_manifest = _require_feature_manifest("FASTA")
             X_raw, raw_mapping_summary, raw_calls = encode_raw_sequence_query(
                 raw_sequence_path=genomic_path,
-                feature_manifest_path=str(manifest_path),
+                feature_manifest_path=str(resolved_manifest),
                 features=required_features,
-                output_dir=str(out / "raw_sequence_query_encoding"),
+                output_dir=str(out / "fasta_query_encoding"),
                 mapping_mode=raw_sequence_mapping_mode,
             )
             X_raw.index = X_raw.index.astype(str).map(normalize_sample_id)
-        else:
+
+        elif query_input_type == "vcf":
+            resolved_manifest = _require_feature_manifest("VCF")
+            X_raw, raw_mapping_summary, raw_calls = encode_vcf_query_from_manifest(
+                vcf_path=genomic_path,
+                feature_manifest_path=str(resolved_manifest),
+                features=required_features,
+                output_dir=str(out / "vcf_query_encoding"),
+            )
+            X_raw.index = X_raw.index.astype(str).map(normalize_sample_id)
+
+        elif query_input_type == "fastq":
+            if not ref_fasta:
+                raise ValueError(
+                    "FASTQ query mode requires --ref_fasta because reads must be aligned "
+                    "and converted to VCF-derived genomic features before inference."
+                )
+            resolved_manifest = _require_feature_manifest("FASTQ")
+            fastq_out = ensure_dir(out / "fastq_query_preprocessing")
+            processor = FastqProcessor(
+                config=self.config,
+                fastq_dir=genomic_path,
+                ref_genome=ref_fasta,
+                output_dir=str(fastq_out),
+                n_jobs=n_jobs,
+            )
+            vcf_dir, fastq_summary = processor.process_samples()
+            fastq_processing_summary = asdict(fastq_summary)
+            X_raw, raw_mapping_summary, raw_calls = encode_vcf_query_from_manifest(
+                vcf_path=str(vcf_dir),
+                feature_manifest_path=str(resolved_manifest),
+                features=required_features,
+                output_dir=str(out / "vcf_query_encoding"),
+            )
+            X_raw.index = X_raw.index.astype(str).map(normalize_sample_id)
+
+        elif query_input_type == "matrix":
             X_raw = load_query_matrix(
                 genomic_path=genomic_path,
                 output_dir=out,
@@ -701,6 +1022,8 @@ class NetworkParserQueryEngine:
                 ref_fasta=ref_fasta,
                 n_jobs=n_jobs,
             )
+        else:
+            raise ValueError("query_input_type must be one of: auto, matrix, vcf, fasta, fastq")
 
         raw_feature_metadata = feature_call_metadata_by_sample(raw_calls)
         if raw_feature_metadata:
@@ -733,6 +1056,7 @@ class NetworkParserQueryEngine:
             l2_tree_paths = decision_tree_path_explanation(l2_payload, X_l2)
 
             sample_feature_metadata = raw_feature_metadata.get(sample_id, {})
+            sample_mapping_quality = raw_sample_quality.get(sample_id, {})
             l1_markers = supporting_markers_for_sample(
                 X_l1.loc[sample_id],
                 ranked_features=level1_ranked,
@@ -748,6 +1072,32 @@ class NetworkParserQueryEngine:
                 feature_metadata=sample_feature_metadata,
             )
 
+            # Model-specific query evidence.  This is intentionally separate
+            # from union-level FASTA/VCF recovery so we can diagnose whether
+            # Level 1 or the selected Level 2 model received active marker
+            # evidence.
+            l1_evidence = summarize_feature_evidence_for_model(
+                sample_values=X_l1.loc[sample_id],
+                features=level1_features,
+                feature_metadata=sample_feature_metadata,
+            )
+            l2_evidence = summarize_feature_evidence_for_model(
+                sample_values=X_l2.loc[sample_id],
+                features=l2_features,
+                feature_metadata=sample_feature_metadata,
+            )
+
+            l1_confidence, l1_confidence_note = interpretation_confidence_for_level(
+                support=l1_support[idx],
+                evidence=l1_evidence,
+                n_supporting_markers=len(l1_markers),
+            )
+            l2_confidence, l2_confidence_note = interpretation_confidence_for_level(
+                support=l2_support[0],
+                evidence=l2_evidence,
+                n_supporting_markers=len(l2_markers),
+            )
+
             row = {
                 "sample_id": sample_id,
                 "predicted_level1_identity": predicted_l1,
@@ -755,8 +1105,26 @@ class NetworkParserQueryEngine:
                 "predicted_level2_resistance_profile": str(l2_pred[0]),
                 "level2_support": l2_support[0],
                 "level2_model_source": level2_source,
+                "level2_target_label_column": (
+                    self.registry.get("level2", {}).get("global_label_column")
+                    if level2_source == "global_fallback"
+                    else self.registry.get("level2", {}).get("label_column")
+                ),
                 "n_level1_supporting_markers": int(len(l1_markers)),
                 "n_level2_supporting_markers": int(len(l2_markers)),
+                "level1_interpretation_confidence": l1_confidence,
+                "level1_confidence_note": l1_confidence_note,
+                "level2_interpretation_confidence": l2_confidence,
+                "level2_confidence_note": l2_confidence_note,
+                **flatten_feature_evidence("level1", l1_evidence),
+                **flatten_feature_evidence("level2", l2_evidence),
+                "query_marker_recovery_status": sample_mapping_quality.get("marker_recovery_status"),
+                "query_marker_recovery_reason": sample_mapping_quality.get("marker_recovery_reason"),
+                "query_active_marker_evidence_status": sample_mapping_quality.get("active_marker_evidence_status"),
+                "query_active_marker_evidence_reason": sample_mapping_quality.get("active_marker_evidence_reason"),
+                "query_unique_mapped_fraction": sample_mapping_quality.get("unique_mapped_fraction"),
+                "query_active_feature_fraction": sample_mapping_quality.get("active_feature_fraction"),
+                "query_n_encoded_active_features": sample_mapping_quality.get("n_encoded_active_features"),
             }
             rows.append(row)
 
@@ -765,9 +1133,13 @@ class NetworkParserQueryEngine:
                     **row,
                     "level1_class_support": l1_class_support[idx],
                     "level2_class_support": l2_class_support[0],
+                    "level1_feature_evidence": l1_evidence,
+                    "level2_feature_evidence": l2_evidence,
                     "level1_supporting_markers": l1_markers,
                     "level2_supporting_markers": l2_markers,
-                    "raw_sequence_mapping_quality": raw_sample_quality.get(sample_id, {}),
+                    "fasta_mapping_quality": sample_mapping_quality if query_input_type == "fasta" else {},
+                    "vcf_mapping_quality": sample_mapping_quality if query_input_type in {"vcf", "fastq"} else {},
+                    "raw_sequence_mapping_quality": sample_mapping_quality,
                     "level1_decision_path": l1_tree_paths.get(sample_id, []),
                     "level2_decision_path": l2_tree_paths.get(sample_id, []),
                 }
@@ -783,7 +1155,10 @@ class NetworkParserQueryEngine:
             "n_query_samples": int(X_raw.shape[0]),
             "n_query_features_raw": int(X_raw.shape[1]),
             "query_input_type": query_input_type,
+            "fasta_mapping": raw_mapping_summary if query_input_type == "fasta" else None,
+            "vcf_mapping": raw_mapping_summary if query_input_type in {"vcf", "fastq"} else None,
             "raw_sequence_mapping": raw_mapping_summary,
+            "fastq_processing": fastq_processing_summary,
         }
         write_json(alignment_summary, out / "query_alignment_summary.json")
 
@@ -796,14 +1171,21 @@ class NetworkParserQueryEngine:
             "notes": [
                 "Query mode is inference-only.",
                 "RF-FDR feature selection is not rerun on query samples.",
-                "Missing trained features in query samples are encoded as 0 for alignment to the saved feature space.",
-                "For raw-sequence queries, unresolved context mappings are also encoded as 0 and recorded in the raw-sequence mapping summary.",
+                "For FASTA/VCF/FASTQ queries, NetworkParser reconstructs the saved trained feature space from the selected-feature manifest.",
+                "Query mode does not rerun cohort-level matrix refinement, redundancy reduction, RF-FDR, model selection, or tree construction.",
+                "For FASTA queries, saved context sequences are mapped to the query genome and the centre nucleotide is encoded with the saved baseline/REF/ALT rule.",
+                "For VCF queries, saved feature coordinates are looked up directly in the query VCF; absent variant records are treated as reference-state calls and encoded with the same saved rule.",
+                "Unresolved, ambiguous, repeated, or non-training allele calls are encoded as 0 and explicitly reported in the mapping summary.",
             ],
             "artifacts": {
                 "predictions_csv": str(predictions_path),
                 "alignment_summary_json": str(out / "query_alignment_summary.json"),
                 "report_json": str(out / "query_report.json"),
                 "report_txt": str(out / "query_report.txt"),
+                "fastq_processing_summary": (
+                    str(out / "fastq_query_preprocessing" / "fastq_processing_summary.json")
+                    if fastq_processing_summary is not None else None
+                ),
             },
         }
         write_json(report, out / "query_report.json")
@@ -823,13 +1205,16 @@ def write_text_report(report: Dict[str, Any], path: Path) -> None:
     for sample in report.get("samples", []):
         lines.append(f"Sample: {sample.get('sample_id')}")
         lines.append("-" * (8 + len(str(sample.get("sample_id", "")))))
-        if sample.get("raw_sequence_mapping_quality"):
-            rq = sample.get("raw_sequence_mapping_quality") or {}
-            lines.append("Raw-sequence mapping quality")
-            lines.append(f"  Unique mapped calls: {rq.get('n_unique_mapped_calls', 0)} / {rq.get('n_feature_calls', 0)}")
+        if sample.get("fasta_mapping_quality") or sample.get("vcf_mapping_quality") or sample.get("raw_sequence_mapping_quality"):
+            rq = sample.get("fasta_mapping_quality") or sample.get("vcf_mapping_quality") or sample.get("raw_sequence_mapping_quality") or {}
+            label = "FASTA context recovery" if sample.get("fasta_mapping_quality") else "VCF trained-feature recovery"
+            lines.append(label)
+            lines.append(f"  Marker recovery: {rq.get('marker_recovery_status', 'NA')}")
+            lines.append(f"  Active marker evidence: {rq.get('active_marker_evidence_status', 'NA')}")
+            lines.append(f"  Unique mapped/resolved calls: {rq.get('n_unique_mapped_calls', 0)} / {rq.get('n_feature_calls', 0)}")
             lines.append(f"  Active encoded calls: {rq.get('n_encoded_active_features', 0)}")
             if rq.get("n_multi_hit_calls", 0):
-                lines.append(f"  Multi-hit contexts filled as 0: {rq.get('n_multi_hit_calls')}")
+                lines.append(f"  Multi-hit contexts/coordinates filled as 0: {rq.get('n_multi_hit_calls')}")
             if rq.get("n_unresolved_or_missing_context_calls", 0):
                 lines.append(f"  Unresolved/missing contexts filled as 0: {rq.get('n_unresolved_or_missing_context_calls')}")
             lines.append("")
@@ -837,6 +1222,19 @@ def write_text_report(report: Dict[str, Any], path: Path) -> None:
         lines.append(f"  Prediction: {sample.get('predicted_level1_identity')}")
         if sample.get("level1_support") is not None:
             lines.append(f"  Support: {float(sample.get('level1_support')):.4f}")
+        if sample.get("level1_interpretation_confidence"):
+            lines.append(f"  Interpretation confidence: {sample.get('level1_interpretation_confidence')}")
+            if sample.get("level1_confidence_note"):
+                lines.append(f"  Confidence note: {sample.get('level1_confidence_note')}")
+        l1_ev = sample.get("level1_feature_evidence") or {}
+        if l1_ev:
+            lines.append("  Level-specific marker evidence:")
+            lines.append(f"    Selected features: {l1_ev.get('n_selected_features', 'NA')}")
+            lines.append(f"    Active selected features: {l1_ev.get('n_active_features', 'NA')}")
+            if l1_ev.get("unique_mapped_fraction") is not None:
+                lines.append(f"    Unique recovery fraction: {float(l1_ev.get('unique_mapped_fraction')):.4f}")
+            lines.append(f"    Marker recovery: {l1_ev.get('marker_recovery_status', 'NA')}")
+            lines.append(f"    Active evidence: {l1_ev.get('active_marker_evidence_status', 'NA')}")
         if sample.get("level1_supporting_markers"):
             lines.append("  Supporting markers:")
             for marker in sample.get("level1_supporting_markers", [])[:10]:
@@ -857,6 +1255,21 @@ def write_text_report(report: Dict[str, Any], path: Path) -> None:
         if sample.get("level2_support") is not None:
             lines.append(f"  Support: {float(sample.get('level2_support')):.4f}")
         lines.append(f"  Model source: {sample.get('level2_model_source')}")
+        if sample.get("level2_target_label_column"):
+            lines.append(f"  Target label column: {sample.get('level2_target_label_column')}")
+        if sample.get("level2_interpretation_confidence"):
+            lines.append(f"  Interpretation confidence: {sample.get('level2_interpretation_confidence')}")
+            if sample.get("level2_confidence_note"):
+                lines.append(f"  Confidence note: {sample.get('level2_confidence_note')}")
+        l2_ev = sample.get("level2_feature_evidence") or {}
+        if l2_ev:
+            lines.append("  Level-specific marker evidence:")
+            lines.append(f"    Selected features: {l2_ev.get('n_selected_features', 'NA')}")
+            lines.append(f"    Active selected features: {l2_ev.get('n_active_features', 'NA')}")
+            if l2_ev.get("unique_mapped_fraction") is not None:
+                lines.append(f"    Unique recovery fraction: {float(l2_ev.get('unique_mapped_fraction')):.4f}")
+            lines.append(f"    Marker recovery: {l2_ev.get('marker_recovery_status', 'NA')}")
+            lines.append(f"    Active evidence: {l2_ev.get('active_marker_evidence_status', 'NA')}")
         if sample.get("level2_supporting_markers"):
             lines.append("  Supporting markers:")
             for marker in sample.get("level2_supporting_markers", [])[:10]:
@@ -901,16 +1314,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--n_jobs", type=int, default=None, help="Runtime worker override.")
     parser.add_argument(
         "--query_input_type",
-        choices=["auto", "matrix", "vcf", "raw_sequence"],
+        choices=["auto", "matrix", "vcf", "fasta", "raw_sequence", "fastq"],
         default="auto",
-        help="Interpret --genomic as a prebuilt matrix/VCF input or as raw FASTA DNA.",
+        help="Interpret --genomic as a prebuilt matrix/VCF input, FASTA DNA, or paired FASTQ reads. raw_sequence remains a deprecated alias for fasta.",
     )
     parser.add_argument(
+        "--fasta_mapping_mode",
         "--raw_sequence_mapping_mode",
+        dest="raw_sequence_mapping_mode",
         choices=["auto", "blast", "exact"],
         default="auto",
-        help="How raw FASTA query sequences should be mapped to selected feature contexts.",
+        help="How FASTA query sequences should be mapped to selected feature contexts. The old --raw_sequence_mapping_mode option remains as an alias.",
     )
+    parser.add_argument("--fastq_max_parallel_samples", type=int, default=None)
+    parser.add_argument("--fastq_threads", type=int, default=None)
+    parser.add_argument("--fastq_memory_per_sample_mb", type=int, default=None)
+    parser.add_argument("--fastq_clean_intermediates", action="store_true")
+    parser.add_argument("--fastq_no_auto_index_reference", action="store_true")
+    parser.add_argument("--fastq_min_mapping_quality", type=int, default=None)
     return parser
 
 
@@ -929,6 +1350,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     config = load_config(args.config)
     if args.n_jobs is not None:
         config.n_jobs = int(args.n_jobs)
+    for key in [
+        "fastq_max_parallel_samples",
+        "fastq_threads",
+        "fastq_memory_per_sample_mb",
+        "fastq_min_mapping_quality",
+    ]:
+        value = getattr(args, key, None)
+        if value is not None:
+            setattr(config, key, value)
+    if bool(getattr(args, "fastq_clean_intermediates", False)):
+        config.fastq_clean_intermediates = True
+    if bool(getattr(args, "fastq_no_auto_index_reference", False)):
+        config.fastq_auto_index_reference = False
     config.__post_init__()
 
     engine = NetworkParserQueryEngine(registry_path=args.registry, config=config)

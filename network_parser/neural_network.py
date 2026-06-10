@@ -2716,7 +2716,7 @@ class LR(MLearn):
         C: float = 1.0,
         penalty: str = "l2",
         solver: str = "lbfgs",
-        max_iter: int = 1000,
+        max_iter: int = 2000,
         class_weight: Union[str, dict, None] = None,
         random_state: int = 42,
         n_jobs: int = -1,
@@ -3907,7 +3907,7 @@ class DeltaNonlinLin(MLearn):
         penalty: str = "l2",
         solver: str = "lbfgs",
         lr_class_weight: Union[str, dict, None] = None,
-        max_iter: int = 1000,
+        max_iter: int = 2000,
         # Shared
         random_state: int = 42,
         categorical: bool = True,

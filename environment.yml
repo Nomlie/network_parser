@@ -1,0 +1,48 @@
+name: networkparser
+
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+
+dependencies:
+  # Core
+  - python=3.10
+  - pip
+
+  # Scientific Python stack
+  - numpy
+  - pandas
+  - scipy
+  - scikit-learn
+  - statsmodels
+  - pyyaml
+  - networkx
+  - joblib
+  - tqdm
+
+  # Optional plotting / reporting
+  - matplotlib
+
+  # Reference / sequence parsing
+  # Required when using reference FASTA / GenBank context extraction.
+  - biopython
+
+  # VCF / HTS processing
+  # Used by DataLoader and FASTQ-derived VCF query mode.
+  - bcftools
+  - htslib
+  - tabix
+
+  # FASTQ -> VCF preprocessing
+  # Required for --query_input_type fastq.
+  - bwa
+  - samtools
+
+  # Raw-sequence query context mapping
+  # Used when --raw_sequence_mapping_mode auto or blast.
+  - blast
+
+  # Pip-installed packages
+  - pip:
+      []

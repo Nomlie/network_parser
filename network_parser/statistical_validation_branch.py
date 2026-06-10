@@ -233,46 +233,38 @@ class StatisticalValidatorBranch:
         output_dir: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        For each feature:
-          - choose chi2 or Fisher where appropriate
-          - compute effect size (Cramer's V)
-          - compute mutual information
-
-        Notes
-        -----
-        This method is intentionally generic for binary / categorical columns.
+        Per-feature association testing with memory-aware chunking for large matrices.
         """
         self._validate_feature_inputs(data, labels)
 
-        results: Dict[str, Any] = {}
+        n_features = data.shape[1]
+        logger.info(
+            "Association testing started | features=%d | n_jobs=%s",
+            n_features,
+            self.n_jobs,
+        )
+
+        # Memory-aware chunking
+        chunk_size = max(500, min(2000, n_features // (abs(self.n_jobs) * 2) if self.n_jobs != 1 else 1000))
 
         def test_feature(feature: str):
             try:
                 feature_series = data[feature]
-
-                # Drop rows where label is missing
                 valid_mask = ~labels.isna()
                 feature_series = feature_series.loc[valid_mask]
                 local_labels = labels.loc[valid_mask]
 
                 contingency = pd.crosstab(feature_series, local_labels)
 
-                # Need at least 2x2 support to test association
                 if contingency.shape[0] < 2 or contingency.shape[1] < 2:
                     return feature, None
 
                 test_name = self._choose_test(contingency)
 
-                if test_name == "fisher":
-                    if contingency.shape == (2, 2):
-                        _, p_value = fisher_exact(contingency.values)
-                        statistic = None
-                        dof = None
-                    else:
-                        # Fisher is not generally available beyond 2x2 in scipy.
-                        # Fallback to chi2 to keep the run operational.
-                        statistic, p_value, dof, _ = chi2_contingency(contingency.values)
-                        test_name = "chi2"
+                if test_name == "fisher" and contingency.shape == (2, 2):
+                    _, p_value = fisher_exact(contingency.values)
+                    statistic = None
+                    dof = None
                 else:
                     statistic, p_value, dof, _ = chi2_contingency(contingency.values)
 
@@ -296,26 +288,45 @@ class StatisticalValidatorBranch:
                 logger.warning("Association testing failed for feature '%s': %s", feature, exc)
                 return feature, None
 
-        feature_results = Parallel(n_jobs=self.n_jobs)(
-            delayed(test_feature)(f) for f in data.columns
-        )
+        # Chunked execution
+        features = list(data.columns)
+        results = []
 
-        for feature, res in feature_results:
+        for i in range(0, len(features), chunk_size):
+            chunk = features[i : i + chunk_size]
+            logger.info(
+                "Processing feature chunk %d/%d | size=%d",
+                i // chunk_size + 1,
+                (len(features) + chunk_size - 1) // chunk_size,
+                len(chunk),
+            )
+
+            chunk_results = Parallel(n_jobs=self.n_jobs)(
+                delayed(test_feature)(f) for f in chunk
+            )
+            results.extend(chunk_results)
+
+        # Build final dict
+        final_results: Dict[str, Any] = {}
+        for feature, res in results:
             if res is not None:
-                results[feature] = res
+                final_results[feature] = res
 
         if output_dir:
             out = Path(output_dir)
             out.mkdir(parents=True, exist_ok=True)
-            (out / "chi_squared_results.json").write_text(json.dumps(results, indent=2))
+            (out / "chi_squared_results.json").write_text(
+                json.dumps(final_results, indent=2, default=self._json_default)
+            )
 
         logger.info(
-            "Association testing complete | valid_tests=%d / %d",
-            int(len(results)),
-            int(data.shape[1]),
+            "Association testing complete | valid_tests=%d / %d | chunk_size=%d",
+            len(final_results),
+            n_features,
+            chunk_size,
         )
 
-        return results
+        return final_results
 
     # ------------------------------------------------------------------
     # Chi-square permutation-FDR central feature filtering

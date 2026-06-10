@@ -1,0 +1,87 @@
+TRAINING / DISCOVERY SIDE
+-------------------------
+
+Genomic input                    Metadata input
+(VCF / matrix)                   (labels: group, phenotype, AMR profile)
+      │                                      │
+      │                                      │
+      ▼                                      ▼
+Clean genomic matrix                  Supervised labels
+sample × genomic features             sample → target label
+      │                                      │
+      └───────────────┬──────────────────────┘
+                      ▼
+        Central statistical feature filtering
+        χ² / Fisher / RF-FDR / permutation-FDR
+                      │
+                      ▼
+              Filtered matrix
+      only retained genomic features enter modelling
+                      │
+                      ▼
+        Level 1 and Level 2 model training
+                      │
+                      ▼
+       Selected feature lists saved in registry
+                      │
+                      ▼
+        Selected-feature manifest saved
+        ┌────────────────────────────────────────────┐
+        │ Feature_ID                                 │
+        │ genomic position / contig                  │
+        │ REF allele                                 │
+        │ ALT allele                                 │
+        │ baseline allele                            │
+        │ encoding rule                              │
+        │ context sequence around marker             │
+        │ marker-centre offset                       │
+        │ gene / region annotation                   │
+        └────────────────────────────────────────────┘
+                      │
+                      ▼
+              Query-ready model registry
+
+
+QUERY / INFERENCE SIDE
+----------------------
+
+New query sample
+(matrix, VCF-derived matrix, or raw FASTA sequence)
+                      │
+                      ▼
+          Load saved model registry
+          "Which features do the trained models need?"
+                      │
+                      ▼
+          Load selected-feature manifest
+          "What does each feature mean biologically?"
+                      │
+                      ▼
+        For raw FASTA query:
+        map saved context sequence to query DNA
+                      │
+                      ▼
+        Extract nucleotide at marker centre
+                      │
+                      ▼
+        Compare observed nucleotide with:
+        REF / ALT / baseline allele from manifest
+                      │
+                      ▼
+        Encode using the same training rule
+        baseline = 0, known non-baseline = 1
+                      │
+                      ▼
+        Build one-sample selected-feature matrix
+        same columns/order expected by trained model
+                      │
+                      ▼
+        Apply saved Level 1 model
+        strain / lineage / group placement
+                      │
+                      ▼
+        Apply saved Level 2 model
+        AMR phenotype / resistance-profile prediction
+                      │
+                      ▼
+        Prediction report + marker evidence report

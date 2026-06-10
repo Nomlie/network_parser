@@ -1,18 +1,18 @@
-digraph NetworkParser_TwoLevel {
+digraph NetworkParser_TwoLevel_Updated {
   rankdir=TB;
   labelloc="t";
   fontsize=22;
   fontname="Helvetica";
 
   label=<
-    <B>NetworkParser — Two-Level Workflow</B><BR/>
-    Training/discovery pipeline plus raw-sequence query mode for strain placement and resistance prediction
+    <B>NetworkParser ‚Äî Updated Two-Level Workflow</B><BR/>
+    Statistically defensible training/discovery pipeline with query-ready strain placement and AMR prediction
   >;
 
   graph [
     splines=ortho,
-    nodesep=0.45,
-    ranksep=0.70,
+    nodesep=0.50,
+    ranksep=0.75,
     pad=0.25,
     bgcolor="white"
   ];
@@ -36,10 +36,10 @@ digraph NetworkParser_TwoLevel {
   ];
 
   // ============================================================
-  // STAGE 0 — ENTRY / CONFIG / ORCHESTRATION
+  // STAGE 0 ‚Äî ENTRY / CONFIG / ORCHESTRATION
   // ============================================================
   subgraph cluster_orch {
-    label="Stage 0 — Entry, configuration, and orchestration";
+    label="Stage 0 ‚Äî Entry, configuration, and orchestration";
     style="rounded,filled";
     color="#D6E4F0";
     fillcolor="#F8FBFF";
@@ -48,37 +48,42 @@ digraph NetworkParser_TwoLevel {
     cli [label=<
       <B>cli.py</B><BR ALIGN="LEFT"/>
       Command-line entry point<BR ALIGN="LEFT"/>
-      • run<BR ALIGN="LEFT"/>
-      • train-two-level<BR ALIGN="LEFT"/>
-      • query<BR ALIGN="LEFT"/>
-      • genomic input<BR ALIGN="LEFT"/>
-      • metadata<BR ALIGN="LEFT"/>
-      • Level 1 label column<BR ALIGN="LEFT"/>
-      • Level 2 label column<BR ALIGN="LEFT"/>
-      • output directory<BR ALIGN="LEFT"/>
-      • query input type
+      ‚Ä¢ run<BR ALIGN="LEFT"/>
+      ‚Ä¢ train-two-level<BR ALIGN="LEFT"/>
+      ‚Ä¢ query<BR ALIGN="LEFT"/>
+      ‚Ä¢ genomic input<BR ALIGN="LEFT"/>
+      ‚Ä¢ metadata input<BR ALIGN="LEFT"/>
+      ‚Ä¢ Level 1 label column<BR ALIGN="LEFT"/>
+      ‚Ä¢ Level 2 label column<BR ALIGN="LEFT"/>
+      ‚Ä¢ optional global Level 2 label<BR ALIGN="LEFT"/>
+      ‚Ä¢ optional binary Level 2 fallback label<BR ALIGN="LEFT"/>
+      ‚Ä¢ output directory<BR ALIGN="LEFT"/>
+      ‚Ä¢ query input type
     >];
 
     config [label=<
       <B>config.py</B><BR ALIGN="LEFT"/>
       Central settings<BR ALIGN="LEFT"/>
-      • preprocessing controls<BR ALIGN="LEFT"/>
-      • artifact / low-count controls<BR ALIGN="LEFT"/>
-      • RF-FDR / association-FDR settings<BR ALIGN="LEFT"/>
-      • ML protocol settings<BR ALIGN="LEFT"/>
-      • decision-tree settings<BR ALIGN="LEFT"/>
-      • bootstrap / confidence settings<BR ALIGN="LEFT"/>
-      • two-level protocol settings<BR ALIGN="LEFT"/>
-      • raw-sequence query settings
+      ‚Ä¢ VCF / matrix QC controls<BR ALIGN="LEFT"/>
+      ‚Ä¢ artifact and low-count controls<BR ALIGN="LEFT"/>
+      ‚Ä¢ central feature-filter method<BR ALIGN="LEFT"/>
+      ‚Ä¢ RF-FDR / association-FDR / permutation-FDR settings<BR ALIGN="LEFT"/>
+      ‚Ä¢ ranked feature-panel check settings<BR ALIGN="LEFT"/>
+      ‚Ä¢ ML selector and model settings<BR ALIGN="LEFT"/>
+      ‚Ä¢ conditional decision-tree settings<BR ALIGN="LEFT"/>
+      ‚Ä¢ bootstrap / confidence settings<BR ALIGN="LEFT"/>
+      ‚Ä¢ two-level fallback settings<BR ALIGN="LEFT"/>
+      ‚Ä¢ raw-sequence query settings
     >];
 
     orchestrator [label=<
       <B>network_parser.py</B><BR ALIGN="LEFT"/>
       Main orchestrator<BR ALIGN="LEFT"/>
-      • receives CLI + config<BR ALIGN="LEFT"/>
-      • runs data loading<BR ALIGN="LEFT"/>
-      • routes into two-level protocol<BR ALIGN="LEFT"/>
-      • collects final outputs
+      ‚Ä¢ receives CLI + config<BR ALIGN="LEFT"/>
+      ‚Ä¢ loads data through DataLoader<BR ALIGN="LEFT"/>
+      ‚Ä¢ aligns supervised labels<BR ALIGN="LEFT"/>
+      ‚Ä¢ routes single-label or two-level workflow<BR ALIGN="LEFT"/>
+      ‚Ä¢ collects final outputs
     > fillcolor="#E2F0FF"];
 
     cli -> orchestrator;
@@ -86,10 +91,10 @@ digraph NetworkParser_TwoLevel {
   }
 
   // ============================================================
-  // STAGE 1 — DATA LOADING / PREPROCESSING / MANIFEST
+  // STAGE 1 ‚Äî DATA LOADING / PREPROCESSING / MANIFEST
   // ============================================================
   subgraph cluster_data {
-    label="Stage 1 — Data loading, preprocessing, and feature manifest construction";
+    label="Stage 1 ‚Äî Data loading, preprocessing, and manifest construction";
     style="rounded,filled";
     color="#D6E4F0";
     fillcolor="#F8FBFF";
@@ -97,71 +102,86 @@ digraph NetworkParser_TwoLevel {
 
     genomic_input [label=<
       <B>Training genomic input</B><BR ALIGN="LEFT"/>
-      • VCFs / VCF directory<BR ALIGN="LEFT"/>
-      • or existing genomic feature matrix
+      ‚Ä¢ per-sample VCF / VCF directory<BR ALIGN="LEFT"/>
+      ‚Ä¢ or existing sample √ó genomic-feature matrix
     > shape=parallelogram fillcolor="#FFF8DC"];
 
     reference_input [label=<
       <B>Reference / annotation input</B><BR ALIGN="LEFT"/>
-      Optional but required for raw-sequence query support<BR ALIGN="LEFT"/>
-      • reference FASTA / GenBank<BR ALIGN="LEFT"/>
-      • genomic coordinates<BR ALIGN="LEFT"/>
-      • flanking context<BR ALIGN="LEFT"/>
-      • gene / region annotation where available
+      Optional for matrix-only training<BR ALIGN="LEFT"/>
+      Required for raw-sequence query support<BR ALIGN="LEFT"/>
+      ‚Ä¢ reference FASTA / GenBank<BR ALIGN="LEFT"/>
+      ‚Ä¢ genomic coordinates<BR ALIGN="LEFT"/>
+      ‚Ä¢ flanking context<BR ALIGN="LEFT"/>
+      ‚Ä¢ gene / region annotation where available
     > shape=parallelogram fillcolor="#FFF8DC"];
 
     metadata_input [label=<
       <B>Metadata input</B><BR ALIGN="LEFT"/>
       sample IDs + supervised labels<BR ALIGN="LEFT"/>
-      • Level 1 label = strain / lineage / group<BR ALIGN="LEFT"/>
-      • Level 2 label = AMR phenotype / resistance profile
+      ‚Ä¢ Level 1 label: strain / lineage / group<BR ALIGN="LEFT"/>
+      ‚Ä¢ Level 2 label: AMR phenotype / resistance profile<BR ALIGN="LEFT"/>
+      ‚Ä¢ optional global fallback label<BR ALIGN="LEFT"/>
+      ‚Ä¢ optional binary fallback label or mapping
     > shape=parallelogram fillcolor="#FFF8DC"];
 
     data_loader [label=<
       <B>data_loader.py</B><BR ALIGN="LEFT"/>
-      Build / load sample x genomic-feature matrix<BR ALIGN="LEFT"/>
-      • parse VCF or matrix<BR ALIGN="LEFT"/>
-      • apply QC filters<BR ALIGN="LEFT"/>
-      • remove invariant features<BR ALIGN="LEFT"/>
-      • handle missing values<BR ALIGN="LEFT"/>
-      • apply artifact / low-count controls<BR ALIGN="LEFT"/>
-      • preserve feature identity
+      Build / load sample √ó genomic-feature matrix<BR ALIGN="LEFT"/>
+      ‚Ä¢ parse VCFs or matrix<BR ALIGN="LEFT"/>
+      ‚Ä¢ apply QC filters<BR ALIGN="LEFT"/>
+      ‚Ä¢ encode alleles / variant states<BR ALIGN="LEFT"/>
+      ‚Ä¢ remove invariant and low-information features<BR ALIGN="LEFT"/>
+      ‚Ä¢ handle missing values as baseline where configured<BR ALIGN="LEFT"/>
+      ‚Ä¢ write artifact-filtered binary matrix where available<BR ALIGN="LEFT"/>
+      ‚Ä¢ preserve feature identity
     >];
+
+    artifact_binary [label=<
+      <B>Artifact-filtered binary matrix</B><BR ALIGN="LEFT"/>
+      Preferred downstream matrix when available<BR ALIGN="LEFT"/>
+      ‚Ä¢ sample √ó marker binary representation<BR ALIGN="LEFT"/>
+      ‚Ä¢ excludes reference/control rows<BR ALIGN="LEFT"/>
+      ‚Ä¢ avoids using annotation tables as model input
+    > fillcolor="#DDF5DD"];
 
     aligned_matrix [label=<
       <B>Aligned supervised matrix</B><BR ALIGN="LEFT"/>
       Output:<BR ALIGN="LEFT"/>
-      • X = sample x genomic-feature matrix<BR ALIGN="LEFT"/>
-      • metadata aligned by sample ID<BR ALIGN="LEFT"/>
-      • ready for central feature filtering
+      ‚Ä¢ X = sample √ó genomic-feature matrix<BR ALIGN="LEFT"/>
+      ‚Ä¢ metadata aligned by normalized sample ID<BR ALIGN="LEFT"/>
+      ‚Ä¢ labels normalized<BR ALIGN="LEFT"/>
+      ‚Ä¢ ready for central feature filtering
     > fillcolor="#DDF5DD"];
 
     feature_manifest [label=<
       <B>All-feature manifest</B><BR ALIGN="LEFT"/>
-      Carries annotation forward<BR ALIGN="LEFT"/>
-      • Feature_ID<BR ALIGN="LEFT"/>
-      • chrom / position / REF / ALT<BR ALIGN="LEFT"/>
-      • baseline allele<BR ALIGN="LEFT"/>
-      • encoding rule<BR ALIGN="LEFT"/>
-      • context sequence<BR ALIGN="LEFT"/>
-      • marker-centre index<BR ALIGN="LEFT"/>
-      • gene / region annotation where available
+      Carries annotation into training and query mode<BR ALIGN="LEFT"/>
+      ‚Ä¢ Feature_ID<BR ALIGN="LEFT"/>
+      ‚Ä¢ chrom / position / REF / ALT<BR ALIGN="LEFT"/>
+      ‚Ä¢ baseline allele<BR ALIGN="LEFT"/>
+      ‚Ä¢ encoding rule<BR ALIGN="LEFT"/>
+      ‚Ä¢ context sequence<BR ALIGN="LEFT"/>
+      ‚Ä¢ marker-centre index<BR ALIGN="LEFT"/>
+      ‚Ä¢ gene / region annotation where available
     > fillcolor="#E9FFF2"];
 
     genomic_input -> data_loader;
     reference_input -> data_loader;
     metadata_input -> data_loader;
-    data_loader -> aligned_matrix;
+    data_loader -> artifact_binary;
+    artifact_binary -> aligned_matrix;
+    data_loader -> aligned_matrix [style=dashed label="fallback matrix"];
     data_loader -> feature_manifest;
   }
 
   orchestrator -> data_loader;
 
   // ============================================================
-  // STAGE 2 — TWO-LEVEL CONTROLLER
+  // STAGE 2 ‚Äî TWO-LEVEL CONTROLLER
   // ============================================================
   subgraph cluster_twolevel {
-    label="Stage 2 — Two-level protocol controller";
+    label="Stage 2 ‚Äî Two-level protocol controller";
     style="rounded,filled";
     color="#D9EAD3";
     fillcolor="#FAFFFA";
@@ -169,22 +189,33 @@ digraph NetworkParser_TwoLevel {
 
     two_level_controller [label=<
       <B>two_level_protocol.py</B><BR ALIGN="LEFT"/>
-      Coordinates two supervised biological tasks<BR ALIGN="LEFT"/>
-      • Level 1: strain / sample placement<BR ALIGN="LEFT"/>
-      • Level 2: resistance profile prediction<BR ALIGN="LEFT"/>
-      • saves model registry<BR ALIGN="LEFT"/>
-      • saves selected feature manifests
+      Coordinates hierarchical supervised training<BR ALIGN="LEFT"/>
+      ‚Ä¢ aligns Level 1 and Level 2 labels<BR ALIGN="LEFT"/>
+      ‚Ä¢ trains Level 1 placement model<BR ALIGN="LEFT"/>
+      ‚Ä¢ trains global Level 2 fallback where enabled<BR ALIGN="LEFT"/>
+      ‚Ä¢ optionally trains binary global Level 2 fallback<BR ALIGN="LEFT"/>
+      ‚Ä¢ trains group-specific Level 2 models where support is sufficient<BR ALIGN="LEFT"/>
+      ‚Ä¢ writes selected feature manifests<BR ALIGN="LEFT"/>
+      ‚Ä¢ saves query-ready registry
     > fillcolor="#E9FFF2"];
+
+    two_label_alignment [label=<
+      <B>Two-label alignment</B><BR ALIGN="LEFT"/>
+      ‚Ä¢ shared sample IDs across X, Level 1, and Level 2<BR ALIGN="LEFT"/>
+      ‚Ä¢ missing / invalid labels removed<BR ALIGN="LEFT"/>
+      ‚Ä¢ class-support diagnostics recorded
+    > fillcolor="#E9FFF2"];
+
+    aligned_matrix -> two_level_controller;
+    feature_manifest -> two_level_controller;
+    two_level_controller -> two_label_alignment;
   }
 
-  aligned_matrix -> two_level_controller;
-  feature_manifest -> two_level_controller;
-
   // ============================================================
-  // LEVEL 1
+  // LEVEL 1 ‚Äî STRAIN / SAMPLE PLACEMENT
   // ============================================================
   subgraph cluster_level1 {
-    label="Level 1 — Strain / sample identification";
+    label="Level 1 ‚Äî Strain / sample placement";
     style="rounded,filled";
     color="#CFE2F3";
     fillcolor="#F8FCFF";
@@ -196,96 +227,97 @@ digraph NetworkParser_TwoLevel {
     > shape=parallelogram fillcolor="#FFF8DC"];
 
     lvl1_filter [label=<
-      <B>Central feature filtering for Level 1</B><BR ALIGN="LEFT"/>
+      <B>Configured central feature filtering</B><BR ALIGN="LEFT"/>
       statistical_validation_branch.py / feature_selection.py<BR ALIGN="LEFT"/>
-      Happens before model training and before tree construction<BR ALIGN="LEFT"/>
-      • RF-FDR or association-FDR<BR ALIGN="LEFT"/>
-      • empirical p-values where enabled<BR ALIGN="LEFT"/>
-      • FDR-BH correction<BR ALIGN="LEFT"/>
-      Output:<BR ALIGN="LEFT"/>
-      • Level 1 filtered matrix<BR ALIGN="LEFT"/>
-      • selected placement features
+      Happens before model screening and tree construction<BR ALIGN="LEFT"/>
+      ‚Ä¢ RF-FDR<BR ALIGN="LEFT"/>
+      ‚Ä¢ chi-square-FDR<BR ALIGN="LEFT"/>
+      ‚Ä¢ Fisher-FDR<BR ALIGN="LEFT"/>
+      ‚Ä¢ chi-square permutation-FDR<BR ALIGN="LEFT"/>
+      Output: Level 1 centrally filtered matrix
     > fillcolor="#E7F2FF"];
 
-    lvl1_selected_manifest [label=<
+    lvl1_panel [label=<
+      <B>Ranked feature-panel separability check</B><BR ALIGN="LEFT"/>
+      feature_panel_selection.py<BR ALIGN="LEFT"/>
+      Runs after central filtering and before ML training<BR ALIGN="LEFT"/>
+      ‚Ä¢ rank retained features by statistical evidence<BR ALIGN="LEFT"/>
+      ‚Ä¢ score top-N feature panels<BR ALIGN="LEFT"/>
+      ‚Ä¢ select compact model-ready filtered matrix<BR ALIGN="LEFT"/>
+      ‚Ä¢ pass through central matrix if scoring fails
+    > fillcolor="#E7F2FF"];
+
+    lvl1_manifest [label=<
       <B>Level 1 selected feature manifest</B><BR ALIGN="LEFT"/>
-      Subset of all-feature manifest<BR ALIGN="LEFT"/>
-      matching retained Level 1 features<BR ALIGN="LEFT"/>
-      Used later for raw-sequence query reconstruction
+      Ordered subset of all-feature manifest<BR ALIGN="LEFT"/>
+      ‚Ä¢ retained placement features<BR ALIGN="LEFT"/>
+      ‚Ä¢ feature metadata for evidence reports<BR ALIGN="LEFT"/>
+      ‚Ä¢ raw-sequence query reconstruction support
     > fillcolor="#E9FFF2"];
 
-    lvl1_selector [label=<
-      <B>model_selector.py</B><BR ALIGN="LEFT"/>
-      Assess Level 1 matrix / label structure<BR ALIGN="LEFT"/>
-      and recommend suitable model family
-    >];
-
     lvl1_ml [label=<
-      <B>ml_protocol.py</B><BR ALIGN="LEFT"/>
-      <B>Level 1 ML protocol</B><BR ALIGN="LEFT"/>
-      Train strain-placement model<BR ALIGN="LEFT"/>
-      • training / evaluation<BR ALIGN="LEFT"/>
-      • model artifact<BR ALIGN="LEFT"/>
-      • feature list preserved
-    >];
-
-    lvl1_backend [label=<
-      <B>neural_network.py</B><BR ALIGN="LEFT"/>
-      Backend learners / model wrappers<BR ALIGN="LEFT"/>
-      used by the ML protocol
+      <B>ml_protocol.py + model_selector.py</B><BR ALIGN="LEFT"/>
+      Level 1 ML protocol<BR ALIGN="LEFT"/>
+      ‚Ä¢ evaluate candidate model families<BR ALIGN="LEFT"/>
+      ‚Ä¢ choose / train placement model<BR ALIGN="LEFT"/>
+      ‚Ä¢ save model artifact<BR ALIGN="LEFT"/>
+      ‚Ä¢ preserve selected feature list and ranking
     >];
 
     lvl1_dt_gate [label=<
-      <B>Run Level 1 decision tree?</B>
+      <B>Conditional decision-tree branch?</B><BR ALIGN="LEFT"/>
+      enabled by config and branch-decision payload
     > shape=diamond fillcolor="#FFF2CC"];
 
     lvl1_dt [label=<
       <B>decision_tree_branch.py</B><BR ALIGN="LEFT"/>
-      <B>Level 1 decision tree</B><BR ALIGN="LEFT"/>
-      Interpret strain-placement rules<BR ALIGN="LEFT"/>
-      • root / branch features<BR ALIGN="LEFT"/>
-      • rule extraction<BR ALIGN="LEFT"/>
-      • path-based interactions
+      Level 1 decision-tree interpretability<BR ALIGN="LEFT"/>
+      Input is already centrally filtered / panel-selected<BR ALIGN="LEFT"/>
+      ‚Ä¢ root / branch features<BR ALIGN="LEFT"/>
+      ‚Ä¢ human-readable rules<BR ALIGN="LEFT"/>
+      ‚Ä¢ tree path extraction
     > fillcolor="#E7F2FF"];
 
-    lvl1_conf [label=<
-      <B>Level 1 post-tree confidence</B><BR ALIGN="LEFT"/>
+    lvl1_posttree [label=<
+      <B>Level 1 post-tree evidence</B><BR ALIGN="LEFT"/>
       Happens after tree construction<BR ALIGN="LEFT"/>
-      • bootstrap stability<BR ALIGN="LEFT"/>
-      • mutual information<BR ALIGN="LEFT"/>
-      • feature confidence scores
+      ‚Ä¢ bootstrap stability<BR ALIGN="LEFT"/>
+      ‚Ä¢ mutual information<BR ALIGN="LEFT"/>
+      ‚Ä¢ feature confidence scores<BR ALIGN="LEFT"/>
+      ‚Ä¢ path-based interaction mining
     > fillcolor="#E7F2FF"];
 
     lvl1_output [label=<
       <B>Level 1 outputs</B><BR ALIGN="LEFT"/>
-      • trained Level 1 model<BR ALIGN="LEFT"/>
-      • selected placement features<BR ALIGN="LEFT"/>
-      • Level 1 selected manifest<BR ALIGN="LEFT"/>
-      • optional DT explanations<BR ALIGN="LEFT"/>
-      • optional confidence summaries
+      ‚Ä¢ trained placement model<BR ALIGN="LEFT"/>
+      ‚Ä¢ selected placement features<BR ALIGN="LEFT"/>
+      ‚Ä¢ ranked feature table<BR ALIGN="LEFT"/>
+      ‚Ä¢ selected feature manifest<BR ALIGN="LEFT"/>
+      ‚Ä¢ optional DT rules / paths<BR ALIGN="LEFT"/>
+      ‚Ä¢ optional confidence and interaction summaries
     > fillcolor="#DDF5DD"];
 
     lvl1_label -> lvl1_filter;
-    lvl1_filter -> lvl1_selected_manifest;
-    lvl1_filter -> lvl1_selector;
-    lvl1_selector -> lvl1_ml;
-    lvl1_ml -> lvl1_backend;
-    lvl1_backend -> lvl1_dt_gate;
+    lvl1_filter -> lvl1_panel;
+    lvl1_panel -> lvl1_manifest;
+    lvl1_panel -> lvl1_ml;
+    lvl1_ml -> lvl1_dt_gate;
     lvl1_dt_gate -> lvl1_dt [label="yes"];
     lvl1_dt_gate -> lvl1_output [label="no"];
-    lvl1_dt -> lvl1_conf;
-    lvl1_conf -> lvl1_output;
-    lvl1_selected_manifest -> lvl1_output;
+    lvl1_dt -> lvl1_posttree;
+    lvl1_posttree -> lvl1_output;
+    lvl1_manifest -> lvl1_output;
+    lvl1_ml -> lvl1_output;
   }
 
-  two_level_controller -> lvl1_label;
-  feature_manifest -> lvl1_selected_manifest [style=dashed label="subset by retained features"];
+  two_label_alignment -> lvl1_label;
+  feature_manifest -> lvl1_manifest [style=dashed label="subset by selected features"];
 
   // ============================================================
-  // LEVEL 2
+  // LEVEL 2 ‚Äî AMR / RESISTANCE PREDICTION
   // ============================================================
   subgraph cluster_level2 {
-    label="Level 2 — Resistance profile prediction";
+    label="Level 2 ‚Äî AMR phenotype / resistance profile prediction";
     style="rounded,filled";
     color="#F4CCCC";
     fillcolor="#FFF9F9";
@@ -293,110 +325,114 @@ digraph NetworkParser_TwoLevel {
 
     lvl2_label [label=<
       <B>Level 2 supervised target</B><BR ALIGN="LEFT"/>
-      AMR phenotype / resistance profile / class label
+      AMR phenotype / resistance profile / resistance class label
     > shape=parallelogram fillcolor="#FFF8DC"];
 
     lvl2_context [label=<
-      <B>Level 2 training context</B><BR ALIGN="LEFT"/>
-      • global Level 2 model where enabled<BR ALIGN="LEFT"/>
-      • optional group-specific Level 2 models<BR ALIGN="LEFT"/>
-      • Level 1 grouping may define subgroup context
+      <B>Level 2 training contexts</B><BR ALIGN="LEFT"/>
+      ‚Ä¢ standard global Level 2 fallback<BR ALIGN="LEFT"/>
+      ‚Ä¢ optional binary resistant/susceptible fallback<BR ALIGN="LEFT"/>
+      ‚Ä¢ group-specific Level 2 models within Level 1 context
+    > fillcolor="#FFF2CC"];
+
+    lvl2_support_gate [label=<
+      <B>Class-support and feasibility diagnostics</B><BR ALIGN="LEFT"/>
+      ‚Ä¢ optional low-support class exclusion<BR ALIGN="LEFT"/>
+      ‚Ä¢ stratified-CV feasibility check<BR ALIGN="LEFT"/>
+      ‚Ä¢ skip unsupported group-specific models<BR ALIGN="LEFT"/>
+      ‚Ä¢ record fallback reason transparently
     > fillcolor="#FFF2CC"];
 
     lvl2_filter [label=<
-      <B>Central feature filtering for Level 2</B><BR ALIGN="LEFT"/>
-      statistical_validation_branch.py / feature_selection.py<BR ALIGN="LEFT"/>
-      Happens before model training and before tree construction<BR ALIGN="LEFT"/>
-      • RF-FDR or association-FDR<BR ALIGN="LEFT"/>
-      • empirical p-values where enabled<BR ALIGN="LEFT"/>
-      • FDR-BH correction<BR ALIGN="LEFT"/>
-      Output:<BR ALIGN="LEFT"/>
-      • Level 2 filtered matrix<BR ALIGN="LEFT"/>
-      • selected AMR-associated features
+      <B>Configured central feature filtering</B><BR ALIGN="LEFT"/>
+      Runs separately for each Level 2 context<BR ALIGN="LEFT"/>
+      Happens before model screening and tree construction<BR ALIGN="LEFT"/>
+      ‚Ä¢ RF-FDR / association-FDR / permutation-FDR<BR ALIGN="LEFT"/>
+      ‚Ä¢ multiple-testing correction<BR ALIGN="LEFT"/>
+      Output: Level 2 centrally filtered matrix
     > fillcolor="#FCE8E8"];
 
-    lvl2_selected_manifest [label=<
-      <B>Level 2 selected feature manifest</B><BR ALIGN="LEFT"/>
-      Subset of all-feature manifest<BR ALIGN="LEFT"/>
-      matching retained Level 2 features<BR ALIGN="LEFT"/>
-      May exist for global and group-specific models<BR ALIGN="LEFT"/>
-      Used later for raw-sequence query reconstruction
+    lvl2_panel [label=<
+      <B>Ranked feature-panel separability check</B><BR ALIGN="LEFT"/>
+      Runs after Level 2 central filtering<BR ALIGN="LEFT"/>
+      ‚Ä¢ rank retained AMR-associated features<BR ALIGN="LEFT"/>
+      ‚Ä¢ evaluate compact top-N panels<BR ALIGN="LEFT"/>
+      ‚Ä¢ select model-ready filtered matrix
+    > fillcolor="#FCE8E8"];
+
+    lvl2_manifest [label=<
+      <B>Level 2 selected feature manifest(s)</B><BR ALIGN="LEFT"/>
+      Ordered subset of all-feature manifest<BR ALIGN="LEFT"/>
+      May exist for:<BR ALIGN="LEFT"/>
+      ‚Ä¢ global fallback model<BR ALIGN="LEFT"/>
+      ‚Ä¢ binary global fallback model<BR ALIGN="LEFT"/>
+      ‚Ä¢ group-specific models
     > fillcolor="#E9FFF2"];
 
-    lvl2_selector [label=<
-      <B>model_selector.py</B><BR ALIGN="LEFT"/>
-      Assess Level 2 matrix / label structure<BR ALIGN="LEFT"/>
-      and recommend suitable model family
-    >];
-
     lvl2_ml [label=<
-      <B>ml_protocol.py</B><BR ALIGN="LEFT"/>
-      <B>Level 2 ML protocol</B><BR ALIGN="LEFT"/>
-      Train resistance-profile model<BR ALIGN="LEFT"/>
-      • training / evaluation<BR ALIGN="LEFT"/>
-      • model artifact<BR ALIGN="LEFT"/>
-      • feature list preserved
-    >];
-
-    lvl2_backend [label=<
-      <B>neural_network.py</B><BR ALIGN="LEFT"/>
-      Backend learners / model wrappers<BR ALIGN="LEFT"/>
-      used by the ML protocol
+      <B>ml_protocol.py + model_selector.py</B><BR ALIGN="LEFT"/>
+      Level 2 ML protocol<BR ALIGN="LEFT"/>
+      ‚Ä¢ train resistance-profile model(s)<BR ALIGN="LEFT"/>
+      ‚Ä¢ save model artifact(s)<BR ALIGN="LEFT"/>
+      ‚Ä¢ preserve feature list, ranking, and model source
     >];
 
     lvl2_dt_gate [label=<
-      <B>Run Level 2 decision tree?</B>
+      <B>Conditional decision-tree branch?</B><BR ALIGN="LEFT"/>
+      optional interpretability branch on selected matrix
     > shape=diamond fillcolor="#FFF2CC"];
 
     lvl2_dt [label=<
       <B>decision_tree_branch.py</B><BR ALIGN="LEFT"/>
-      <B>Level 2 decision tree</B><BR ALIGN="LEFT"/>
-      Interpret AMR-associated rules<BR ALIGN="LEFT"/>
-      • root / branch features<BR ALIGN="LEFT"/>
-      • rule extraction<BR ALIGN="LEFT"/>
-      • path-based interactions
+      Level 2 decision-tree interpretability<BR ALIGN="LEFT"/>
+      ‚Ä¢ AMR-associated rules<BR ALIGN="LEFT"/>
+      ‚Ä¢ root / branch features<BR ALIGN="LEFT"/>
+      ‚Ä¢ path-based rule evidence
     > fillcolor="#FCE8E8"];
 
-    lvl2_conf [label=<
-      <B>Level 2 post-tree confidence</B><BR ALIGN="LEFT"/>
+    lvl2_posttree [label=<
+      <B>Level 2 post-tree evidence</B><BR ALIGN="LEFT"/>
       Happens after tree construction<BR ALIGN="LEFT"/>
-      • bootstrap stability<BR ALIGN="LEFT"/>
-      • mutual information<BR ALIGN="LEFT"/>
-      • feature confidence scores
+      ‚Ä¢ bootstrap stability<BR ALIGN="LEFT"/>
+      ‚Ä¢ mutual information<BR ALIGN="LEFT"/>
+      ‚Ä¢ feature confidence scores<BR ALIGN="LEFT"/>
+      ‚Ä¢ path-based interaction mining
     > fillcolor="#FCE8E8"];
 
     lvl2_output [label=<
       <B>Level 2 outputs</B><BR ALIGN="LEFT"/>
-      • trained Level 2 model<BR ALIGN="LEFT"/>
-      • selected AMR features<BR ALIGN="LEFT"/>
-      • Level 2 selected manifest<BR ALIGN="LEFT"/>
-      • optional DT explanations<BR ALIGN="LEFT"/>
-      • optional confidence summaries
+      ‚Ä¢ global Level 2 fallback model where enabled<BR ALIGN="LEFT"/>
+      ‚Ä¢ optional binary global fallback model<BR ALIGN="LEFT"/>
+      ‚Ä¢ group-specific Level 2 models where feasible<BR ALIGN="LEFT"/>
+      ‚Ä¢ selected AMR features<BR ALIGN="LEFT"/>
+      ‚Ä¢ selected feature manifests<BR ALIGN="LEFT"/>
+      ‚Ä¢ transparent skip / fallback diagnostics
     > fillcolor="#DDF5DD"];
 
     lvl2_label -> lvl2_context;
-    lvl2_context -> lvl2_filter;
-    lvl2_filter -> lvl2_selected_manifest;
-    lvl2_filter -> lvl2_selector;
-    lvl2_selector -> lvl2_ml;
-    lvl2_ml -> lvl2_backend;
-    lvl2_backend -> lvl2_dt_gate;
+    lvl2_context -> lvl2_support_gate;
+    lvl2_support_gate -> lvl2_filter;
+    lvl2_filter -> lvl2_panel;
+    lvl2_panel -> lvl2_manifest;
+    lvl2_panel -> lvl2_ml;
+    lvl2_ml -> lvl2_dt_gate;
     lvl2_dt_gate -> lvl2_dt [label="yes"];
     lvl2_dt_gate -> lvl2_output [label="no"];
-    lvl2_dt -> lvl2_conf;
-    lvl2_conf -> lvl2_output;
-    lvl2_selected_manifest -> lvl2_output;
+    lvl2_dt -> lvl2_posttree;
+    lvl2_posttree -> lvl2_output;
+    lvl2_manifest -> lvl2_output;
+    lvl2_ml -> lvl2_output;
   }
 
-  two_level_controller -> lvl2_label [style=dashed];
-  lvl1_output -> lvl2_context [label="group context"];
-  feature_manifest -> lvl2_selected_manifest [style=dashed label="subset by retained features"];
+  two_label_alignment -> lvl2_label [style=dashed];
+  lvl1_output -> lvl2_context [label="Level 1 grouping context"];
+  feature_manifest -> lvl2_manifest [style=dashed label="subset by selected features"];
 
   // ============================================================
-  // COMBINED TRAINING OUTPUTS
+  // STAGE 3 ‚Äî COMBINED TRAINING OUTPUTS
   // ============================================================
   subgraph cluster_results {
-    label="Stage 3 — Combined training outputs and query-ready registry";
+    label="Stage 3 ‚Äî Combined training outputs and query-ready registry";
     style="rounded,filled";
     color="#D6E4F0";
     fillcolor="#F8FBFF";
@@ -404,192 +440,176 @@ digraph NetworkParser_TwoLevel {
 
     combined_output [label=<
       <B>Combined two-level result</B><BR ALIGN="LEFT"/>
-      • strain / group assignment model<BR ALIGN="LEFT"/>
-      • resistance profile model<BR ALIGN="LEFT"/>
-      • selected feature sets for both levels<BR ALIGN="LEFT"/>
-      • selected marker manifests<BR ALIGN="LEFT"/>
-      • DT rules / interactions where enabled<BR ALIGN="LEFT"/>
-      • confidence summaries
+      ‚Ä¢ placement model + AMR model(s)<BR ALIGN="LEFT"/>
+      ‚Ä¢ selected feature sets for each task<BR ALIGN="LEFT"/>
+      ‚Ä¢ ranked marker evidence<BR ALIGN="LEFT"/>
+      ‚Ä¢ selected marker manifests<BR ALIGN="LEFT"/>
+      ‚Ä¢ optional DT rules / interactions<BR ALIGN="LEFT"/>
+      ‚Ä¢ confidence summaries where available
     > fillcolor="#CFEFD0"];
 
     registry [label=<
       <B>two_level_model_registry.json</B><BR ALIGN="LEFT"/>
       Query-ready trained registry<BR ALIGN="LEFT"/>
       Stores:<BR ALIGN="LEFT"/>
-      • Level 1 model path<BR ALIGN="LEFT"/>
-      • Level 1 selected features<BR ALIGN="LEFT"/>
-      • Level 1 selected manifest path<BR ALIGN="LEFT"/>
-      • Level 2 model path(s)<BR ALIGN="LEFT"/>
-      • Level 2 selected features<BR ALIGN="LEFT"/>
-      • Level 2 selected manifest path(s)<BR ALIGN="LEFT"/>
-      • encoding / configuration metadata
+      ‚Ä¢ Level 1 model path + features<BR ALIGN="LEFT"/>
+      ‚Ä¢ Level 1 selected manifest path<BR ALIGN="LEFT"/>
+      ‚Ä¢ Level 2 model path(s) + features<BR ALIGN="LEFT"/>
+      ‚Ä¢ Level 2 selected manifest path(s)<BR ALIGN="LEFT"/>
+      ‚Ä¢ global and binary fallback metadata<BR ALIGN="LEFT"/>
+      ‚Ä¢ feature ranking / model importance where available<BR ALIGN="LEFT"/>
+      ‚Ä¢ encoding and configuration metadata
     > fillcolor="#E9FFF2"];
 
     final_outputs [label=<
       <B>Final exported outputs</B><BR ALIGN="LEFT"/>
-      • filtered matrices<BR ALIGN="LEFT"/>
-      • feature manifests<BR ALIGN="LEFT"/>
-      • selected feature manifests<BR ALIGN="LEFT"/>
-      • RF-FDR / FDR statistics<BR ALIGN="LEFT"/>
-      • trained model artifacts<BR ALIGN="LEFT"/>
-      • decision-tree rules<BR ALIGN="LEFT"/>
-      • confidence summaries<BR ALIGN="LEFT"/>
-      • run summary JSON
+      ‚Ä¢ centrally filtered matrices<BR ALIGN="LEFT"/>
+      ‚Ä¢ selected panel matrices<BR ALIGN="LEFT"/>
+      ‚Ä¢ feature manifests<BR ALIGN="LEFT"/>
+      ‚Ä¢ RF-FDR / FDR statistics<BR ALIGN="LEFT"/>
+      ‚Ä¢ model artifacts<BR ALIGN="LEFT"/>
+      ‚Ä¢ class-support diagnostics<BR ALIGN="LEFT"/>
+      ‚Ä¢ run summary JSON
     > fillcolor="#E9FFF2"];
 
-    gnn_outputs [label=<
+    network_outputs [label=<
       <B>Network / GNN-ready outputs</B><BR ALIGN="LEFT"/>
-      • ranked feature list<BR ALIGN="LEFT"/>
-      • interaction graph<BR ALIGN="LEFT"/>
-      • sample-feature network<BR ALIGN="LEFT"/>
-      • adjacency matrices
+      ‚Ä¢ ranked feature list<BR ALIGN="LEFT"/>
+      ‚Ä¢ interaction graph<BR ALIGN="LEFT"/>
+      ‚Ä¢ sample-feature network<BR ALIGN="LEFT"/>
+      ‚Ä¢ adjacency matrices
     > fillcolor="#E9FFF2"];
 
     lvl1_output -> combined_output;
     lvl2_output -> combined_output;
     combined_output -> registry;
     combined_output -> final_outputs;
-    final_outputs -> gnn_outputs;
+    final_outputs -> network_outputs;
   }
 
   // ============================================================
-  // USER-FACING QUERY / PREDICTION MODE
+  // STAGE 4 ‚Äî QUERY / INFERENCE MODE
   // ============================================================
   subgraph cluster_query {
-    label="Stage 4 — User-facing query / prediction mode";
+    label="Stage 4 ‚Äî User-facing query / inference mode";
     style="rounded,filled";
     color="#EAD1DC";
     fillcolor="#FFF8FC";
     fontsize=14;
 
-    query_input_choice [label=<
+    query_input [label=<
       <B>New user sample</B><BR ALIGN="LEFT"/>
       Supported query concepts:<BR ALIGN="LEFT"/>
-      • raw FASTA / consensus / assembly<BR ALIGN="LEFT"/>
-      • or prebuilt genomic feature row / matrix
+      ‚Ä¢ raw FASTA / consensus / assembly<BR ALIGN="LEFT"/>
+      ‚Ä¢ prebuilt genomic feature row or matrix
     > shape=parallelogram fillcolor="#FFF8DC"];
 
-    raw_sequence_input [label=<
+    raw_input [label=<
       <B>Raw DNA sequence input</B><BR ALIGN="LEFT"/>
       FASTA-like sequence supplied by user<BR ALIGN="LEFT"/>
-      Not used for new feature discovery
+      Query mode only: no new feature discovery
     > shape=parallelogram fillcolor="#FFF8DC"];
 
-    matrix_query_input [label=<
+    matrix_input [label=<
       <B>Prebuilt query matrix input</B><BR ALIGN="LEFT"/>
       Already represented as genomic features<BR ALIGN="LEFT"/>
-      aligned to trained feature names where possible
+      Extra features ignored; missing trained features filled conservatively
     > shape=parallelogram fillcolor="#FFF8DC"];
 
     raw_encoder [label=<
       <B>sequence_query_encoder.py</B><BR ALIGN="LEFT"/>
       Raw-sequence to selected-feature matrix<BR ALIGN="LEFT"/>
-      • load selected marker manifest<BR ALIGN="LEFT"/>
-      • use saved context sequence<BR ALIGN="LEFT"/>
-      • map context against query DNA<BR ALIGN="LEFT"/>
-      • BLAST if available<BR ALIGN="LEFT"/>
-      • exact context fallback in auto mode<BR ALIGN="LEFT"/>
-      • handle strand / reverse complement<BR ALIGN="LEFT"/>
-      • extract marker-centre nucleotide<BR ALIGN="LEFT"/>
-      • encode using training rule
+      ‚Ä¢ load selected marker manifest from registry<BR ALIGN="LEFT"/>
+      ‚Ä¢ map saved context sequences to query DNA<BR ALIGN="LEFT"/>
+      ‚Ä¢ use BLAST if available or exact context matching<BR ALIGN="LEFT"/>
+      ‚Ä¢ handle strand / reverse complement<BR ALIGN="LEFT"/>
+      ‚Ä¢ extract marker-centre nucleotide<BR ALIGN="LEFT"/>
+      ‚Ä¢ encode with training rule
     > fillcolor="#FFF2CC"];
 
-    blast_mapping [label=<
-      <B>Context mapping</B><BR ALIGN="LEFT"/>
+    raw_mapping [label=<
+      <B>Marker context mapping + allele calling</B><BR ALIGN="LEFT"/>
       For each selected marker:<BR ALIGN="LEFT"/>
-      • map flanking context<BR ALIGN="LEFT"/>
-      • identify query location<BR ALIGN="LEFT"/>
-      • classify mapping status<BR ALIGN="LEFT"/>
-      • unique / multi-hit / no-hit / low-confidence
-    > fillcolor="#FFF2CC"];
-
-    allele_calling [label=<
-      <B>Allele extraction and encoding</B><BR ALIGN="LEFT"/>
-      For each selected feature:<BR ALIGN="LEFT"/>
-      • read observed query nucleotide<BR ALIGN="LEFT"/>
-      • compare with REF / ALT / baseline<BR ALIGN="LEFT"/>
-      • encode as 0 / 1<BR ALIGN="LEFT"/>
-      • unresolved values are flagged<BR ALIGN="LEFT"/>
-      • complete model-compatible row is produced
+      ‚Ä¢ unique / multi-hit / no-hit status<BR ALIGN="LEFT"/>
+      ‚Ä¢ observed nucleotide at marker centre<BR ALIGN="LEFT"/>
+      ‚Ä¢ REF / ALT / baseline comparison<BR ALIGN="LEFT"/>
+      ‚Ä¢ unresolved values encoded as baseline / 0 and reported
     > fillcolor="#FFF2CC"];
 
     query_matrix [label=<
       <B>One-sample selected-feature matrix</B><BR ALIGN="LEFT"/>
       Query sample projected onto trained feature space<BR ALIGN="LEFT"/>
-      • Level 1 selected features<BR ALIGN="LEFT"/>
-      • Level 2 selected features<BR ALIGN="LEFT"/>
-      • no new statistical filtering<BR ALIGN="LEFT"/>
-      • no new feature discovery
+      ‚Ä¢ union of required Level 1 and Level 2 features<BR ALIGN="LEFT"/>
+      ‚Ä¢ no central feature filtering<BR ALIGN="LEFT"/>
+      ‚Ä¢ no model selection<BR ALIGN="LEFT"/>
+      ‚Ä¢ no tree training or bootstrap confidence recomputation
     > fillcolor="#DDF5DD"];
-
-    raw_evidence [label=<
-      <B>Raw-sequence evidence outputs</B><BR ALIGN="LEFT"/>
-      • raw_sequence_selected_feature_matrix.csv<BR ALIGN="LEFT"/>
-      • raw_sequence_feature_calls.tsv<BR ALIGN="LEFT"/>
-      • raw_sequence_mapping_summary.json<BR ALIGN="LEFT"/>
-      • marker recovery metrics<BR ALIGN="LEFT"/>
-      • unresolved / ambiguous marker report
-    > fillcolor="#E9FFF2"];
 
     query_engine [label=<
       <B>query_engine.py</B><BR ALIGN="LEFT"/>
-      Inference-only query controller<BR ALIGN="LEFT"/>
-      • load trained registry<BR ALIGN="LEFT"/>
-      • load query matrix<BR ALIGN="LEFT"/>
-      • align to saved feature lists<BR ALIGN="LEFT"/>
-      • fill missing trained features conservatively<BR ALIGN="LEFT"/>
-      • preserve evidence flags
+      Inference-only controller<BR ALIGN="LEFT"/>
+      ‚Ä¢ load trained registry<BR ALIGN="LEFT"/>
+      ‚Ä¢ align query sample to saved feature lists<BR ALIGN="LEFT"/>
+      ‚Ä¢ record feature coverage<BR ALIGN="LEFT"/>
+      ‚Ä¢ preserve marker evidence flags
     >];
 
     query_lvl1 [label=<
       <B>Apply saved Level 1 model</B><BR ALIGN="LEFT"/>
-      Answer:<BR ALIGN="LEFT"/>
-      Where does this strain/sample belong?
+      Predict strain / lineage / group context<BR ALIGN="LEFT"/>
+      and collect supporting marker evidence
     > fillcolor="#E7F2FF"];
 
-    query_lvl2_select [label=<
-      <B>Select Level 2 model context</B><BR ALIGN="LEFT"/>
-      • use global Level 2 model where configured<BR ALIGN="LEFT"/>
-      • or use group-specific Level 2 model<BR ALIGN="LEFT"/>
-      • Level 1 prediction can guide context
+    query_l2_select [label=<
+      <B>Select Level 2 model source</B><BR ALIGN="LEFT"/>
+      Preference order:<BR ALIGN="LEFT"/>
+      ‚Ä¢ group-specific Level 2 model if available<BR ALIGN="LEFT"/>
+      ‚Ä¢ standard global fallback<BR ALIGN="LEFT"/>
+      ‚Ä¢ binary global fallback where configured<BR ALIGN="LEFT"/>
+      ‚Ä¢ unavailable with transparent warning
     > fillcolor="#FFF2CC"];
 
     query_lvl2 [label=<
       <B>Apply saved Level 2 model</B><BR ALIGN="LEFT"/>
-      Answer:<BR ALIGN="LEFT"/>
-      What resistance profile is predicted?
+      Predict AMR phenotype / resistance profile<BR ALIGN="LEFT"/>
+      using selected model source and feature list
     > fillcolor="#FCE8E8"];
+
+    raw_evidence [label=<
+      <B>Raw-sequence evidence outputs</B><BR ALIGN="LEFT"/>
+      ‚Ä¢ selected-feature query matrix<BR ALIGN="LEFT"/>
+      ‚Ä¢ per-marker feature calls<BR ALIGN="LEFT"/>
+      ‚Ä¢ mapping summary<BR ALIGN="LEFT"/>
+      ‚Ä¢ unresolved / ambiguous marker report
+    > fillcolor="#E9FFF2"];
 
     query_report [label=<
       <B>User-facing query report</B><BR ALIGN="LEFT"/>
-      • predicted strain / group<BR ALIGN="LEFT"/>
-      • predicted resistance profile<BR ALIGN="LEFT"/>
-      • support values where available<BR ALIGN="LEFT"/>
-      • supporting selected markers<BR ALIGN="LEFT"/>
-      • observed nucleotides<BR ALIGN="LEFT"/>
-      • marker recovery summary<BR ALIGN="LEFT"/>
-      • unresolved / ambiguous marker warnings
+      ‚Ä¢ predicted strain / group<BR ALIGN="LEFT"/>
+      ‚Ä¢ predicted AMR phenotype / resistance profile<BR ALIGN="LEFT"/>
+      ‚Ä¢ support values where available<BR ALIGN="LEFT"/>
+      ‚Ä¢ Level 2 model source<BR ALIGN="LEFT"/>
+      ‚Ä¢ supporting selected markers<BR ALIGN="LEFT"/>
+      ‚Ä¢ observed nucleotides where raw sequence was used<BR ALIGN="LEFT"/>
+      ‚Ä¢ marker recovery and coverage warnings
     > fillcolor="#DDF5DD"];
 
-    query_input_choice -> raw_sequence_input;
-    query_input_choice -> matrix_query_input;
-
-    raw_sequence_input -> raw_encoder;
-    raw_encoder -> blast_mapping;
-    blast_mapping -> allele_calling;
-    allele_calling -> query_matrix;
-    allele_calling -> raw_evidence;
-
-    matrix_query_input -> query_matrix;
-
+    query_input -> raw_input;
+    query_input -> matrix_input;
+    raw_input -> raw_encoder;
+    raw_encoder -> raw_mapping;
+    raw_mapping -> query_matrix;
+    raw_mapping -> raw_evidence;
+    matrix_input -> query_matrix;
     query_matrix -> query_engine;
     query_engine -> query_lvl1;
-    query_lvl1 -> query_lvl2_select;
-    query_lvl2_select -> query_lvl2;
+    query_lvl1 -> query_l2_select;
+    query_l2_select -> query_lvl2;
     query_lvl2 -> query_report;
     raw_evidence -> query_report;
   }
 
-  registry -> query_engine [style=dashed label="saved models + selected manifests"];
-  registry -> raw_encoder [style=dashed label="selected marker context"];
+  registry -> query_engine [style=dashed label="saved models + selected feature lists"];
+  registry -> raw_encoder [style=dashed label="selected marker context + manifests"];
 }
+

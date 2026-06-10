@@ -118,7 +118,7 @@ def probe_models(X: np.ndarray, y: np.ndarray) -> Dict[str, float]:
 
     lr = Pipeline([
         ("scaler", StandardScaler()),
-        ("clf", LogisticRegression(max_iter=1000, n_jobs=None, solver="lbfgs")),
+        ("clf", LogisticRegression(max_iter=2000, n_jobs=None, solver="lbfgs", tol=1e-4)),
     ])
 
     linsvc = Pipeline([
@@ -208,7 +208,39 @@ def recommend_classifier(X: np.ndarray, y: np.ndarray) -> Dict[str, Any]:
     clus = _cluster_scores(X, n_clusters=max(2, desc["n_classes"]))
     probes = probe_models(X, y)
 
-    linear_score = np.nanmean([probes.get("LR", np.nan), probes.get("LinearSVC", np.nan)])
+    finite_probe_scores = [
+        float(v)
+        for k, v in probes.items()
+        if k != "delta_nonlinear_minus_linear"
+        and isinstance(v, (int, float, np.integer, np.floating))
+        and np.isfinite(float(v))
+    ]
+    if not finite_probe_scores:
+        return {
+            "recommendation": "RF",
+            "candidate_ranked": ["RF"],
+            "dt_candidate": False,
+            "recommended_interpretable_models": ["RF"],
+            "rationale": [
+                "No finite cross-validated probe scores were obtained; automatic selection should be treated as failed."
+            ],
+            "dataset_summary": desc,
+            "clustering_scores": clus,
+            "probe_scores": {
+                "LR": probes.get("LR", np.nan),
+                "LinearSVC": probes.get("LinearSVC", np.nan),
+                "SVC_RBF": probes.get("SVC_RBF", np.nan),
+                "RF": probes.get("RF", np.nan),
+                "DT": probes.get("DT", np.nan),
+                "MLP_small": probes.get("MLP_small", np.nan),
+                "delta_nonlinear_minus_linear": np.nan,
+            },
+            "selector_status": "failed_no_finite_probe_scores",
+        }
+
+    linear_candidates = [probes.get("LR", np.nan), probes.get("LinearSVC", np.nan)]
+    linear_candidates = [float(x) for x in linear_candidates if np.isfinite(float(x))]
+    linear_score = float(np.mean(linear_candidates)) if linear_candidates else np.nan
     nonlinear_score = probes.get("SVC_RBF", np.nan)
     rf_score = probes.get("RF", np.nan)
     mlp_score = probes.get("MLP_small", np.nan)
@@ -241,7 +273,14 @@ def recommend_classifier(X: np.ndarray, y: np.ndarray) -> Dict[str, Any]:
             rec = "SVC"
             rationale.append("Nonlinear boundary indicated on a small-to-medium matrix.")
     elif noisy_or_sparse or (
-        max(rf_score, dt_score) >= max(linear_score, nonlinear_score, mlp_score) - 0.01
+        max(
+            rf_score if np.isfinite(rf_score) else -np.inf,
+            dt_score if np.isfinite(dt_score) else -np.inf,
+        ) >= max(
+            linear_score if np.isfinite(linear_score) else -np.inf,
+            nonlinear_score if np.isfinite(nonlinear_score) else -np.inf,
+            mlp_score if np.isfinite(mlp_score) else -np.inf,
+        ) - 0.01
     ):
         rec = "RF" if (rf_score >= dt_score) else "DT"
         rationale.append("Sparse/noisy pattern or competitive tree-family performance favored a tree-based method.")
