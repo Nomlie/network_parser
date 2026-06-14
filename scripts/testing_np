@@ -1,31 +1,440 @@
-python3 extract_subset.py \
-    --vcf-dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/AFRO_TB_ANNOTATION_VCF \
-    --meta-file /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/AFRO_dataset_meta.csv \
-    --n-samples 100 \
-    --output-dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/AFRO_TB_100_VCFs
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ============================================================
+# NetworkParser testing pipeline
+# From subsetting -> hierarchy training -> bundle -> query
+# -> held-out model evaluation -> leakage-aware CV
+# ============================================================
+
+# -----------------------------
+# 0. EDIT THESE PATHS / LABELS
+# -----------------------------
+
+BASE="/Users/nmfuphicsir.co.za/Documents/pHDProject"
+DATA="$BASE/Data/AFRO_TB"
+CODE="$BASE/Code/network_parser"
+
+VCF_DIR="$DATA/AFRO_TB_ANNOTATION_VCF"
+META="/Users/nmfuphicsir.co.za/Documents/data/AFRO_TB/AFRO_dataset_meta.csv"
+REF="$BASE/Code/VCF_2_Matrix/ref/H37Rv.gbk"
+
+SUBSET_SCRIPT="$CODE/extract_subset.py"
+
+SUBSET_DIR="$DATA/subset_valid_hierarchy"
+TRAIN_DIR="$SUBSET_DIR/train"
+TEST_DIR="$SUBSET_DIR/test"
+
+RESULTS="$BASE/Results/ALL/chi2_fdr"
+QUERY_OUT="$RESULTS/query_test_results"
+EVAL_OUT="$RESULTS/model_evaluation_test"
+CV_OUT="$RESULTS/cross_validation"
+
+# Ordered hierarchy labels for true multi-level hierarchy training.
+# Edit only if your metadata column names differ.
+HIERARCHY_LABELS=(Country Lineage Pheno)
+
+# CV targets to test independently on TRAIN_DIR.
+CV_LABELS=(Country Lineage Pheno)
+
+# Evaluation targets from the held-out query output.
+INTERMEDIATE_LABEL="Lineage"
+TERMINAL_LABEL="Pheno"
+
+N_JOBS=8
+SEED=42
+
+# Smoke-testing setting:
+#   unfiltered = allows exploratory runs to continue if no FDR-significant features survive.
+# Publication/serious run:
+#   stop = fail loudly if no statistically supported features survive.
+FEATURE_FILTER_FALLBACK="unfiltered"
+
+# For smoke test:
+CV_REPEATS=1
+CV_SPLITS=3
+
+# For serious run later:
+# CV_REPEATS=3
+# CV_SPLITS=5
 
 
-python3 extract_subset.py \
-    --vcf-dir /mnt/lustre/users/nmfuphi/AFRO_TB/AFRO_TB_ANNOTATION_VCF \
-    --meta-file /mnt/lustre/users/nmfuphi/AFRO_TB/AFRO_dataset_meta.csv \
-    --n-samples 14000 \
-    --output-dir /mnt/lustre/users/nmfuphi/AFRO_TB/AFRO_TB_ANNOTATION_VCF
+# -----------------------------
+# 1. SETUP
+# -----------------------------
 
-python -m network_parser.cli \                                
---genomic /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/AFRO_TB_1000_VCFs\
---meta /Users/nmfuphicsir.co.za/Documents/data/AFRO_TB/AFRO_dataset_meta.csv \
---label Lineage \
---ref_fasta /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/VCF_2_Matrix/ref/H37Rv.gbk \
---output_dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/1000_VCFs \
---pipeline_mode both
-dot -Tpng -Gdpi=300 networkparser_full.dot -o network_parser.png
+cd "$CODE"
 
+mkdir -p "$SUBSET_DIR" "$RESULTS" "$QUERY_OUT" "$EVAL_OUT" "$CV_OUT"
+
+echo
+echo "============================================================"
+echo "NetworkParser testing pipeline"
+echo "============================================================"
+echo "Code:      $CODE"
+echo "VCF_DIR:   $VCF_DIR"
+echo "META:      $META"
+echo "REF:       $REF"
+echo "TRAIN_DIR: $TRAIN_DIR"
+echo "TEST_DIR:  $TEST_DIR"
+echo "RESULTS:   $RESULTS"
+echo
+
+
+# -----------------------------
+# 2. SUBSET INTO TRAIN / TEST
+# -----------------------------
+# Assumes your extract_subset.py is the updated script that:
+#   - keeps only samples with matching VCF files
+#   - keeps only valid metadata labels
+#   - writes 80/20 train/test folders
+
+echo
+echo "============================================================"
+echo "1. Creating metadata-valid 80/20 train/test subset"
+echo "============================================================"
+
+python "$SUBSET_SCRIPT" \
+  --vcf-dir "$VCF_DIR" \
+  --meta-file "$META" \
+  --output-dir "$SUBSET_DIR" \
+  --hierarchy-labels "${HIERARCHY_LABELS[@]}" \
+  --train-ratio 0.8 \
+  --seed "$SEED" \
+  --stratify-by "$INTERMEDIATE_LABEL"
+
+echo
+echo "Train VCF count:"
+find "$TRAIN_DIR" -type f \( -name "*.vcf" -o -name "*.vcf.gz" \) | wc -l
+
+echo "Test VCF count:"
+find "$TEST_DIR" -type f \( -name "*.vcf" -o -name "*.vcf.gz" \) | wc -l
+
+
+# -----------------------------
+# 3. TRAIN TRUE MULTI-LEVEL HIERARCHY MODEL
+# -----------------------------
+
+echo
+echo "============================================================"
+echo "2. Training true multi-level hierarchy model"
+echo "============================================================"
 
 python -m network_parser.cli train-two-level \
---genomic /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/AFRO_TB_1000_VCFs \
---meta /Users/nmfuphicsir.co.za/Documents/data/AFRO_TB/AFRO_dataset_meta.csv \
---level1_label Lineage \
---level2_label Pheno \
---ref_fasta /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/VCF_2_Matrix/ref/H37Rv.gbk \
---output_dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/smoke_test \
---n_jobs 1
+  --genomic "$TRAIN_DIR" \
+  --meta "$META" \
+  --hierarchy_labels "${HIERARCHY_LABELS[@]}" \
+  --central_feature_filter_method chi2_fdr \
+  --feature_filter_fallback_strategy "$FEATURE_FILTER_FALLBACK" \
+  --feature_panel_check on \
+  --feature_panel_sizes 100,200,500,1000 \
+  --ref_fasta "$REF" \
+  --output_dir "$RESULTS" \
+  --n_jobs "$N_JOBS" \
+  --verbose
+
+
+# -----------------------------
+# 4. RESOLVE REGISTRY PATH
+# -----------------------------
+
+echo
+echo "============================================================"
+echo "3. Resolving registry"
+echo "============================================================"
+
+REGISTRY=""
+
+if [[ -f "$RESULTS/hierarchical_model_registry.json" ]]; then
+  REGISTRY="$RESULTS/hierarchical_model_registry.json"
+elif [[ -f "$RESULTS/two_level_model_registry.json" ]]; then
+  REGISTRY="$RESULTS/two_level_model_registry.json"
+else
+  echo "Could not find hierarchical_model_registry.json or two_level_model_registry.json under:"
+  echo "$RESULTS"
+  find "$RESULTS" -maxdepth 3 -type f -name "*registry*.json" -print
+  exit 1
+fi
+
+echo "Using registry: $REGISTRY"
+
+
+# -----------------------------
+# 5. BUILD PORTABLE BUNDLE
+# -----------------------------
+
+echo
+echo "============================================================"
+echo "4. Building binary model bundle"
+echo "============================================================"
+
+BUNDLE="$RESULTS/networkparser_model_bundle.npb"
+
+python - <<PY
+from pathlib import Path
+from network_parser.model_bundle import build_bundle_from_registry
+
+registry = Path("$REGISTRY")
+bundle = Path("$BUNDLE")
+
+build_bundle_from_registry(
+    registry_path=registry,
+    output_path=bundle,
+    include_model_payloads=True,
+)
+
+print(f"Wrote bundle: {bundle}")
+PY
+
+
+# -----------------------------
+# 6. QUERY HELD-OUT TEST SET
+# -----------------------------
+
+echo
+echo "============================================================"
+echo "5. Querying held-out test set"
+echo "============================================================"
+
+python -m network_parser.cli query \
+  --genomic "$TEST_DIR" \
+  --bundle "$BUNDLE" \
+  --query_input_type vcf \
+  --ref_fasta "$REF" \
+  --output_dir "$QUERY_OUT" \
+  --max_markers 20 \
+  --n_jobs "$N_JOBS" \
+  --verbose
+
+echo
+echo "Query outputs:"
+find "$QUERY_OUT" -maxdepth 2 -type f | sort
+
+
+# -----------------------------
+# 7. HELD-OUT MODEL EVALUATION
+# -----------------------------
+
+echo
+echo "============================================================"
+echo "6. Evaluating held-out predictions"
+echo "============================================================"
+
+python - <<PY
+from pathlib import Path
+import pandas as pd
+
+from network_parser.model_evaluation import (
+    evaluate_predictions,
+    load_labels_from_metadata,
+)
+
+META = Path("$META")
+QUERY_OUT = Path("$QUERY_OUT")
+EVAL_OUT = Path("$EVAL_OUT")
+TERMINAL_LABEL = "$TERMINAL_LABEL"
+INTERMEDIATE_LABEL = "$INTERMEDIATE_LABEL"
+
+pred_path = QUERY_OUT / "query_predictions.csv"
+if not pred_path.exists():
+    raise FileNotFoundError(f"Missing query prediction file: {pred_path}")
+
+pred = pd.read_csv(pred_path)
+if "sample_id" not in pred.columns:
+    raise ValueError("query_predictions.csv must contain a sample_id column.")
+
+# -----------------------------
+# Terminal hierarchy evaluation
+# -----------------------------
+if "predicted_terminal_label" in pred.columns:
+    y_pred_terminal = pred.set_index("sample_id")["predicted_terminal_label"]
+elif "predicted_level2_resistance_profile" in pred.columns:
+    y_pred_terminal = pred.set_index("sample_id")["predicted_level2_resistance_profile"]
+else:
+    raise ValueError(
+        "Could not find terminal prediction column. Expected predicted_terminal_label "
+        "or predicted_level2_resistance_profile."
+    )
+
+y_true_terminal = load_labels_from_metadata(
+    meta_path=META,
+    label_column=TERMINAL_LABEL,
+)
+
+terminal_summary = evaluate_predictions(
+    y_true=y_true_terminal,
+    y_pred=y_pred_terminal,
+    class_support_scores=None,
+    output_dir=EVAL_OUT / "terminal_label",
+    level_name=f"terminal_{TERMINAL_LABEL}",
+)
+
+print("Terminal evaluation:", terminal_summary.get("artifacts", {}).get("summary_json"))
+
+# -----------------------------
+# Intermediate hierarchy evaluation
+# -----------------------------
+if "predicted_hierarchy_path" in pred.columns:
+    # Expected path: Country > Lineage > Pheno
+    hierarchy_parts = pred["predicted_hierarchy_path"].astype(str).str.split(" > ")
+    y_pred_intermediate = hierarchy_parts.str[1]
+    y_pred_intermediate.index = pred["sample_id"].astype(str)
+elif "predicted_level1_identity" in pred.columns:
+    y_pred_intermediate = pred.set_index("sample_id")["predicted_level1_identity"]
+else:
+    print("Skipping intermediate evaluation: no intermediate prediction column found.")
+    y_pred_intermediate = None
+
+if y_pred_intermediate is not None:
+    y_true_intermediate = load_labels_from_metadata(
+        meta_path=META,
+        label_column=INTERMEDIATE_LABEL,
+    )
+
+    intermediate_summary = evaluate_predictions(
+        y_true=y_true_intermediate,
+        y_pred=y_pred_intermediate,
+        class_support_scores=None,
+        output_dir=EVAL_OUT / "intermediate_label",
+        level_name=f"intermediate_{INTERMEDIATE_LABEL}",
+    )
+
+    print("Intermediate evaluation:", intermediate_summary.get("artifacts", {}).get("summary_json"))
+PY
+
+echo
+echo "Evaluation outputs:"
+find "$EVAL_OUT" -maxdepth 3 -type f | sort
+
+
+# -----------------------------
+# 8. LEAKAGE-AWARE REPEATED CV ON TRAINING SET
+# -----------------------------
+# CV is intentionally run on TRAIN_DIR only.
+# TEST_DIR remains a final held-out evaluation set.
+
+echo
+echo "============================================================"
+echo "7. Running leakage-aware repeated CV on training subset"
+echo "============================================================"
+
+CV_LABELS_CSV="$(IFS=,; echo "${CV_LABELS[*]}")"
+
+python - <<PY
+from pathlib import Path
+import json
+
+from network_parser.config import NetworkParserConfig
+from network_parser.cross_validation import run_repeated_cv
+
+TRAIN_DIR = Path("$TRAIN_DIR")
+META = Path("$META")
+REF = Path("$REF")
+CV_OUT = Path("$CV_OUT")
+
+labels = "$CV_LABELS_CSV".split(",")
+
+config = NetworkParserConfig()
+config.central_feature_filter_method = "chi2_fdr"
+config.resolved_central_feature_filter_method = "chi2_fdr"
+config.feature_filter_fallback_strategy = "$FEATURE_FILTER_FALLBACK"
+config.run_feature_panel_separability_check = True
+config.feature_panel_sizes = [100, 200, 500, 1000]
+config.n_jobs = int("$N_JOBS")
+config.random_state = int("$SEED")
+
+# Keep selector active unless you explicitly want a forced algorithm.
+if hasattr(config, "run_model_selector"):
+    config.run_model_selector = True
+
+all_summaries = {}
+
+for target in labels:
+    target = target.strip()
+    if not target:
+        continue
+
+    out_dir = CV_OUT / target
+    print(f"\n=== CV target: {target} ===")
+
+    try:
+        summary = run_repeated_cv(
+            genomic_path=str(TRAIN_DIR),
+            meta_path=str(META),
+            label_column=target,
+            output_dir=str(out_dir),
+            config=config,
+            ref_fasta=str(REF),
+            n_repeats=int("$CV_REPEATS"),
+            n_splits=int("$CV_SPLITS"),
+            algorithm="auto",
+            random_state=int("$SEED"),
+        )
+        all_summaries[target] = {
+            "status": summary.get("status"),
+            "successful_folds": summary.get("successful_folds"),
+            "failed_folds": summary.get("failed_folds"),
+            "actual_folds_per_repeat": summary.get("actual_folds_per_repeat"),
+            "artifacts": summary.get("artifacts"),
+        }
+        print(json.dumps(all_summaries[target], indent=2))
+    except Exception as exc:
+        all_summaries[target] = {
+            "status": "failed",
+            "error": str(exc),
+        }
+        print(json.dumps(all_summaries[target], indent=2))
+
+CV_OUT.mkdir(parents=True, exist_ok=True)
+with open(CV_OUT / "all_cv_targets_summary.json", "w", encoding="utf-8") as handle:
+    json.dump(all_summaries, handle, indent=2)
+
+print(f"\nWrote combined CV summary: {CV_OUT / 'all_cv_targets_summary.json'}")
+PY
+
+echo
+echo "CV outputs:"
+find "$CV_OUT" -maxdepth 3 -type f | sort
+
+
+# -----------------------------
+# 9. QUICK METRIC VIEW
+# -----------------------------
+
+echo
+echo "============================================================"
+echo "8. Quick metric view"
+echo "============================================================"
+
+echo
+echo "Held-out terminal evaluation summary:"
+if [[ -f "$EVAL_OUT/terminal_label/model_performance_summary.json" ]]; then
+  cat "$EVAL_OUT/terminal_label/model_performance_summary.json"
+else
+  echo "Missing terminal evaluation summary."
+fi
+
+echo
+echo
+echo "Held-out intermediate evaluation summary:"
+if [[ -f "$EVAL_OUT/intermediate_label/model_performance_summary.json" ]]; then
+  cat "$EVAL_OUT/intermediate_label/model_performance_summary.json"
+else
+  echo "Missing intermediate evaluation summary."
+fi
+
+echo
+echo
+echo "CV target summaries:"
+if [[ -f "$CV_OUT/all_cv_targets_summary.json" ]]; then
+  cat "$CV_OUT/all_cv_targets_summary.json"
+else
+  echo "Missing combined CV summary."
+fi
+
+echo
+echo "============================================================"
+echo "Done."
+echo "============================================================"
+
+
