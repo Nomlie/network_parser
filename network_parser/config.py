@@ -200,6 +200,9 @@ class NetworkParserConfig:
     # fallback can use a broader endpoint such as AMR_binary.
     global_level2_label_column: Optional[str] = None
     train_global_level2: bool = True
+    # Optional absolute override for group-specific Level-2 training. When None,
+    # group eligibility is adaptive: the minimum training sample count scales
+    # with the number of Level-2 labels represented in that group.
     min_level2_samples_per_group: Optional[int] = None
 
     # Optional Level-2 label-support gate. Disabled by default so legacy runs

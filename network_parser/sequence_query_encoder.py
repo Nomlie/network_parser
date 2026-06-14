@@ -31,6 +31,7 @@ from __future__ import annotations
 import gzip
 import json
 import logging
+import os
 import shutil
 import subprocess
 from collections import Counter, defaultdict
@@ -447,6 +448,7 @@ def run_blast_context_mapping(
     rows: List[Dict[str, str]],
     output_dir: Path,
     min_query_coverage: float = 0.80,
+    num_threads: int = 1,
 ) -> Dict[str, Dict[str, Any]]:
     """Best-effort BLAST mapping of context sequences to a raw sample FASTA."""
     if not blast_available():
@@ -456,6 +458,7 @@ def run_blast_context_mapping(
     query_fasta = blast_dir / "selected_feature_contexts.fasta"
     db_prefix = blast_dir / f"{sample_fasta.stem}.blastdb"
     out_tsv = blast_dir / f"{sample_fasta.stem}.blast.tsv"
+    num_threads = max(1, int(num_threads or 1))
 
     write_context_query_fasta(rows, query_fasta)
 
@@ -479,6 +482,8 @@ def run_blast_context_mapping(
             "6 qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore",
             "-out",
             str(out_tsv),
+            "-num_threads",
+            str(num_threads),
         ],
         check=True,
         stdout=subprocess.PIPE,
@@ -644,11 +649,18 @@ def _per_sample_summary(calls: pd.DataFrame) -> List[Dict[str, Any]]:
     for sample_id, grp in calls.groupby("sample_id", dropna=False):
         encoded = pd.to_numeric(grp.get("encoded_value", pd.Series(dtype=int)), errors="coerce").fillna(0)
         mapping_status = grp.get("mapping_status", pd.Series(dtype=str)).astype(str)
+        allele_call = grp.get("allele_call", pd.Series(dtype=str)).astype(str)
+        resolved_mask = allele_call.isin(["baseline_match", "alt_match", "known_nonbaseline_match"])
+        baseline_mask = allele_call.eq("baseline_match")
+        nonbaseline_mask = allele_call.isin(["alt_match", "known_nonbaseline_match"])
         rows.append(
             {
                 "sample_id": str(sample_id),
                 "n_feature_calls": int(len(grp)),
                 "n_encoded_active_features": int((encoded != 0).sum()),
+                "n_resolved_features": int(resolved_mask.sum()),
+                "n_resolved_baseline_features": int(baseline_mask.sum()),
+                "n_resolved_nonbaseline_features": int(nonbaseline_mask.sum()),
                 "n_unique_mapped_calls": int(mapping_status.eq("mapped_unique_context").sum()),
                 "n_unresolved_or_missing_context_calls": int(mapping_status.str.contains("unresolved|missing_context", regex=True).sum()),
                 "n_multi_hit_calls": int(mapping_status.str.contains("multi_hit", regex=True).sum()),
@@ -882,6 +894,16 @@ def _active_evidence_status(active_fraction: float, active_count: int) -> Tuple[
     return "no_active_marker_evidence", "Selected markers were recovered mainly as baseline states."
 
 
+def _resolved_marker_evidence_status(resolved_fraction: float, resolved_count: int) -> Tuple[str, str]:
+    if resolved_fraction >= 0.80:
+        return "resolved_marker_evidence_present", "Most selected trained markers were resolved, including baseline states encoded as 0."
+    if resolved_fraction >= 0.50:
+        return "partial_resolved_marker_evidence", "A useful fraction of selected trained markers was resolved, but some calls remain caution states."
+    if resolved_count > 0:
+        return "low_resolved_marker_evidence", "Only a small fraction of selected trained markers was resolved in the query input."
+    return "no_resolved_marker_evidence", "No selected trained markers were confirmed as resolved query states."
+
+
 def _write_selected_feature_outputs(
     *,
     matrix: pd.DataFrame,
@@ -909,29 +931,45 @@ def _write_selected_feature_outputs(
         n = max(1, int(item.get("n_feature_calls", 0)))
         unique_fraction = float(item.get("n_unique_mapped_calls", 0) / n)
         active_fraction = float(item.get("n_encoded_active_features", 0) / n)
+        resolved_fraction = float(item.get("n_resolved_features", 0) / n)
+        resolved_baseline_fraction = float(item.get("n_resolved_baseline_features", 0) / n)
         recovery_status, recovery_reason = _marker_recovery_status(unique_fraction)
         active_status, active_reason = _active_evidence_status(
             active_fraction, int(item.get("n_encoded_active_features", 0))
         )
+        resolved_status, resolved_reason = _resolved_marker_evidence_status(
+            resolved_fraction, int(item.get("n_resolved_features", 0))
+        )
         item["unique_mapped_fraction"] = unique_fraction
         item["active_feature_fraction"] = active_fraction
+        item["resolved_feature_fraction"] = resolved_fraction
+        item["resolved_baseline_feature_fraction"] = resolved_baseline_fraction
         item["marker_recovery_status"] = recovery_status
         item["marker_recovery_reason"] = recovery_reason
         item["active_marker_evidence_status"] = active_status
         item["active_marker_evidence_reason"] = active_reason
+        item["resolved_marker_evidence_status"] = resolved_status
+        item["resolved_marker_evidence_reason"] = resolved_reason
 
     pd.DataFrame(per_sample).to_csv(per_sample_path, sep="\t", index=False)
 
     n_calls = int(len(calls))
     mapping_status = calls.get("mapping_status", pd.Series(dtype=str)).astype(str) if n_calls else pd.Series(dtype=str)
+    allele_call = calls.get("allele_call", pd.Series(dtype=str)).astype(str) if n_calls else pd.Series(dtype=str)
     encoded_values = pd.to_numeric(calls.get("encoded_value", pd.Series(dtype=int)), errors="coerce").fillna(0) if n_calls else pd.Series(dtype=int)
 
     unique_mapped = int(mapping_status.eq("mapped_unique_context").sum()) if n_calls else 0
     active_features = int((encoded_values != 0).sum()) if n_calls else 0
+    resolved_features = int(allele_call.isin(["baseline_match", "alt_match", "known_nonbaseline_match"]).sum()) if n_calls else 0
+    resolved_baseline_features = int(allele_call.eq("baseline_match").sum()) if n_calls else 0
+    resolved_nonbaseline_features = int(allele_call.isin(["alt_match", "known_nonbaseline_match"]).sum()) if n_calls else 0
     unique_fraction = float(unique_mapped / max(1, n_calls))
     active_fraction = float(active_features / max(1, n_calls))
+    resolved_fraction = float(resolved_features / max(1, n_calls))
+    resolved_baseline_fraction = float(resolved_baseline_features / max(1, n_calls))
     recovery_status, recovery_reason = _marker_recovery_status(unique_fraction)
     active_status, active_reason = _active_evidence_status(active_fraction, active_features)
+    resolved_status, resolved_reason = _resolved_marker_evidence_status(resolved_fraction, resolved_features)
 
     summary = {
         "mode": mode,
@@ -946,10 +984,18 @@ def _write_selected_feature_outputs(
         "unique_mapped_fraction": unique_fraction,
         "n_encoded_active_feature_calls": active_features,
         "active_feature_fraction": active_fraction,
+        "n_resolved_features": resolved_features,
+        "resolved_feature_fraction": resolved_fraction,
+        "n_resolved_baseline_features": resolved_baseline_features,
+        "resolved_baseline_feature_fraction": resolved_baseline_fraction,
+        "n_resolved_nonbaseline_features": resolved_nonbaseline_features,
+        "resolved_nonbaseline_feature_fraction": float(resolved_nonbaseline_features / max(1, n_calls)),
         "marker_recovery_status": recovery_status,
         "marker_recovery_reason": recovery_reason,
         "active_marker_evidence_status": active_status,
         "active_marker_evidence_reason": active_reason,
+        "resolved_marker_evidence_status": resolved_status,
+        "resolved_marker_evidence_reason": resolved_reason,
         "mapping_status_counts": _status_counts(calls, "mapping_status"),
         "mapping_quality_counts": _status_counts(calls, "mapping_quality"),
         "allele_call_counts": _status_counts(calls, "allele_call"),
@@ -1006,6 +1052,10 @@ def encode_vcf_query_from_manifest(
 
     manifest = load_feature_manifest(Path(feature_manifest_path))
     rows = [normalise_manifest_row(r) for r in manifest_rows_for_features(manifest, feature_order)]
+    logger.info(
+        "Loaded selected-feature manifest for VCF query | requested_features=%d",
+        int(len(rows)),
+    )
     vcf_paths = discover_vcf_inputs(vcf_path)
     if not vcf_paths:
         raise ValueError("No VCF files were found for VCF query encoding.")
@@ -1069,6 +1119,7 @@ def encode_raw_sequence_query(
     features: Sequence[str],
     output_dir: str,
     mapping_mode: str = "auto",
+    n_jobs: Optional[int] = None,
 ) -> Tuple[pd.DataFrame, Dict[str, Any], pd.DataFrame]:
     """
     Build a sample × selected-feature matrix from FASTA DNA.
@@ -1087,6 +1138,10 @@ def encode_raw_sequence_query(
         - ``auto``: use BLAST if available, otherwise exact flanking-context search
         - ``blast``: require BLAST context mapping
         - ``exact``: use exact flanking-context search only
+    n_jobs
+        Optional thread count for BLAST query mapping. Exact fallback remains
+        deterministic and uses a per-sample context cache to avoid repeated
+        scans for duplicated selected-feature contexts.
     """
     out = ensure_dir(Path(output_dir))
     mapping_mode = str(mapping_mode or "auto").lower()
@@ -1100,6 +1155,19 @@ def encode_raw_sequence_query(
     manifest = load_feature_manifest(Path(feature_manifest_path))
     rows = [normalise_manifest_row(r) for r in manifest_rows_for_features(manifest, feature_order)]
     missing_context = [r["Feature_ID"] for r in rows if not r.get("Context_sequence")]
+    context_present = int(len(rows) - len(missing_context))
+    logger.info(
+        "Loaded selected-feature manifest | requested_features=%d | context_present=%d",
+        int(len(rows)),
+        context_present,
+    )
+
+    if n_jobs is None or int(n_jobs) == 0:
+        blast_threads = 1
+    elif int(n_jobs) < 0:
+        blast_threads = max(1, int(os.cpu_count() or 1))
+    else:
+        blast_threads = max(1, int(n_jobs))
 
     fasta_paths = discover_fasta_inputs(raw_sequence_path)
     if not fasta_paths:
@@ -1125,6 +1193,7 @@ def encode_raw_sequence_query(
                     records=records,
                     rows=selected_context_rows,
                     output_dir=out / sample_id,
+                    num_threads=blast_threads,
                 )
             except Exception as exc:
                 if mapping_mode == "blast":
@@ -1138,17 +1207,22 @@ def encode_raw_sequence_query(
                 use_blast = False
 
         values: List[int] = []
+        exact_mapping_cache: Dict[Tuple[str, int], Optional[Dict[str, Any]]] = {}
         for row in rows:
             feature_id = row["Feature_ID"]
             mapping: Optional[Dict[str, Any]] = None
             if feature_id in blast_mappings:
                 mapping = blast_mappings[feature_id]
             elif row.get("Context_sequence") and mapping_mode != "blast":
-                mapping = find_by_flanking_context(
-                    records=records,
-                    context=row["Context_sequence"],
-                    center_offset=int(float(row.get("Context_center_offset", -1))),
-                )
+                center_offset = int(float(row.get("Context_center_offset", -1)))
+                cache_key = (str(row["Context_sequence"]), center_offset)
+                if cache_key not in exact_mapping_cache:
+                    exact_mapping_cache[cache_key] = find_by_flanking_context(
+                        records=records,
+                        context=row["Context_sequence"],
+                        center_offset=center_offset,
+                    )
+                mapping = exact_mapping_cache[cache_key]
 
             encoded = encode_mapping(row, mapping)
             encoded["sample_id"] = sample_id

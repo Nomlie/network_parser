@@ -353,8 +353,17 @@ def build_train_two_level_parser(prog: Optional[str] = None, add_help: bool = Tr
 
     parser.add_argument("--genomic", required=True, help="Genomic input file or directory: VCF/VCF.gz/CSV/TSV.")
     parser.add_argument("--meta", required=True, help="Metadata CSV/TSV containing both supervised labels.")
-    parser.add_argument("--level1_label", required=True, help="Metadata column for strain/lineage/group placement.")
-    parser.add_argument("--level2_label", required=True, help="Metadata column for drug-resistance phenotype/profile.")
+    parser.add_argument("--level1_label", default=None, help="Metadata column for first-level strain/lineage/group placement. Required unless --hierarchy_labels is used.")
+    parser.add_argument("--level2_label", default=None, help="Metadata column for second-level phenotype/profile. Required unless --hierarchy_labels is used.")
+    parser.add_argument(
+        "--hierarchy_labels",
+        nargs="+",
+        default=None,
+        help=(
+            "Ordered metadata columns for true recursive hierarchy training. "
+            "When provided, this supersedes --level1_label/--level2_label and trains one model per hierarchy node."
+        ),
+    )
     parser.add_argument(
         "--global_level2_label",
         default=None,
@@ -369,7 +378,15 @@ def build_train_two_level_parser(prog: Optional[str] = None, add_help: bool = Tr
     parser.add_argument("--ref_fasta", default=None, help="Optional reference FASTA/GenBank context for VCF-oriented workflows.")
     parser.add_argument("--algorithm", default=None, help="Optional ML algorithm override passed to the ML protocol.")
     parser.add_argument("--no_global_level2", action="store_true", help="Disable the global Level 2 fallback model.")
-    parser.add_argument("--min_level2_samples_per_group", type=int, default=None, help="Minimum samples needed for group-specific Level 2 models.")
+    parser.add_argument(
+        "--min_level2_samples_per_group",
+        type=int,
+        default=None,
+        help=(
+            "Optional absolute minimum samples for group-specific Level 2 models. "
+            "When unset, eligibility is adaptive and scales with the number of Level 2 labels."
+        ),
+    )
     parser.add_argument(
         "--level2_drop_low_support_classes",
         action="store_true",
@@ -589,8 +606,28 @@ def run_train_two_level(args: argparse.Namespace) -> Dict[str, Any]:
     if hasattr(config, "__post_init__"):
         config.__post_init__()
 
-    LOGGER.info("Starting NetworkParser two-level training")
     protocol = TwoLevelProtocol(config=config)
+
+    hierarchy_labels = getattr(args, "hierarchy_labels", None)
+    if hierarchy_labels:
+        LOGGER.info("Starting NetworkParser multi-level hierarchy training")
+        return protocol.train_hierarchy(
+            genomic_path=args.genomic,
+            meta_path=args.meta,
+            hierarchy_labels=list(hierarchy_labels),
+            output_dir=args.output_dir,
+            ref_fasta=args.ref_fasta,
+            algorithm=args.algorithm,
+            min_samples_per_node=args.min_level2_samples_per_group,
+        )
+
+    if not args.level1_label or not args.level2_label:
+        raise ValueError(
+            "train-two-level requires either --hierarchy_labels with at least two columns "
+            "or both --level1_label and --level2_label."
+        )
+
+    LOGGER.info("Starting NetworkParser two-level training")
     return protocol.train(
         genomic_path=args.genomic,
         meta_path=args.meta,

@@ -16,6 +16,7 @@ from .network_parser import (
     normalize_labels,
 )
 from .utils import normalize_sample_id
+from .model_evaluation import evaluate_predictions, load_labels_from_metadata
 
 try:
     from .decision_tree_branch import DecisionTreeBranch
@@ -57,6 +58,8 @@ __all__ = [
     "run_networkparser_analysis",
     "normalize_sample_id",
     "normalize_labels",
+    "evaluate_predictions",
+    "load_labels_from_metadata",
     "TwoLevelProtocol",
     "NetworkParserQueryEngine",
     "encode_raw_sequence_query",

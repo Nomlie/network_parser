@@ -703,6 +703,10 @@ def query_bundle(
     n_jobs: Optional[int] = None,
     query_input_type: str = "auto",
     raw_sequence_mapping_mode: str = "auto",
+    meta_path: Optional[str] = None,
+    level1_label: Optional[str] = None,
+    level2_label: Optional[str] = None,
+    sample_id_column: Optional[str] = None,
 ) -> pd.DataFrame:
     """Run query inference from a binary NetworkParser bundle."""
     out = _ensure_dir(Path(output_dir))
@@ -720,6 +724,10 @@ def query_bundle(
         n_jobs=n_jobs,
         query_input_type=query_input_type,
         raw_sequence_mapping_mode=raw_sequence_mapping_mode,
+        meta_path=meta_path,
+        level1_label=level1_label,
+        level2_label=level2_label,
+        sample_id_column=sample_id_column,
     )
 
 
