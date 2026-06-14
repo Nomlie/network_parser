@@ -13,8 +13,8 @@ NetworkParser supports four related analysis concepts:
 1. **Single-label supervised discovery**  
    Use one metadata label, such as strain group, lineage, phenotype, AMR class, or outbreak cluster, to identify discriminating genomic features and optionally run decision-tree interpretability.
 
-2. **Hierarchy (/ˈhʌɪ(ə)rɑːki/)-based diagnostic interpretation**  
-   Route a strain or sample through ordered supervised biological labels, from broad genomic placement toward phenotype or AMR-profile interpretation, with each trainable node preserving its own marker evidence.
+2. **Two-level diagnostic interpretation**  
+   First place a strain or sample into a supervised genomic group, then evaluate phenotype or AMR-profile patterns using a second supervised label.
 
 3. **Recursive multi-level hierarchy training**  
    Train a true ordered hierarchy of supervised labels using `--hierarchy_labels`, for example demographic grouping → species/group placement → lineage/clade placement → phenotype interpretation. Each node can learn its own feature-filtered model where the data support it.
@@ -107,8 +107,8 @@ Prediction report + marker evidence report + route audit
 - Retains decision-tree interpretability as the rule-based explanation layer.
 - Extracts decision paths, branch-level rules, and path-based epistatic interaction candidates.
 - Computes post-tree confidence and bootstrap stability evidence.
-- Trains hierarchy-based registries, from standard parent → child label routes to recursive multi-level structures.
-- Writes a portable binary `.npb` model bundle when enabled.
+- Trains two-level and recursive multi-level hierarchy registries.
+- Supports portable binary `.npb` model bundles for query deployment when a bundle has been produced.
 - Supports query inference from a registry or binary bundle.
 - Produces terminal-friendly, machine-readable, and browser-readable query reports.
 - Exports ranked feature lists, selected feature manifests, interaction outputs, sample-feature networks, and GNN-ready adjacency matrices where enabled.
@@ -121,7 +121,7 @@ NetworkParser exposes three CLI workflows:
 
 ```text
 python -m network_parser.cli run             # single-label workflow
-python -m network_parser.cli train-two-level # hierarchy training; legacy command name retained
+python -m network_parser.cli train-two-level # two-level or recursive hierarchy training
 python -m network_parser.cli query           # query / inference workflow
 ```
 
@@ -225,9 +225,9 @@ sample_C     class_A         ...                    ...
 
 The supervised label may represent lineage, strain group, species-complex group, AMR phenotype, resistance profile, outbreak cluster, or another biologically meaningful classification target.
 
-### 4. Hierarchy Metadata: Standard Parent → Child Route
+### 4. Two-Level Metadata
 
-For standard hierarchy training, the metadata must contain two supervised label columns:
+For two-level training, the metadata must contain two supervised label columns:
 
 ```text
 sample_id    level1_label    level2_label    optional_metadata
@@ -237,8 +237,8 @@ sample_B     group_B         phenotype_B     ...
 
 Conceptually:
 
-- **Parent label / Level 1**: strain placement, lineage, clade, cluster, or genomic group.
-- **Child label / Level 2**: AMR phenotype, resistance class, or resistance-profile label.
+- **Level 1**: strain placement, lineage, clade, cluster, or genomic group.
+- **Level 2**: AMR phenotype, resistance class, or resistance-profile label.
 
 ### 5. Multi-Level Hierarchy Metadata
 
@@ -339,9 +339,9 @@ python -m network_parser.cli run \
 
 ---
 
-## Quick Start: Hierarchy Training
+## Quick Start: Two-Level Training
 
-Train a standard hierarchy NetworkParser model registry:
+Train a two-level NetworkParser model registry:
 
 ```bash
 python -m network_parser.cli train-two-level \
@@ -351,13 +351,13 @@ python -m network_parser.cli train-two-level \
   --level2_label phenotype_or_resistance_label \
   --central_feature_filter_method chi2_fdr \
   --ref_fasta path/to/reference.fasta \
-  --output_dir path/to/hierarchy_results \
+  --output_dir path/to/two_level_results \
   --feature_panel_check on \
   --feature_panel_sizes 100,200,500,1000 \
   --n_jobs 4
 ```
 
-The standard hierarchy protocol performs:
+The two-level protocol performs:
 
 ```text
 Input
@@ -368,7 +368,7 @@ Feature manifest construction where reference context is available
   ↓
 Artifact-filtered binary matrix selection where available
   ↓
-Parent/child metadata alignment
+Two-label metadata alignment
   ↓
 Level 1 configured central feature filtering
   ↓
@@ -386,17 +386,17 @@ Group-specific Level 2 configured feature filtering and feature-panel checking w
   ↓
 Group-specific selected feature manifests where possible
   ↓
-Hierarchy-compatible model registry and portable model bundle
+Two-level model registry and optional portable model bundle
 ```
 
 Core training artifacts:
 
 ```text
 two_level_model_registry.json
-networkparser_model_bundle.npb
+networkparser_model_bundle.npb       # optional bundle artifact
 ```
 
-The registry records model paths, selected feature lists, selected feature manifest paths, label columns, fallback routes, and relevant encoding/configuration metadata. The binary bundle packages the registry, trained model payloads, selected-feature metadata, and query-time evidence resources into one portable object when bundle creation is enabled.
+The registry records model paths, selected feature lists, selected feature manifest paths, label columns, fallback routes, and relevant encoding/configuration metadata. When a binary bundle is produced, it packages the registry, trained model payloads, selected-feature metadata, and query-time evidence resources into one portable object.
 
 ---
 
@@ -614,7 +614,7 @@ Input → preprocessing → feature manifest → central statistical feature fil
 | `--disable_conditional_dt` | Prevent selector-driven decision-tree triggering. |
 | `--ml_algorithm` | Optional algorithm override, for example `auto`, `RF`, `MLP`, `LR`, `DT`, `SVC`, `MBCS`, or `DNL`. |
 
-### Hierarchy training options
+### Two-level and hierarchy training options
 
 | Argument | Description |
 |---|---|
@@ -788,8 +788,8 @@ Important config areas:
 | Decision-tree branch | Controls tree depth, split behaviour, rule extraction, and interpretability. |
 | Interaction mining | Controls post-tree path-based feature-interaction discovery. |
 | Bootstrap / stability | Controls post-tree confidence estimation and stability evidence. |
-| Hierarchy training | Controls parent/child labels, recursive hierarchy, and fallback behaviour. |
-| Model bundle | Controls whether the portable query bundle is written after training. |
+| Two-level / hierarchy training | Controls Level 1, Level 2, recursive hierarchy, and fallback behaviour. |
+| Model bundle | Controls portable query bundle naming and packaging behaviour where bundle creation is invoked. |
 | Query mode | Controls query-time matrix construction and trained-feature alignment. |
 | FASTA query mode | Controls selected-marker context mapping and allele extraction. |
 | FASTQ query mode | Controls read-alignment and VCF-generation preprocessing. |
@@ -846,36 +846,105 @@ The artifact-filtered binary matrix is preferred for downstream modelling when i
 
 ## Feature Manifest
 
-The feature manifest is a first-class training artifact. It prevents annotation from being saved and then lost before model training or query mode.
+The selected-feature manifest is the bridge between training-time discovery and query-time inference. It keeps the biological meaning of each retained genomic feature attached to the model-ready matrix, so a prediction can be traced back to marker identity, allele state, baseline definition, context mapping, and annotation.
 
-Conceptually, each retained genomic feature should be traceable through:
+Conceptually, each retained genomic feature should remain traceable through:
 
 ```text
 feature ID → genomic location → allele state → encoding rule → selected model feature → query-time evidence
 ```
 
-A manifest may include:
+### Training / Discovery Side
 
 ```text
-Feature_ID
-chrom
-pos
-ref
-alt
-baseline_allele
-encoding
-context_sequence
-context_marker_index
-gene
-region_type
-nucleotide_change
-amino_acid_change
-gene_annotation
+Genomic input                    Metadata input
+(VCF / matrix)                   (labels: group, phenotype, AMR profile)
+      │                                      │
+      │                                      │
+      ▼                                      ▼
+Clean genomic matrix                  Supervised labels
+sample × genomic features             sample → target label
+      │                                      │
+      └───────────────┬──────────────────────┘
+                      ▼
+        Central statistical feature filtering
+        χ² / Fisher / RF-FDR / permutation-FDR
+                      │
+                      ▼
+              Filtered matrix
+      only retained genomic features enter modelling
+                      │
+                      ▼
+        Hierarchy (/ˈhʌɪ(ə)rɑːki/)-based model training
+        ordered targets from broad placement to phenotype/profile
+                      │
+                      ▼
+       Selected feature lists saved in registry
+                      │
+                      ▼
+        Selected-feature manifest saved
+        ┌────────────────────────────────────────────┐
+        │ Feature_ID                                 │
+        │ genomic position / contig                  │
+        │ REF allele                                 │
+        │ ALT allele                                 │
+        │ baseline allele                            │
+        │ encoding rule                              │
+        │ context sequence around marker             │
+        │ marker-centre offset                       │
+        │ gene / region annotation                   │
+        └────────────────────────────────────────────┘
+                      │
+                      ▼
+              Query-ready model registry / bundle
 ```
 
-During central feature filtering and ranked feature-panel selection, the matrix is reduced to the exact features used by the trained model. The manifest is reduced in parallel and saved as the selected-feature manifest for the corresponding model slot.
+During central feature filtering and ranked feature-panel selection, the matrix is reduced to the exact genomic features used by each trained model slot. The manifest is reduced in parallel and saved as the selected-feature manifest for the corresponding hierarchy node, registry entry, or bundled model payload.
 
-Selected manifests are stored in the registry and bundle so query mode can reconstruct the same selected-feature matrix from a new query sample.
+### Query / Inference Side
+
+```text
+New query sample
+(matrix, VCF-derived matrix, FASTQ-derived calls, or FASTA sequence)
+                      │
+                      ▼
+          Load saved model registry / bundle
+          "Which features do the trained models need?"
+                      │
+                      ▼
+          Load selected-feature manifest
+          "What does each feature mean biologically?"
+                      │
+                      ▼
+        For FASTA query:
+        map saved context sequence to query DNA
+                      │
+                      ▼
+        Extract nucleotide at marker centre
+                      │
+                      ▼
+        Compare observed nucleotide with:
+        REF / ALT / baseline allele from manifest
+                      │
+                      ▼
+        Encode using the same training rule
+        baseline = 0, known non-baseline = 1
+                      │
+                      ▼
+        Build one-sample selected-feature matrix
+        same columns/order expected by trained model
+                      │
+                      ▼
+        Apply saved hierarchy model(s)
+        broad placement → phenotype / resistance-profile interpretation
+                      │
+                      ▼
+        Prediction report + marker evidence report
+```
+
+Query mode does not rerun RF-FDR, chi-square/Fisher FDR, permutation testing, model selection, tree construction, or bootstrap confidence scoring. It projects the new sample into the saved selected-feature space and reports which trained genomic markers were resolved, unresolved, baseline-matching, or non-baseline-matching.
+
+Selected manifests are stored in the registry and bundle so query mode can reconstruct the same selected-feature matrix from a new query sample with confidence and robust inference traceability.
 
 ---
 
@@ -905,7 +974,7 @@ model_bundle_include_ranked_feature_tables
 model_bundle_fail_on_error
 ```
 
-For most query use, the bundle is preferable because it avoids broken relative paths when results are moved between machines.
+For most query use, a bundle is preferable when available because it avoids broken relative paths when results are moved between machines.
 
 ---
 
@@ -933,10 +1002,10 @@ results/
 └── networkparser_results_<timestamp>.json
 ```
 
-### Standard hierarchy training workflow
+### Two-level training workflow
 
 ```text
-hierarchy_results/
+two_level_results/
 ├── matrices/
 │   └── DataLoader matrix and feature-manifest outputs
 ├── level1_*/
@@ -951,7 +1020,7 @@ hierarchy_results/
 ├── aligned_two_level_matrix.csv
 ├── aligned_two_level_labels.csv
 ├── two_level_model_registry.json
-└── networkparser_model_bundle.npb       # when enabled
+└── networkparser_model_bundle.npb       # optional bundle artifact
 ```
 
 ### Recursive hierarchy workflow
@@ -959,11 +1028,11 @@ hierarchy_results/
 ```text
 hierarchy_results/
 ├── matrices/
-├── hierarchy/
+├── hierarchy_models/
 │   ├── root model outputs
 │   └── child-node model outputs where trainable
-├── hierarchy_model_registry.json or two_level_model_registry.json
-└── networkparser_model_bundle.npb       # when enabled and applicable
+├── hierarchical_model_registry.json
+└── networkparser_model_bundle.npb       # optional bundle artifact when applicable
 ```
 
 ### Query workflow
@@ -1173,15 +1242,15 @@ python -m network_parser.cli run \
   --ml_algorithm DT
 ```
 
-### Child model is unavailable for a hierarchy branch
+### Group-specific Level 2 model is unavailable
 
-A branch-specific child model may be skipped when the parent subgroup does not support robust downstream training. The default eligibility rule is adaptive rather than based on one fixed cohort-size cutoff. Common reasons include only one child-label class inside the branch, too few samples in the smallest child-label class for stratified cross-validation, or no finite model-selector probe scores after filtering.
+A group-specific Level 2 model may be skipped when the Level 1 subgroup does not support robust Level 2 training. The default eligibility rule is adaptive rather than based on one fixed cohort-size cutoff. Common reasons include only one Level 2 class inside the group, too few samples in the smallest Level 2 class for stratified cross-validation, or no finite model-selector probe scores after filtering.
 
-When this happens, query mode can use a configured global fallback if one exists.
+When this happens, query mode can use a configured global Level 2 fallback if one exists.
 
-### Child labels have rare classes that make cross-validation impossible
+### Level 2 has rare classes that make cross-validation impossible
 
-When a child phenotype or resistance-profile class has too little support, stratified cross-validation cannot produce valid folds. For publication-safe training, keep the run strict and report the limitation, or explicitly enable the child-label support gate:
+When a Level 2 phenotype or resistance-profile class has too little support, stratified cross-validation cannot produce valid folds. For publication-safe training, keep the run strict and report the limitation, or explicitly enable the Level 2 class-support gate:
 
 ```bash
 python -m network_parser.cli train-two-level \
@@ -1189,7 +1258,7 @@ python -m network_parser.cli train-two-level \
   --meta path/to/metadata.csv \
   --level1_label lineage_column \
   --level2_label phenotype_column \
-  --output_dir path/to/hierarchy_results \
+  --output_dir path/to/two_level_results \
   --level2_drop_low_support_classes \
   --level2_min_class_count 2
 ```
@@ -1198,7 +1267,7 @@ The audit files record what was excluded and why.
 
 ### Use a global binary resistant/susceptible fallback
 
-For sparse detailed child resistance-profile labels, NetworkParser can train an additional global binary fallback model:
+For sparse detailed Level 2 resistance-profile labels, NetworkParser can train an additional global binary fallback model:
 
 ```bash
 python -m network_parser.cli train-two-level \
@@ -1206,7 +1275,7 @@ python -m network_parser.cli train-two-level \
   --meta path/to/metadata.csv \
   --level1_label lineage_column \
   --level2_label detailed_resistance_profile_column \
-  --output_dir path/to/hierarchy_results \
+  --output_dir path/to/two_level_results \
   --level2_train_binary_global_fallback \
   --level2_binary_label_column antibiotic_binary_column
 ```
@@ -1219,7 +1288,7 @@ python -m network_parser.cli train-two-level \
   --meta path/to/metadata.csv \
   --level1_label lineage_column \
   --level2_label detailed_resistance_profile_column \
-  --output_dir path/to/hierarchy_results \
+  --output_dir path/to/two_level_results \
   --level2_train_binary_global_fallback \
   --level2_binary_label_mapping_file level2_to_binary_mapping.tsv
 ```
@@ -1227,16 +1296,16 @@ python -m network_parser.cli train-two-level \
 The mapping file should contain:
 
 ```text
-original_child_label    binary_child_label
+original_level2_label    binary_level2_label
 detailed_profile_A       resistant
 detailed_profile_B       susceptible
 ```
 
 Query mode reports the fallback source when this broader endpoint is used.
 
-### Use a broader standard global child fallback label
+### Use a broader standard global Level 2 fallback label
 
-When branch-specific models should learn a detailed child label but the standard global fallback should learn a broader endpoint, use `--global_level2_label`:
+When group-specific models should learn a detailed Level 2 label but the standard global fallback should learn a broader endpoint, use `--global_level2_label`:
 
 ```bash
 python -m network_parser.cli train-two-level \
@@ -1245,17 +1314,17 @@ python -m network_parser.cli train-two-level \
   --level1_label lineage_column \
   --level2_label detailed_resistance_profile_column \
   --global_level2_label broader_binary_or_profile_column \
-  --output_dir path/to/hierarchy_results
+  --output_dir path/to/two_level_results
 ```
 
 In this mode:
 
 ```text
-branch-specific child models → trained on the detailed child label
-standard global child fallback → trained on the broader fallback label
+group-specific Level 2 models → trained on the detailed Level 2 label
+standard global Level 2 fallback → trained on the broader fallback label
 ```
 
-The registry records both label targets so query reports can distinguish detailed branch-specific predictions from broader fallback predictions.
+The registry records both label targets so query reports can distinguish detailed group-specific predictions from broader fallback predictions.
 
 ### Bundle query fails after moving result directories
 
@@ -1284,7 +1353,7 @@ Current priorities:
 
 A concise methods-style description:
 
-> NetworkParser applies a modular supervised analysis workflow in which genomic variant matrices are preprocessed, aligned to metadata labels, and reduced through central statistical feature filtering before model screening. The filtering stage can use Random Forest feature importance with permutation-derived empirical p-values and FDR correction, or configurable chi-square/Fisher alternatives for faster association-based screening. A ranked feature-panel separability check can then evaluate compact top-N marker panels and forward a selected model-ready matrix to the ML protocol and model selector, after which a decision-tree interpretability branch can be conditionally triggered to extract rule-based markers, path-level feature interactions, and post-tree confidence evidence. In hierarchy workflows, supervised models are trained along ordered biological labels so that query samples can be routed from broad strain/group placement toward phenotype or AMR-profile interpretation. Query mode applies the trained registry or binary bundle to new samples by projecting them onto the saved selected-feature space; for FASTA input, selected marker context sequences are mapped back to the query DNA, marker-centre nucleotides are extracted, and a one-sample selected-feature matrix is reconstructed before prediction.
+> NetworkParser applies a modular supervised analysis workflow in which genomic variant matrices are preprocessed, aligned to metadata labels, and reduced through central statistical feature filtering before model screening. The filtering stage can use Random Forest feature importance with permutation-derived empirical p-values and FDR correction, or configurable chi-square/Fisher alternatives for faster association-based screening. A ranked feature-panel separability check can then evaluate compact top-N marker panels and forward a selected model-ready matrix to the ML protocol and model selector, after which a decision-tree interpretability branch can be conditionally triggered to extract rule-based markers, path-level feature interactions, and post-tree confidence evidence. In two-level or recursive hierarchy workflows, supervised models are trained along ordered biological labels so that query samples can be routed from broad strain/group placement toward phenotype or AMR-profile interpretation. Query mode applies the trained registry or binary bundle to new samples by projecting them onto the saved selected-feature space; for FASTA input, selected marker context sequences are mapped back to the query DNA, marker-centre nucleotides are extracted, and a one-sample selected-feature matrix is reconstructed before prediction.
 
 ---
 

@@ -3,12 +3,16 @@ set -euo pipefail
 
 # ============================================================
 # NetworkParser testing pipeline
-# From subsetting -> hierarchy training -> bundle -> query
-# -> held-out model evaluation -> leakage-aware CV
+# Combined from local git notes + testing_np workflow
+#
+# Flow:
+#   optional git sanity check
+#   subset -> hierarchy training -> bundle -> query
+#   -> held-out model evaluation -> leakage-aware CV
 # ============================================================
 
 # -----------------------------
-# 0. EDIT THESE PATHS / LABELS
+# 0. PATHS / LABELS
 # -----------------------------
 
 BASE="/Users/nmfuphicsir.co.za/Documents/pHDProject"
@@ -16,7 +20,7 @@ DATA="$BASE/Data/AFRO_TB"
 CODE="$BASE/Code/network_parser"
 
 VCF_DIR="$DATA/AFRO_TB_ANNOTATION_VCF"
-META="/Users/nmfuphicsir.co.za/Documents/data/AFRO_TB/AFRO_dataset_meta.csv"
+META="$DATA/AFRO_dataset_meta.csv"
 REF="$BASE/Code/VCF_2_Matrix/ref/H37Rv.gbk"
 
 SUBSET_SCRIPT="$CODE/extract_subset.py"
@@ -30,19 +34,22 @@ QUERY_OUT="$RESULTS/query_test_results"
 EVAL_OUT="$RESULTS/model_evaluation_test"
 CV_OUT="$RESULTS/cross_validation"
 
-# Ordered hierarchy labels for true multi-level hierarchy training.
-# Edit only if your metadata column names differ.
+# Ordered hierarchy labels for recursive hierarchy training.
 HIERARCHY_LABELS=(Country Lineage Pheno)
 
-# CV targets to test independently on TRAIN_DIR.
+# CV targets to evaluate independently on TRAIN_DIR.
 CV_LABELS=(Country Lineage Pheno)
 
-# Evaluation targets from the held-out query output.
+# Held-out evaluation targets.
 INTERMEDIATE_LABEL="Lineage"
 TERMINAL_LABEL="Pheno"
 
 N_JOBS=8
 SEED=42
+
+# Optional sample cap for extract_subset.py.
+# Leave empty to let the subset script use its own full valid set / train-test logic.
+SUBSET_N_SAMPLES=""
 
 # Smoke-testing setting:
 #   unfiltered = allows exploratory runs to continue if no FDR-significant features survive.
@@ -50,27 +57,117 @@ SEED=42
 #   stop = fail loudly if no statistically supported features survive.
 FEATURE_FILTER_FALLBACK="unfiltered"
 
-# For smoke test:
+# For smoke testing:
 CV_REPEATS=1
 CV_SPLITS=3
 
-# For serious run later:
-# CV_REPEATS=3
-# CV_SPLITS=5
+# Git helper is intentionally disabled by default.
+# Set DO_GIT_COMMIT_PUSH=1 when you explicitly want the script to commit and push.
+DO_GIT_COMMIT_PUSH="${DO_GIT_COMMIT_PUSH:-0}"
+GIT_BRANCH="${GIT_BRANCH:-changesss}"
+GIT_COMMIT_MSG="${GIT_COMMIT_MSG:-NetworkParser testing workflow}"
+GIT_REMOTE_URL="https://github.com/Nomlie/network_parser.git"
 
 
 # -----------------------------
-# 1. SETUP
+# 1. HELPERS
 # -----------------------------
+
+section() {
+  echo
+  echo "============================================================"
+  echo "$1"
+  echo "============================================================"
+}
+
+require_path() {
+  local label="$1"
+  local path="$2"
+  if [[ ! -e "$path" ]]; then
+    echo "Missing $label: $path" >&2
+    exit 1
+  fi
+}
+
+command_has_arg() {
+  local cmd="$1"
+  local arg="$2"
+  bash -lc "$cmd --help" 2>&1 | grep -q -- "$arg"
+}
+
+run_optional_git_sync() {
+  section "0. Git sanity check"
+
+  git remote set-url origin "$GIT_REMOTE_URL" || true
+  git remote -v || true
+  git status || true
+  git rev-parse --abbrev-ref HEAD || true
+
+  if [[ "$DO_GIT_COMMIT_PUSH" == "1" ]]; then
+    git switch master || git checkout master
+    git pull --rebase origin master
+    git switch "$GIT_BRANCH" || git checkout -b "$GIT_BRANCH"
+    git add .
+    if git diff --cached --quiet; then
+      echo "No staged changes to commit."
+    else
+      git commit -m "$GIT_COMMIT_MSG"
+      git push --set-upstream origin "$GIT_BRANCH"
+    fi
+  else
+    echo "Git commit/push skipped. Set DO_GIT_COMMIT_PUSH=1 to enable it."
+  fi
+}
+
+build_subset_command() {
+  local cmd=(python "$SUBSET_SCRIPT" --vcf-dir "$VCF_DIR" --meta-file "$META" --output-dir "$SUBSET_DIR")
+
+  # Support both recent and older versions of extract_subset.py.
+  if command_has_arg "python '$SUBSET_SCRIPT'" "--hierarchy-labels"; then
+    cmd+=(--hierarchy-labels "${HIERARCHY_LABELS[@]}")
+  elif command_has_arg "python '$SUBSET_SCRIPT'" "--required-label-columns"; then
+    cmd+=(--required-label-columns "${HIERARCHY_LABELS[@]}")
+  fi
+
+  if command_has_arg "python '$SUBSET_SCRIPT'" "--train-ratio"; then
+    cmd+=(--train-ratio 0.8)
+  fi
+
+  if command_has_arg "python '$SUBSET_SCRIPT'" "--seed"; then
+    cmd+=(--seed "$SEED")
+  elif command_has_arg "python '$SUBSET_SCRIPT'" "--random-seed"; then
+    cmd+=(--random-seed "$SEED")
+  fi
+
+  if command_has_arg "python '$SUBSET_SCRIPT'" "--stratify-by"; then
+    cmd+=(--stratify-by "$INTERMEDIATE_LABEL")
+  fi
+
+  if [[ -n "$SUBSET_N_SAMPLES" ]] && command_has_arg "python '$SUBSET_SCRIPT'" "--n-samples"; then
+    cmd+=(--n-samples "$SUBSET_N_SAMPLES")
+  fi
+
+  printf '%q ' "${cmd[@]}"
+}
+
+
+# -----------------------------
+# 2. SETUP
+# -----------------------------
+
+require_path "code directory" "$CODE"
+require_path "VCF directory" "$VCF_DIR"
+require_path "metadata file" "$META"
+require_path "reference file" "$REF"
+require_path "subset script" "$SUBSET_SCRIPT"
 
 cd "$CODE"
 
 mkdir -p "$SUBSET_DIR" "$RESULTS" "$QUERY_OUT" "$EVAL_OUT" "$CV_OUT"
 
-echo
-echo "============================================================"
-echo "NetworkParser testing pipeline"
-echo "============================================================"
+run_optional_git_sync
+
+section "NetworkParser testing pipeline"
 echo "Code:      $CODE"
 echo "VCF_DIR:   $VCF_DIR"
 echo "META:      $META"
@@ -78,30 +175,17 @@ echo "REF:       $REF"
 echo "TRAIN_DIR: $TRAIN_DIR"
 echo "TEST_DIR:  $TEST_DIR"
 echo "RESULTS:   $RESULTS"
-echo
 
 
 # -----------------------------
-# 2. SUBSET INTO TRAIN / TEST
+# 3. SUBSET INTO TRAIN / TEST
 # -----------------------------
-# Assumes your extract_subset.py is the updated script that:
-#   - keeps only samples with matching VCF files
-#   - keeps only valid metadata labels
-#   - writes 80/20 train/test folders
 
-echo
-echo "============================================================"
-echo "1. Creating metadata-valid 80/20 train/test subset"
-echo "============================================================"
+section "1. Creating metadata-valid train/test subset"
 
-python "$SUBSET_SCRIPT" \
-  --vcf-dir "$VCF_DIR" \
-  --meta-file "$META" \
-  --output-dir "$SUBSET_DIR" \
-  --hierarchy-labels "${HIERARCHY_LABELS[@]}" \
-  --train-ratio 0.8 \
-  --seed "$SEED" \
-  --stratify-by "$INTERMEDIATE_LABEL"
+SUBSET_CMD="$(build_subset_command)"
+echo "$SUBSET_CMD"
+eval "$SUBSET_CMD"
 
 echo
 echo "Train VCF count:"
@@ -112,13 +196,10 @@ find "$TEST_DIR" -type f \( -name "*.vcf" -o -name "*.vcf.gz" \) | wc -l
 
 
 # -----------------------------
-# 3. TRAIN TRUE MULTI-LEVEL HIERARCHY MODEL
+# 4. TRAIN MULTI-LEVEL HIERARCHY MODEL
 # -----------------------------
 
-echo
-echo "============================================================"
-echo "2. Training true multi-level hierarchy model"
-echo "============================================================"
+section "2. Training hierarchy model"
 
 python -m network_parser.cli train-two-level \
   --genomic "$TRAIN_DIR" \
@@ -135,13 +216,10 @@ python -m network_parser.cli train-two-level \
 
 
 # -----------------------------
-# 4. RESOLVE REGISTRY PATH
+# 5. RESOLVE REGISTRY PATH
 # -----------------------------
 
-echo
-echo "============================================================"
-echo "3. Resolving registry"
-echo "============================================================"
+section "3. Resolving registry"
 
 REGISTRY=""
 
@@ -150,9 +228,8 @@ if [[ -f "$RESULTS/hierarchical_model_registry.json" ]]; then
 elif [[ -f "$RESULTS/two_level_model_registry.json" ]]; then
   REGISTRY="$RESULTS/two_level_model_registry.json"
 else
-  echo "Could not find hierarchical_model_registry.json or two_level_model_registry.json under:"
-  echo "$RESULTS"
-  find "$RESULTS" -maxdepth 3 -type f -name "*registry*.json" -print
+  echo "Could not find a model registry under: $RESULTS" >&2
+  find "$RESULTS" -maxdepth 4 -type f -name "*registry*.json" -print >&2
   exit 1
 fi
 
@@ -160,13 +237,10 @@ echo "Using registry: $REGISTRY"
 
 
 # -----------------------------
-# 5. BUILD PORTABLE BUNDLE
+# 6. BUILD PORTABLE BUNDLE
 # -----------------------------
 
-echo
-echo "============================================================"
-echo "4. Building binary model bundle"
-echo "============================================================"
+section "4. Building binary model bundle"
 
 BUNDLE="$RESULTS/networkparser_model_bundle.npb"
 
@@ -188,13 +262,10 @@ PY
 
 
 # -----------------------------
-# 6. QUERY HELD-OUT TEST SET
+# 7. QUERY HELD-OUT TEST SET
 # -----------------------------
 
-echo
-echo "============================================================"
-echo "5. Querying held-out test set"
-echo "============================================================"
+section "5. Querying held-out test set"
 
 python -m network_parser.cli query \
   --genomic "$TEST_DIR" \
@@ -212,13 +283,12 @@ find "$QUERY_OUT" -maxdepth 2 -type f | sort
 
 
 # -----------------------------
-# 7. HELD-OUT MODEL EVALUATION
+# 8. HELD-OUT MODEL EVALUATION
 # -----------------------------
 
-echo
-echo "============================================================"
-echo "6. Evaluating held-out predictions"
-echo "============================================================"
+section "6. Evaluating held-out predictions"
+
+HIERARCHY_LABELS_CSV="$(IFS=,; echo "${HIERARCHY_LABELS[*]}")"
 
 python - <<PY
 from pathlib import Path
@@ -234,6 +304,7 @@ QUERY_OUT = Path("$QUERY_OUT")
 EVAL_OUT = Path("$EVAL_OUT")
 TERMINAL_LABEL = "$TERMINAL_LABEL"
 INTERMEDIATE_LABEL = "$INTERMEDIATE_LABEL"
+HIERARCHY_LABELS = "$HIERARCHY_LABELS_CSV".split(",")
 
 pred_path = QUERY_OUT / "query_predictions.csv"
 if not pred_path.exists():
@@ -248,12 +319,16 @@ if "sample_id" not in pred.columns:
 # -----------------------------
 if "predicted_terminal_label" in pred.columns:
     y_pred_terminal = pred.set_index("sample_id")["predicted_terminal_label"]
+elif "predicted_hierarchy_path" in pred.columns:
+    parts = pred["predicted_hierarchy_path"].astype(str).str.split(" > ")
+    y_pred_terminal = parts.str[-1]
+    y_pred_terminal.index = pred["sample_id"].astype(str)
 elif "predicted_level2_resistance_profile" in pred.columns:
     y_pred_terminal = pred.set_index("sample_id")["predicted_level2_resistance_profile"]
 else:
     raise ValueError(
-        "Could not find terminal prediction column. Expected predicted_terminal_label "
-        "or predicted_level2_resistance_profile."
+        "Could not find terminal prediction column. Expected predicted_terminal_label, "
+        "predicted_hierarchy_path, or predicted_level2_resistance_profile."
     )
 
 y_true_terminal = load_labels_from_metadata(
@@ -274,18 +349,22 @@ print("Terminal evaluation:", terminal_summary.get("artifacts", {}).get("summary
 # -----------------------------
 # Intermediate hierarchy evaluation
 # -----------------------------
+y_pred_intermediate = None
+
 if "predicted_hierarchy_path" in pred.columns:
-    # Expected path: Country > Lineage > Pheno
-    hierarchy_parts = pred["predicted_hierarchy_path"].astype(str).str.split(" > ")
-    y_pred_intermediate = hierarchy_parts.str[1]
+    try:
+        label_index = HIERARCHY_LABELS.index(INTERMEDIATE_LABEL)
+    except ValueError:
+        label_index = 1
+    parts = pred["predicted_hierarchy_path"].astype(str).str.split(" > ")
+    y_pred_intermediate = parts.str[label_index]
     y_pred_intermediate.index = pred["sample_id"].astype(str)
 elif "predicted_level1_identity" in pred.columns:
     y_pred_intermediate = pred.set_index("sample_id")["predicted_level1_identity"]
-else:
-    print("Skipping intermediate evaluation: no intermediate prediction column found.")
-    y_pred_intermediate = None
 
-if y_pred_intermediate is not None:
+if y_pred_intermediate is None:
+    print("Skipping intermediate evaluation: no intermediate prediction column found.")
+else:
     y_true_intermediate = load_labels_from_metadata(
         meta_path=META,
         label_column=INTERMEDIATE_LABEL,
@@ -308,15 +387,12 @@ find "$EVAL_OUT" -maxdepth 3 -type f | sort
 
 
 # -----------------------------
-# 8. LEAKAGE-AWARE REPEATED CV ON TRAINING SET
+# 9. LEAKAGE-AWARE REPEATED CV ON TRAINING SET
 # -----------------------------
 # CV is intentionally run on TRAIN_DIR only.
-# TEST_DIR remains a final held-out evaluation set.
+# TEST_DIR remains the final held-out evaluation set.
 
-echo
-echo "============================================================"
-echo "7. Running leakage-aware repeated CV on training subset"
-echo "============================================================"
+section "7. Running leakage-aware repeated CV on training subset"
 
 CV_LABELS_CSV="$(IFS=,; echo "${CV_LABELS[*]}")"
 
@@ -343,7 +419,6 @@ config.feature_panel_sizes = [100, 200, 500, 1000]
 config.n_jobs = int("$N_JOBS")
 config.random_state = int("$SEED")
 
-# Keep selector active unless you explicitly want a forced algorithm.
 if hasattr(config, "run_model_selector"):
     config.run_model_selector = True
 
@@ -398,13 +473,10 @@ find "$CV_OUT" -maxdepth 3 -type f | sort
 
 
 # -----------------------------
-# 9. QUICK METRIC VIEW
+# 10. QUICK METRIC VIEW
 # -----------------------------
 
-echo
-echo "============================================================"
-echo "8. Quick metric view"
-echo "============================================================"
+section "8. Quick metric view"
 
 echo
 echo "Held-out terminal evaluation summary:"
@@ -432,9 +504,4 @@ else
   echo "Missing combined CV summary."
 fi
 
-echo
-echo "============================================================"
-echo "Done."
-echo "============================================================"
-
-
+section "Done."
