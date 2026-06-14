@@ -630,92 +630,6 @@ def json_default(obj: Any) -> Any:
     return str(obj)
 
 
-def build_two_level_model_bundle_artifact(
-    *,
-    registry_path: Path,
-    output_dir: Path,
-    config: NetworkParserConfig,
-) -> Dict[str, Any]:
-    """Build the portable .npb model bundle as a standard training artifact.
-
-    The registry remains the transparent JSON provenance file. The bundle is the
-    deployment/query artifact that embeds the trained model payloads plus
-    selected-feature manifests where available.
-    """
-    if not bool(getattr(config, "build_model_bundle", True)):
-        summary = {
-            "status": "skipped",
-            "reason": "build_model_bundle=False",
-            "registry_file": str(registry_path),
-        }
-        write_json(summary, output_dir / "model_bundle_summary.json")
-        return summary
-
-    filename = str(getattr(config, "model_bundle_filename", "networkparser_model_bundle.npb")).strip()
-    if not filename.endswith(".npb"):
-        filename = f"{filename}.npb"
-    output_path = Path(filename)
-    if not output_path.is_absolute():
-        output_path = output_dir / output_path
-
-    try:
-        try:
-            from network_parser.model_bundle import build_bundle_from_registry
-        except Exception:  # pragma: no cover - supports direct source-tree execution
-            from model_bundle import build_bundle_from_registry  # type: ignore
-
-        bundle = build_bundle_from_registry(
-            registry_path=registry_path,
-            output_path=output_path,
-            include_model_payloads=bool(getattr(config, "model_bundle_include_model_payloads", True)),
-            include_feature_manifests=bool(getattr(config, "model_bundle_include_feature_manifests", True)),
-            include_ranked_feature_tables=bool(getattr(config, "model_bundle_include_ranked_feature_tables", True)),
-        )
-
-        feature_space = getattr(bundle, "feature_space", {}) or {}
-        summary = {
-            "status": "success",
-            "bundle_file": str(output_path),
-            "registry_file": str(registry_path),
-            "schema_version": getattr(bundle, "schema_version", "unknown"),
-            "created_at": getattr(bundle, "created_at", None),
-            "embedded_models": int(feature_space.get("n_embedded_models", 0)),
-            "embedded_feature_manifests": int(feature_space.get("n_embedded_manifests", 0)),
-            "embedded_ranked_feature_tables": int(feature_space.get("n_embedded_ranked_tables", 0)),
-            "required_feature_count": int(feature_space.get("required_feature_count", 0)),
-            "summary_file": str(output_dir / "model_bundle_summary.json"),
-        }
-        write_json(summary, output_dir / "model_bundle_summary.json")
-        log_artifact(logger, "two-level model bundle", output_path)
-        logger.info(
-            "Two-level model bundle complete | models=%d | manifests=%d | ranked_tables=%d | path=%s",
-            summary["embedded_models"],
-            summary["embedded_feature_manifests"],
-            summary["embedded_ranked_feature_tables"],
-            str(output_path),
-        )
-        return summary
-
-    except Exception as exc:
-        summary = {
-            "status": "failed",
-            "bundle_file": str(output_path),
-            "registry_file": str(registry_path),
-            "error": str(exc),
-            "summary_file": str(output_dir / "model_bundle_summary.json"),
-        }
-        write_json(summary, output_dir / "model_bundle_summary.json")
-        logger.warning(
-            "Two-level model bundle was not created | path=%s | error=%s",
-            str(output_path),
-            str(exc),
-        )
-        logger.debug("Two-level model bundle failure traceback", exc_info=True)
-        if bool(getattr(config, "model_bundle_fail_on_error", False)):
-            raise RuntimeError(f"Failed to build NetworkParser model bundle: {output_path}") from exc
-        return summary
-
-
 def load_config(config_path: Optional[str]) -> NetworkParserConfig:
     config = NetworkParserConfig()
     if config_path is None:
@@ -807,6 +721,69 @@ def align_two_labels(
         int(y2_final.nunique(dropna=True)),
     )
     return X_final, y1_final, y2_final
+
+def safe_hierarchy_token(value: Any, max_len: int = 80) -> str:
+    """Return a filesystem-safe token for hierarchy node directories."""
+    raw = str(value).strip() or "node"
+    cleaned = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in raw)
+    cleaned = cleaned.strip("_") or "node"
+    if len(cleaned) <= max_len:
+        return cleaned
+    return cleaned[:max_len].rstrip("_") or "node"
+
+
+def align_hierarchy_labels(
+    X: pd.DataFrame,
+    meta: pd.DataFrame,
+    hierarchy_labels: List[str],
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Align a feature matrix to samples carrying every requested hierarchy label."""
+    labels = [str(label).strip() for label in hierarchy_labels if str(label).strip()]
+    if len(labels) < 1:
+        raise ValueError("At least one hierarchy label column is required.")
+
+    missing = [label for label in labels if label not in meta.columns]
+    if missing:
+        raise ValueError(
+            "Hierarchy label column(s) not found in metadata: " + ", ".join(missing)
+        )
+
+    X_local = X.copy()
+    X_local.index = X_local.index.astype(str).map(normalize_sample_id)
+
+    label_series: Dict[str, pd.Series] = {}
+    common = pd.Index(X_local.index)
+    for label in labels:
+        y = normalize_labels(meta[label], drop_missing=True, lowercase=False)
+        y.index = y.index.astype(str).map(normalize_sample_id)
+        label_series[label] = y
+        common = common.intersection(y.index)
+
+    if common.empty:
+        raise ValueError(
+            "No samples have all requested hierarchy labels after metadata alignment."
+        )
+
+    X_aligned = X_local.loc[common].copy()
+    labels_df = pd.DataFrame(index=common)
+    for label, y in label_series.items():
+        labels_df[label] = y.loc[common].astype(str).values
+
+    logger.info(
+        "Aligned multi-level hierarchy supervision | samples=%d | features=%d | levels=%d",
+        int(X_aligned.shape[0]),
+        int(X_aligned.shape[1]),
+        int(len(labels)),
+    )
+    for idx, label in enumerate(labels, start=1):
+        logger.info(
+            "Hierarchy level %d aligned | label_column=%s | classes=%d",
+            int(idx),
+            str(label),
+            int(labels_df[label].nunique(dropna=True)),
+        )
+
+    return X_aligned, labels_df
 
 
 def build_global_level2_training_labels(
@@ -1080,11 +1057,11 @@ def label_distribution_diagnostics(
     labels: pd.Series,
     requested_cv_splits: int = 5,
 ) -> Dict[str, Any]:
-    """Summarise label support for small-group Level-2 eligibility checks.
+    """Summarise label support for Level-2 eligibility checks.
 
-    Class names are intentionally omitted from the diagnostic payload. The goal
-    is to make small-group and stratified-CV failures interpretable without
-    cluttering logs with phenotype labels.
+    The public diagnostic payload intentionally reports count structure rather
+    than label names.  This keeps logs generic while making small-group and
+    stratified-CV failures interpretable.
     """
     y = pd.Series(labels).astype(str).str.strip()
     y = y.replace({"": pd.NA, "-": pd.NA, "NA": pd.NA, "N/A": pd.NA, "None": pd.NA, "nan": pd.NA, "NaN": pd.NA})
@@ -1096,6 +1073,7 @@ def label_distribution_diagnostics(
     max_count = int(max(values)) if values else 0
     requested_cv_splits = max(2, int(requested_cv_splits))
     feasible_cv_splits = int(min(requested_cv_splits, min_count)) if min_count > 0 else 0
+    min_samples_for_binary_split = int(counts.shape[0] * 2) if counts.shape[0] >= 2 else 0
 
     return {
         "n_samples": int(y.shape[0]),
@@ -1106,8 +1084,36 @@ def label_distribution_diagnostics(
         "class_count_values_sorted": sorted(values),
         "requested_selector_cv_splits": requested_cv_splits,
         "feasible_selector_cv_splits": feasible_cv_splits,
+        "min_samples_for_twofold_per_label": min_samples_for_binary_split,
         "stratified_cv_feasible": bool(counts.shape[0] >= 2 and feasible_cv_splits >= 2),
     }
+
+
+def adaptive_level2_min_samples(
+    label_diagnostics: Dict[str, Any],
+    min_samples_per_label: int = 2,
+) -> int:
+    """Return the minimum group size implied by the Level-2 label structure.
+
+    Group-specific Level-2 training should not be controlled by a fixed cohort
+    size.  The minimum required samples scale with the number of Level-2 labels
+    that must be separated.  A two-fold stratified probe needs at least two
+    samples per label, so the adaptive default is:
+
+        required samples = n_level2_labels * 2
+
+    This remains a pre-model eligibility check; statistical filtering still runs
+    only after the label structure is trainable.
+    """
+    try:
+        n_classes = int(label_diagnostics.get("n_classes", 0))
+    except Exception:
+        n_classes = 0
+
+    min_samples_per_label = max(2, int(min_samples_per_label))
+    if n_classes < 2:
+        return 0
+    return int(n_classes * min_samples_per_label)
 
 
 def apply_level2_class_support_filter(
@@ -1145,6 +1151,8 @@ def apply_level2_class_support_filter(
     before_diag = label_distribution_diagnostics(y0, requested_cv_splits=requested_cv_splits)
     counts = y0.value_counts(dropna=True)
 
+    class_support_table = {str(label): int(count) for label, count in counts.items()}
+
     summary: Dict[str, Any] = {
         "stage_name": str(stage_name),
         "enabled": bool(enabled),
@@ -1154,6 +1162,8 @@ def apply_level2_class_support_filter(
         "n_samples_removed": 0,
         "n_classes_removed": 0,
         "n_classes_retained": int(counts.shape[0]),
+        "class_support_table": class_support_table,
+        "adaptive_min_training_samples": adaptive_level2_min_samples(before_diag),
         "status": "not_applied",
         "reason": "disabled" if not enabled else "no_low_support_classes",
         "artifacts": {
@@ -1196,6 +1206,8 @@ def apply_level2_class_support_filter(
             "n_samples_removed": int(X0.shape[0] - X1.shape[0]),
             "n_classes_removed": int(drop_classes.shape[0]),
             "n_classes_retained": int(len(keep_classes)),
+            "class_support_table": {str(label): int(count) for label, count in y1.value_counts(dropna=True).items()},
+            "adaptive_min_training_samples": adaptive_level2_min_samples(after_diag),
         }
     )
 
@@ -1519,6 +1531,411 @@ class TwoLevelProtocol:
         self.config = config
         self.loader = DataLoader(config=config, n_jobs=getattr(config, "n_jobs", -1))
 
+    def train_hierarchy(
+        self,
+        genomic_path: str,
+        meta_path: str,
+        hierarchy_labels: List[str],
+        output_dir: str,
+        ref_fasta: Optional[str] = None,
+        algorithm: Optional[str] = None,
+        min_samples_per_node: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Train a true multi-level hierarchy from an ordered list of labels.
+
+        Each level is trained only within the parent branch defined by the
+        previous observed label path.  Nodes with only one child state are stored
+        as deterministic branches rather than forced through model training.
+        """
+        labels = [str(label).strip() for label in hierarchy_labels if str(label).strip()]
+        if len(labels) < 2:
+            raise ValueError("--hierarchy_labels requires at least two metadata columns.")
+
+        out = ensure_dir(Path(output_dir))
+        matrices_dir = ensure_dir(out / "matrices")
+        hierarchy_dir = ensure_dir(out / "hierarchy_models")
+
+        log_pipeline_header(
+            logger,
+            "NetworkParser multi-level hierarchy training started",
+            central_filter=getattr(self.config, "central_feature_filter_method", "auto"),
+            feature_panel_check=bool(getattr(self.config, "run_feature_panel_separability_check", True)),
+            n_jobs=getattr(self.config, "n_jobs", "NA"),
+        )
+
+        log_stage_start(logger, 1, "load and preprocess genomic matrix")
+        X_raw_unfiltered = self.loader.load_genomic_matrix(
+            file_path=genomic_path,
+            output_dir=str(matrices_dir),
+            ref_fasta=ref_fasta,
+        )
+        X_raw = load_artifact_filtered_binary_matrix(
+            artifact_root=matrices_dir,
+            fallback_matrix=X_raw_unfiltered,
+        )
+        log_stage_complete(
+            logger,
+            1,
+            "load and preprocess genomic matrix",
+            samples=int(X_raw.shape[0]),
+            features=int(X_raw.shape[1]),
+        )
+
+        feature_manifest_path = find_feature_manifest(matrices_dir)
+        feature_manifest_df = load_feature_manifest(feature_manifest_path)
+        if feature_manifest_path is None:
+            logger.warning(
+                "No feature manifest was found under %s. Raw-sequence query mode "
+                "will be unavailable for this registry unless a manifest is supplied.",
+                str(matrices_dir),
+            )
+        else:
+            logger.info("Using feature manifest for query annotation: %s", str(feature_manifest_path))
+
+        log_stage_start(logger, 2, "load metadata and align hierarchy labels")
+        meta = self.loader.load_metadata(meta_path, output_dir=str(out))
+        X, labels_df = align_hierarchy_labels(
+            X=X_raw,
+            meta=meta,
+            hierarchy_labels=labels,
+        )
+        log_flow_step(
+            logger,
+            step="Multi-level hierarchy alignment checkpoint",
+            happened="Aligned the feature matrix to samples with every requested hierarchy label.",
+            reason="Recursive hierarchy training requires each retained sample to carry all supervised labels used along the path.",
+            before_samples=int(X_raw.shape[0]),
+            before_features=int(X_raw.shape[1]),
+            after_samples=int(X.shape[0]),
+            after_features=int(X.shape[1]),
+            threshold="sample_id present in matrix and all requested hierarchy labels",
+            status="complete",
+        )
+        log_stage_complete(
+            logger,
+            2,
+            "load metadata and align hierarchy labels",
+            samples=int(X.shape[0]),
+            features=int(X.shape[1]),
+            levels=int(len(labels)),
+        )
+
+        X.to_csv(out / "aligned_hierarchy_matrix.csv")
+        aligned_labels_df = labels_df.copy()
+        aligned_labels_df.insert(0, "sample_id", aligned_labels_df.index.astype(str))
+        aligned_labels_df.to_csv(out / "aligned_hierarchy_labels.csv", index=False)
+
+        explicit_min = (
+            int(min_samples_per_node)
+            if min_samples_per_node is not None
+            else getattr(self.config, "min_level2_samples_per_group", None)
+        )
+        explicit_min = int(explicit_min) if explicit_min is not None else None
+
+        log_stage_start(logger, 3, "recursive hierarchy model training")
+        root_node = self._train_hierarchy_node(
+            X=X,
+            labels_df=labels_df,
+            hierarchy_labels=labels,
+            level_index=0,
+            sample_index=list(X.index),
+            node_dir=hierarchy_dir / "level_1_root",
+            feature_manifest_df=feature_manifest_df,
+            algorithm=algorithm,
+            explicit_min_samples=explicit_min,
+            path=[] ,
+        )
+        log_stage_complete(logger, 3, "recursive hierarchy model training")
+
+        registry = {
+            "protocol": "multi_level_hierarchy_protocol",
+            "compatible_with": "NetworkParser hierarchical training registry",
+            "hierarchy": {
+                "label_columns": labels,
+                "n_levels": int(len(labels)),
+                "root": root_node,
+            },
+            "training_matrix": {
+                "aligned_matrix_csv": str(out / "aligned_hierarchy_matrix.csv"),
+                "aligned_labels_csv": str(out / "aligned_hierarchy_labels.csv"),
+                "feature_manifest_file": str(feature_manifest_path) if feature_manifest_path else None,
+            },
+            "publication_summary": {
+                "cohort_statistics": {
+                    "aligned_samples": int(X.shape[0]),
+                    "artifact_filtered_features": int(X.shape[1]),
+                    "hierarchy_levels": int(len(labels)),
+                    "classes_per_level": {
+                        str(label): int(labels_df[label].nunique(dropna=True))
+                        for label in labels
+                    },
+                },
+                "model_tree": self._summarise_hierarchy_node(root_node),
+            },
+            "config": asdict(self.config) if is_dataclass(self.config) else vars(self.config),
+        }
+
+        registry_path = out / "hierarchical_model_registry.json"
+        write_json(registry, registry_path)
+        logger.info("Multi-level hierarchy training complete: %s", registry_path)
+        return registry
+
+    def _train_hierarchy_node(
+        self,
+        *,
+        X: pd.DataFrame,
+        labels_df: pd.DataFrame,
+        hierarchy_labels: List[str],
+        level_index: int,
+        sample_index: List[Any],
+        node_dir: Path,
+        feature_manifest_df: Optional[pd.DataFrame],
+        algorithm: Optional[str],
+        explicit_min_samples: Optional[int],
+        path: List[Dict[str, str]],
+    ) -> Dict[str, Any]:
+        """Train one hierarchy node and recursively train child nodes."""
+        node_dir = ensure_dir(Path(node_dir))
+        label_column = hierarchy_labels[level_index]
+        sample_index = [idx for idx in sample_index if idx in X.index]
+
+        y_node = labels_df.loc[sample_index, label_column].astype(str).str.strip()
+        y_node = y_node.replace({"": pd.NA, "-": pd.NA, "NA": pd.NA, "N/A": pd.NA, "None": pd.NA, "nan": pd.NA, "NaN": pd.NA}).dropna()
+        common = X.index.intersection(y_node.index)
+        X_node = X.loc[common].copy()
+        y_node = y_node.loc[common].astype(str).copy()
+
+        level_number = int(level_index + 1)
+        stage_token = f"hierarchy_level_{level_number}__{safe_hierarchy_token(label_column, 40)}"
+        if path:
+            stage_token = stage_token + "__" + safe_hierarchy_token("__".join(item["value"] for item in path), 80)
+
+        raw_diag = label_distribution_diagnostics(y_node, requested_cv_splits=5)
+        node_payload: Dict[str, Any] = {
+            "level_index": int(level_index),
+            "level_number": level_number,
+            "label_column": str(label_column),
+            "path": list(path),
+            "n_samples": int(X_node.shape[0]),
+            "n_features_available": int(X_node.shape[1]),
+            "label_diagnostics": raw_diag,
+            "children": {},
+        }
+
+        if X_node.empty or raw_diag["n_classes"] == 0:
+            node_payload.update({"status": "skipped", "reason": "no_aligned_samples_or_labels"})
+            write_json(node_payload, node_dir / "node_summary.json")
+            return node_payload
+
+        # A single observed child label is a deterministic branch, not a failed model.
+        if raw_diag["n_classes"] == 1:
+            constant_label = str(y_node.iloc[0])
+            node_payload.update(
+                {
+                    "status": "constant",
+                    "reason": "single_child_label_in_parent_branch",
+                    "constant_label": constant_label,
+                    "features": [],
+                    "model_file": None,
+                    "feature_manifest": None,
+                }
+            )
+            if level_index + 1 < len(hierarchy_labels):
+                child_path = list(path) + [
+                    {"level_number": str(level_number), "label_column": str(label_column), "value": constant_label}
+                ]
+                child_dir = node_dir / "children" / safe_hierarchy_token(constant_label)
+                node_payload["children"][constant_label] = self._train_hierarchy_node(
+                    X=X,
+                    labels_df=labels_df,
+                    hierarchy_labels=hierarchy_labels,
+                    level_index=level_index + 1,
+                    sample_index=list(y_node.index),
+                    node_dir=child_dir,
+                    feature_manifest_df=feature_manifest_df,
+                    algorithm=algorithm,
+                    explicit_min_samples=explicit_min_samples,
+                    path=child_path,
+                )
+            write_json(node_payload, node_dir / "node_summary.json")
+            return node_payload
+
+        X_train = X_node
+        y_train = y_node
+        support_summary: Dict[str, Any] = {"status": "not_applied", "reason": "root_or_disabled"}
+        if level_index > 0:
+            X_train, y_train, support_summary = apply_level2_class_support_filter(
+                X=X_node,
+                y=y_node,
+                output_dir=node_dir,
+                config=self.config,
+                stage_name=stage_token,
+                requested_cv_splits=5,
+            )
+
+        label_diag = label_distribution_diagnostics(y_train, requested_cv_splits=5)
+        adaptive_min = adaptive_level2_min_samples(label_diag)
+
+        skip_reasons: List[str] = []
+        if label_diag["n_classes"] < 2:
+            skip_reasons.append("single_class_after_support_filter")
+        elif label_diag["min_class_count"] < 2:
+            skip_reasons.append("insufficient_per_label_support_for_stratified_cv")
+        elif X_train.shape[0] < adaptive_min:
+            skip_reasons.append("insufficient_samples_for_hierarchy_label_structure")
+        if explicit_min_samples is not None and X_train.shape[0] < explicit_min_samples:
+            skip_reasons.append("below_user_requested_absolute_node_minimum")
+
+        node_payload.update(
+            {
+                "n_training_samples": int(X_train.shape[0]),
+                "training_label_diagnostics": label_diag,
+                "class_support_filter": support_summary,
+                "adaptive_min_training_samples": int(adaptive_min),
+                "explicit_absolute_min_samples": explicit_min_samples,
+            }
+        )
+
+        if skip_reasons:
+            counts = y_train.value_counts(dropna=True)
+            support_table = pd.DataFrame(
+                {
+                    "label_state": counts.index.astype(str),
+                    "sample_count": counts.astype(int).values,
+                    "meets_twofold_cv_minimum": [int(v) >= 2 for v in counts.astype(int).values],
+                }
+            )
+            support_path = node_dir / "hierarchy_label_support_diagnostics.tsv"
+            support_table.to_csv(support_path, sep="\t", index=False)
+            node_payload.update(
+                {
+                    "status": "skipped",
+                    "reason": "+".join(skip_reasons),
+                    "features": [],
+                    "model_file": None,
+                    "feature_manifest": None,
+                    "label_support_diagnostics_file": str(support_path),
+                }
+            )
+            write_json(node_payload, node_dir / "node_summary.json")
+            return node_payload
+
+        filter_result: Optional[Dict[str, Any]] = None
+        X_filtered: Optional[pd.DataFrame] = None
+        try:
+            filter_result = run_configured_feature_filter(
+                X=X_train,
+                y=y_train,
+                output_base_dir=node_dir,
+                config=self.config,
+                stage_name=stage_token,
+            )
+            filter_result = run_feature_panel_check_after_filter(
+                filter_result=filter_result,
+                y=y_train,
+                output_base_dir=node_dir,
+                config=self.config,
+                stage_name=f"{stage_token}__model_matrix",
+            )
+            X_filtered = filter_result["filtered_matrix"]
+            manifest_summary = write_selected_feature_manifest(
+                features=list(X_filtered.columns),
+                source_manifest=feature_manifest_df,
+                output_path=node_dir / "selected_feature_manifest.tsv",
+            )
+            model_summary = train_model_safely(
+                X=X_filtered,
+                y=y_train.loc[X_filtered.index],
+                output_dir=node_dir / "model",
+                config=self.config,
+                algorithm=algorithm,
+                model_name=f"hierarchy_level_{level_number}_model",
+            )
+        except Exception as exc:
+            failure_reason = classify_ml_failure(exc)
+            matrix_for_diag = X_filtered if isinstance(X_filtered, pd.DataFrame) else X_train
+            labels_for_diag = y_train.loc[matrix_for_diag.index] if isinstance(matrix_for_diag, pd.DataFrame) else y_train
+            failure_diag = label_distribution_diagnostics(labels_for_diag, requested_cv_splits=5)
+            failure_diag.update(
+                {
+                    "failure_reason": failure_reason,
+                    "error": str(exc),
+                    "n_features_at_failure": int(matrix_for_diag.shape[1]) if isinstance(matrix_for_diag, pd.DataFrame) else None,
+                    "stage": "hierarchy_node_training",
+                }
+            )
+            node_payload.update(
+                {
+                    "status": "skipped",
+                    "reason": failure_reason,
+                    "error": str(exc),
+                    "training_failure_diagnostics": failure_diag,
+                    "filter": filter_result.get("summary", {}) if isinstance(filter_result, dict) else {},
+                    "feature_panel_separability": filter_result.get("feature_panel_separability", {}) if isinstance(filter_result, dict) else {},
+                    "features": [],
+                    "model_file": None,
+                    "feature_manifest": None,
+                }
+            )
+            write_json(node_payload, node_dir / "node_summary.json")
+            return node_payload
+
+        node_payload.update(
+            {
+                "status": "success",
+                "filter": filter_result["summary"],
+                "feature_panel_separability": filter_result.get("feature_panel_separability", {}),
+                "model": model_summary,
+                "features": list(X_filtered.columns),
+                "model_file": get_model_file(model_summary),
+                "feature_manifest": manifest_summary,
+            }
+        )
+
+        if level_index + 1 < len(hierarchy_labels):
+            for child_value in sorted([str(v) for v in y_train.dropna().unique()]):
+                child_samples = list(y_train[y_train.astype(str) == child_value].index)
+                child_path = list(path) + [
+                    {"level_number": str(level_number), "label_column": str(label_column), "value": child_value}
+                ]
+                child_dir = node_dir / "children" / safe_hierarchy_token(child_value)
+                node_payload["children"][child_value] = self._train_hierarchy_node(
+                    X=X,
+                    labels_df=labels_df,
+                    hierarchy_labels=hierarchy_labels,
+                    level_index=level_index + 1,
+                    sample_index=child_samples,
+                    node_dir=child_dir,
+                    feature_manifest_df=feature_manifest_df,
+                    algorithm=algorithm,
+                    explicit_min_samples=explicit_min_samples,
+                    path=child_path,
+                )
+
+        write_json(node_payload, node_dir / "node_summary.json")
+        return node_payload
+
+    def _summarise_hierarchy_node(self, node: Dict[str, Any]) -> Dict[str, Any]:
+        """Return a compact node summary for reports without duplicating model payloads."""
+        children = node.get("children", {}) if isinstance(node, dict) else {}
+        return {
+            "level_number": node.get("level_number"),
+            "label_column": node.get("label_column"),
+            "status": node.get("status"),
+            "reason": node.get("reason"),
+            "n_samples": node.get("n_samples"),
+            "n_training_samples": node.get("n_training_samples"),
+            "n_classes": (node.get("training_label_diagnostics") or node.get("label_diagnostics") or {}).get("n_classes"),
+            "retained_features": int(len(node.get("features", []))) if isinstance(node.get("features", []), list) else 0,
+            "model_file": node.get("model_file"),
+            "constant_branch": node.get("constant_label") is not None,
+            "children": {
+                str(key): self._summarise_hierarchy_node(value)
+                for key, value in children.items()
+                if isinstance(value, dict)
+            },
+        }
+
     def train(
         self,
         genomic_path: str,
@@ -1614,10 +2031,15 @@ class TwoLevelProtocol:
             config=self.config,
         )
 
-        min_group_n = (
+        explicit_group_min_n = (
             int(min_level2_samples_per_group)
             if min_level2_samples_per_group is not None
-            else int(getattr(self.config, "min_group_size", 2))
+            else getattr(self.config, "min_level2_samples_per_group", None)
+        )
+        explicit_group_min_n = (
+            int(explicit_group_min_n)
+            if explicit_group_min_n is not None
+            else None
         )
 
         X.to_csv(out / "aligned_two_level_matrix.csv")
@@ -2006,11 +2428,15 @@ class TwoLevelProtocol:
                 requested_cv_splits=5,
             )
             label_diag = label_distribution_diagnostics(y2_group_train, requested_cv_splits=5)
+            adaptive_min_group_n = adaptive_level2_min_samples(label_diag)
             group_summary: Dict[str, Any] = {
                 "level1_group": str(group_value),
                 "n_samples": int(X_group.shape[0]),
                 "n_training_samples": int(X_group_train.shape[0]),
                 "n_level2_classes": int(label_diag["n_classes"]),
+                "adaptive_min_training_samples": int(adaptive_min_group_n),
+                "adaptive_min_rule": "n_level2_classes * 2_samples_per_label",
+                "explicit_absolute_min_samples": explicit_group_min_n,
                 "level2_label_diagnostics_before_support_filter": raw_label_diag,
                 "level2_label_diagnostics": label_diag,
                 "level2_class_support_filter": group_class_support,
@@ -2020,34 +2446,39 @@ class TwoLevelProtocol:
             fallback_available = fallback_source != "unavailable"
 
             skip_reasons: List[str] = []
-            if X_group_train.shape[0] < min_group_n:
-                skip_reasons.append("insufficient_total_group_samples")
             if label_diag["n_classes"] < 2:
                 skip_reasons.append("single_level2_class_within_group")
-            if label_diag["min_class_count"] < 2:
-                skip_reasons.append("insufficient_min_level2_class_count_for_stratified_cv")
+            elif label_diag["min_class_count"] < 2:
+                skip_reasons.append("insufficient_per_label_support_for_stratified_cv")
+            elif X_group_train.shape[0] < adaptive_min_group_n:
+                skip_reasons.append("insufficient_samples_for_level2_label_structure")
 
-                        # === SKIP DIAGNOSTICS ===
+            if explicit_group_min_n is not None and X_group_train.shape[0] < explicit_group_min_n:
+                skip_reasons.append("below_user_requested_absolute_group_minimum")
+
+            # === SKIP DIAGNOSTICS ===
             if skip_reasons:
-                # Always write a clear support table for reviewers
+                # Always write a clear support table for reviewers. The JSON
+                # summary stays generic, while this TSV gives auditable detail.
                 support_table = group_class_support.get("class_support_table", {})
                 skip_table = pd.DataFrame({
                     "level2_class": list(support_table.keys()),
                     "sample_count": list(support_table.values()),
-                    "kept_for_training": [v >= self.config.level2_min_class_count for v in support_table.values()]
+                    "meets_twofold_cv_minimum": [int(v) >= 2 for v in support_table.values()],
                 })
-                
+
                 skip_table_path = group_dir / "level2_class_support_diagnostics.tsv"
                 skip_table.to_csv(skip_table_path, sep="\t", index=False)
 
                 logger.info(
                     "Group %s: skipping group-specific Level-2 model | reason=%s | "
-                    "training_samples=%d | raw_samples=%d | min_class_count=%d | "
-                    "feasible_cv_splits=%d | wrote_diagnostics=%s",
+                    "training_samples=%d | adaptive_min_samples=%d | labels=%d | "
+                    "min_class_count=%d | feasible_cv_splits=%d | wrote_diagnostics=%s",
                     str(group_value),
                     "+".join(skip_reasons),
                     int(X_group_train.shape[0]),
-                    int(X_group.shape[0]),
+                    int(adaptive_min_group_n),
+                    int(label_diag["n_classes"]),
                     int(label_diag["min_class_count"]),
                     int(label_diag["feasible_selector_cv_splits"]),
                     str(skip_table_path),
@@ -2200,20 +2631,7 @@ class TwoLevelProtocol:
 
         registry_path = out / "two_level_model_registry.json"
         write_json(registry, registry_path)
-
-        model_bundle_summary = build_two_level_model_bundle_artifact(
-            registry_path=registry_path,
-            output_dir=out,
-            config=self.config,
-        )
-        registry["model_bundle"] = model_bundle_summary
-        write_json(registry, registry_path)
-
-        logger.info(
-            "Two-level training complete | registry=%s | bundle_status=%s",
-            registry_path,
-            model_bundle_summary.get("status", "unknown"),
-        )
+        logger.info("Two-level training complete: %s", registry_path)
         return registry
 
     def predict(
@@ -2305,15 +2723,32 @@ def build_parser() -> argparse.ArgumentParser:
     train = sub.add_parser("train", help="Train the two-level protocol.")
     train.add_argument("--genomic", required=True, help="Genomic matrix file or VCF directory.")
     train.add_argument("--meta", required=True, help="Metadata CSV/TSV.")
-    train.add_argument("--level1_label", required=True, help="Metadata column for strain/lineage/group placement.")
-    train.add_argument("--level2_label", required=True, help="Metadata column for drug-resistance phenotype/profile.")
+    train.add_argument("--level1_label", default=None, help="Metadata column for first-level strain/lineage/group placement. Required unless --hierarchy_labels is used.")
+    train.add_argument("--level2_label", default=None, help="Metadata column for second-level phenotype/profile. Required unless --hierarchy_labels is used.")
+    train.add_argument(
+        "--hierarchy_labels",
+        nargs="+",
+        default=None,
+        help=(
+            "Ordered metadata columns for true recursive hierarchy training. "
+            "When provided, this supersedes --level1_label/--level2_label."
+        ),
+    )
     train.add_argument("--global_level2_label", default=None, help="Optional metadata column for the standard global Level-2 fallback, e.g. AMR_binary.")
     train.add_argument("--output_dir", required=True, help="Output directory.")
     train.add_argument("--config", default=None, help="Optional JSON config override file.")
     train.add_argument("--ref_fasta", default=None, help="Optional reference FASTA for VCF parsing context.")
     train.add_argument("--algorithm", default=None, help="Optional ML algorithm override passed to MLProtocolRunner.")
     train.add_argument("--no_global_level2", action="store_true", help="Disable the global level-2 fallback model.")
-    train.add_argument("--min_level2_samples_per_group", type=int, default=None, help="Minimum samples needed to train group-specific level-2 models.")
+    train.add_argument(
+        "--min_level2_samples_per_group",
+        type=int,
+        default=None,
+        help=(
+            "Optional absolute minimum samples for group-specific Level-2 models. "
+            "When unset, eligibility is adaptive and scales with the number of Level-2 labels."
+        ),
+    )
     train.add_argument("--level2_drop_low_support_classes", action="store_true", help="Exclude Level 2 classes below the configured sample-count threshold before Level 2 training.")
     train.add_argument("--level2_min_class_count", type=int, default=None, help="Minimum samples per Level 2 class when low-support class exclusion is enabled.")
     train.add_argument("--level2_train_binary_global_fallback", action="store_true", help="Train an additional resistant/susceptible global Level 2 fallback model across all lineages.")
@@ -2370,6 +2805,25 @@ def main(argv: Optional[List[str]] = None) -> int:
     protocol = TwoLevelProtocol(config=config)
 
     if args.command == "train":
+        hierarchy_labels = getattr(args, "hierarchy_labels", None)
+        if hierarchy_labels:
+            protocol.train_hierarchy(
+                genomic_path=args.genomic,
+                meta_path=args.meta,
+                hierarchy_labels=list(hierarchy_labels),
+                output_dir=args.output_dir,
+                ref_fasta=args.ref_fasta,
+                algorithm=args.algorithm,
+                min_samples_per_node=args.min_level2_samples_per_group,
+            )
+            return 0
+
+        if not args.level1_label or not args.level2_label:
+            raise ValueError(
+                "train requires either --hierarchy_labels with at least two columns "
+                "or both --level1_label and --level2_label."
+            )
+
         protocol.train(
             genomic_path=args.genomic,
             meta_path=args.meta,

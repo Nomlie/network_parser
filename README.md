@@ -1,27 +1,51 @@
 # NetworkParser
 
-**NetworkParser** is an interpretable genomic feature-discovery, model-selection, and query-inference framework for microbial variant data. It converts genomic matrices or VCF-derived variant spaces into clean sample × feature matrices, applies statistically defensible feature filtering, evaluates machine-learning suitability, conditionally triggers decision-tree interpretability, and exports query-ready model registries for strain placement and antimicrobial-resistance interpretation.
+**NetworkParser** is an interpretable framework for statistically defensible genomic feature discovery, hierarchical model training, and query-time inference from microbial variant data. It converts genomic matrices, VCF-derived variant spaces, FASTA assemblies, or FASTQ-derived query calls into aligned sample × genomic-feature matrices, applies pre-model feature filtering with multiple-testing control, evaluates compact feature panels, trains query-ready model registries, and preserves marker-level evidence for strain placement and antimicrobial-resistance interpretation.
 
-NetworkParser is designed for microbial genomics settings where prediction alone is not enough. The framework links supervised genomic classification to traceable marker evidence, AMR phenotype interpretation, confidence-aware rule extraction, and ML-ready / GNN-ready matrix outputs.
+NetworkParser is built for microbial genomics workflows where prediction must remain biologically traceable. The pipeline keeps discovery, validation, and inference separated: statistical filtering happens before model construction; decision-tree interpretation, bootstrap stability, confidence scoring, and path-based interaction mining happen after tree construction; query mode reuses the saved selected-feature space without rerunning training-time statistics. Outputs include ranked marker panels, selected-feature manifests, model bundles, readable query reports, interaction graphs, sample-feature networks, and ML-ready / GNN-ready matrices.
 
 ---
 
 ## Core Aim
 
-NetworkParser supports three related analysis modes:
+NetworkParser supports four related analysis concepts:
 
 1. **Single-label supervised discovery**  
-   Use one metadata label, such as a lineage, strain group, phenotype, AMR class, or outbreak cluster, to identify discriminating genomic features and optionally run interpretable decision-tree discovery.
+   Use one metadata label, such as strain group, lineage, phenotype, AMR class, or outbreak cluster, to identify discriminating genomic features and optionally run decision-tree interpretability.
 
-2. **Two-level diagnostic interpretation**  
-   First place a strain or sample into a supervised genomic group, then evaluate resistance-associated patterns using a second supervised phenotype or AMR-profile label.
+2. **Hierarchy (/ˈhʌɪ(ə)rɑːki/)-based diagnostic interpretation**  
+   Route a strain or sample through ordered supervised biological labels, from broad genomic placement toward phenotype or AMR-profile interpretation, with each trainable node preserving its own marker evidence.
 
-3. **Query-time inference from a new sample**  
-   Project a new sample onto the trained selected-feature space and use the saved model registry to predict strain/group placement and AMR phenotype or resistance profile. Query mode can use either a prebuilt genomic feature row/matrix or a raw FASTA-like DNA sequence when a query-ready feature manifest was saved during training.
+3. **Recursive multi-level hierarchy training**  
+   Train a true ordered hierarchy of supervised labels using `--hierarchy_labels`, for example demographic grouping → species/group placement → lineage/clade placement → phenotype interpretation. Each node can learn its own feature-filtered model where the data support it.
+
+4. **Query-time inference from a new sample**  
+   Project a new query sample onto the saved selected-feature space and use the trained registry or binary bundle to predict the most likely placement and phenotype/profile, together with supporting trained genomic markers.
 
 The long-term diagnostic question is:
 
 > Given this genomic evidence, where does the strain belong, what phenotype is predicted, and which trained genomic markers support the interpretation?
+
+---
+
+## Methodological Boundary
+
+The central methodological rule is:
+
+> **Statistical feature filtering happens before model screening and before tree construction. Bootstrap stability, confidence values, and interaction validation happen after tree construction.**
+
+This separation keeps the workflow statistically defensible:
+
+```text
+pre-model evidence        post-tree interpretation
+------------------        ------------------------
+χ² / Fisher / RF-FDR  →    decision paths
+FDR-BH correction     →    bootstrap stability
+feature retention     →    confidence values
+panel selection       →    path-based interactions
+```
+
+Query mode is inference-only. It does not rerun RF-FDR, chi-square/Fisher testing, permutation testing, FDR correction, model selection, decision-tree fitting, bootstrapping, or confidence-score computation.
 
 ---
 
@@ -34,11 +58,13 @@ Input genomic data + metadata
     ↓
 Data loading and preprocessing
     ↓
-Feature manifest construction
+Remove invariant features; treat missing values as baseline where configured
+    ↓
+Feature manifest construction when reference context is available
     ↓
 Sample / metadata alignment
     ↓
-Central feature filtering
+Central statistical feature filtering
     ↓
 Ranked feature-panel separability check
     ↓
@@ -46,63 +72,57 @@ ML protocol and model selector
     ↓
 Conditional decision-tree interpretability branch
     ↓
-Post-tree confidence scoring and interaction mining
+Post-tree bootstrap confidence and path-based interaction mining
     ↓
-Ranked markers, selected feature manifests, model registry, networks, and GNN-ready outputs
+Ranked marker lists, selected-feature manifests, model registry, binary bundle,
+interaction graph, sample-feature network, and GNN-ready matrices
 
 Query / inference mode
 ----------------------
 New sample
     ↓
-Matrix alignment OR raw-sequence selected-marker extraction
+Matrix / VCF / FASTA / FASTQ route
     ↓
-One-sample selected-feature matrix
+Trained selected-feature alignment
     ↓
-Saved Level 1 model
+Saved model registry or binary bundle
     ↓
-Saved Level 2 model
-    ↓
-Prediction report + marker evidence report
+Prediction report + marker evidence report + route audit
 ```
-
-The central methodological rule is:
-
-> **Statistical feature filtering happens before model screening and before tree construction. Bootstrap stability, confidence values, and interaction validation happen after tree construction.**
-
-This separation keeps the workflow statistically defensible and prevents post-model confidence outputs from being misused as the primary feature-selection layer.
 
 ---
 
 ## Key Features
 
-- Accepts genomic matrices and VCF-derived feature spaces.
-- Builds sample × genomic-feature binary matrices from per-sample VCF input where enabled.
+- Accepts genomic matrices, binary variant matrices, per-sample VCF / VCF.GZ directories, FASTA assemblies, and paired FASTQ query directories.
+- Builds sample × genomic-feature matrices from VCF-derived variant spaces.
 - Applies VCF-level quality control and cohort-level feature filtering.
 - Supports reference-baseline or cohort-mode baseline encoding.
-- Removes invariant and low-information markers before downstream analysis.
-- Carries feature annotation forward through a query-ready **feature manifest**.
-- Stores feature identity, reference/alternate allele, baseline allele, encoding rule, genomic context, and annotation where available.
-- Applies configurable central feature selection using RF-FDR, association-FDR, or chi-square permutation-FDR.
-- Supports classical chi-square/Fisher screening as faster association-based filtering routes.
-- Runs an optional ranked feature-panel separability check after FDR-based filtering and before ML training.
-- Evaluates compact top-N feature panels using supervised balanced accuracy and unsupervised clustering diagnostics.
-- Runs an ML protocol and model selector on the centrally filtered matrix.
-- Conditionally triggers the decision-tree interpretability branch.
-- Extracts interpretable decision paths, branch-level rules, and path-based feature interactions.
+- Removes invariant and low-information genomic features before downstream analysis.
+- Carries feature identity, allele states, baseline definition, genomic context, and annotation through a query-ready feature manifest.
+- Applies central feature selection using RF-FDR, chi-square/FDR, Fisher/FDR, or chi-square permutation-FDR.
+- Runs ranked feature-panel separability after central filtering and before model training.
+- Evaluates compact top-N feature panels with supervised balanced accuracy and unsupervised clustering diagnostics.
+- Runs an ML protocol and model selector on the filtered or selected-panel matrix.
+- Retains decision-tree interpretability as the rule-based explanation layer.
+- Extracts decision paths, branch-level rules, and path-based epistatic interaction candidates.
 - Computes post-tree confidence and bootstrap stability evidence.
-- Produces filtered matrices, ranked marker tables, model artifacts, interaction outputs, selected marker manifests, and query reports.
-- Supports raw FASTA-like query mode by mapping saved marker-context sequences back to a user-supplied DNA sequence and reconstructing the trained selected-feature matrix.
+- Trains hierarchy-based registries, from standard parent → child label routes to recursive multi-level structures.
+- Writes a portable binary `.npb` model bundle when enabled.
+- Supports query inference from a registry or binary bundle.
+- Produces terminal-friendly, machine-readable, and browser-readable query reports.
+- Exports ranked feature lists, selected feature manifests, interaction outputs, sample-feature networks, and GNN-ready adjacency matrices where enabled.
 
 ---
 
 ## Command-Line Entry Points
 
-NetworkParser exposes three main CLI workflows:
+NetworkParser exposes three CLI workflows:
 
 ```text
 python -m network_parser.cli run             # single-label workflow
-python -m network_parser.cli train-two-level # two-level training workflow
-python -m network_parser.cli query           # query/inference workflow
+python -m network_parser.cli train-two-level # hierarchy training; legacy command name retained
+python -m network_parser.cli query           # query / inference workflow
 ```
 
 For backward compatibility, calls without a subcommand are interpreted as the single-label `run` workflow.
@@ -118,7 +138,7 @@ git clone https://github.com/Nomlie/network_parser.git
 cd network_parser
 ```
 
-Create and activate the environment using the project environment file:
+Create and activate the environment:
 
 ```bash
 conda env create -f environment.yml
@@ -133,7 +153,15 @@ pip install -e .
 
 NetworkParser is designed around a restricted scientific Python stack, using common packages such as `numpy`, `pandas`, `scikit-learn`, `scipy`, `statsmodels`, and `networkx`.
 
-For raw-sequence query mode, NetworkParser can use external BLAST command-line tools when they are already available on `PATH`. If they are not available, `auto` mode falls back to exact context matching.
+For FASTA query mode, external BLAST tools can be used when `makeblastdb` and `blastn` are available on `PATH`. If they are not available and mapping mode is `auto`, NetworkParser falls back to exact flanking-context matching.
+
+For FASTQ query mode, the following external command-line tools must be available on `PATH`:
+
+```text
+bwa
+samtools
+bcftools
+```
 
 ---
 
@@ -163,7 +191,7 @@ Rows represent samples or strains. Columns represent genomic features, polymorph
 
 ### 2. Reference / Annotation Input
 
-A reference FASTA or GenBank-like reference context is optional for matrix-only training, but strongly recommended when query mode must accept raw DNA sequence.
+A reference FASTA or GenBank reference is optional for matrix-only training, but strongly recommended when query mode must accept FASTA input.
 
 When provided, NetworkParser can carry forward a feature manifest containing:
 
@@ -180,7 +208,7 @@ marker-centre index
 gene / region annotation where available
 ```
 
-This manifest becomes the bridge between the trained selected features and the raw sequence supplied later by a user in query mode.
+This manifest becomes the bridge between the trained selected features and the new sequence supplied during query mode.
 
 ### 3. Metadata Input
 
@@ -197,9 +225,9 @@ sample_C     class_A         ...                    ...
 
 The supervised label may represent lineage, strain group, species-complex group, AMR phenotype, resistance profile, outbreak cluster, or another biologically meaningful classification target.
 
-### 4. Two-Level Metadata
+### 4. Hierarchy Metadata: Standard Parent → Child Route
 
-For two-level training, the metadata must contain two supervised label columns:
+For standard hierarchy training, the metadata must contain two supervised label columns:
 
 ```text
 sample_id    level1_label    level2_label    optional_metadata
@@ -209,20 +237,36 @@ sample_B     group_B         phenotype_B     ...
 
 Conceptually:
 
-- **Level 1**: strain placement, lineage, clade, cluster, or genomic group.
-- **Level 2**: AMR phenotype, resistance class, or resistance-profile label.
+- **Parent label / Level 1**: strain placement, lineage, clade, cluster, or genomic group.
+- **Child label / Level 2**: AMR phenotype, resistance class, or resistance-profile label.
 
-### 5. Query Input
+### 5. Multi-Level Hierarchy Metadata
 
-Query mode supports two concepts:
+For recursive hierarchy training, provide an ordered list of metadata columns:
+
+```text
+sample_id    hierarchy_level_1    hierarchy_level_2    hierarchy_level_3    final_label
+sample_A     group_A              subgroup_A           clade_A              phenotype_A
+sample_B     group_B              subgroup_B           clade_B              phenotype_B
+```
+
+The order supplied to `--hierarchy_labels` defines the training route from broad grouping to increasingly specific supervised labels.
+
+### 6. Query Input
+
+Query mode supports:
 
 1. **Prebuilt genomic feature row or matrix**  
-   The query sample is already represented using genomic feature names compatible with training.
+   The query sample is already represented using feature names compatible with training.
 
-2. **Raw FASTA-like DNA sequence**  
-   NetworkParser uses the selected marker manifest from training, maps saved context sequences against the user sequence, extracts the marker-centre nucleotide, encodes the result, and creates the one-sample selected-feature matrix required by the trained models.
+2. **VCF / VCF.GZ input**  
+   The query sample is converted into the same feature convention where possible, then aligned to the saved selected features.
 
-Raw-sequence query mode is intended for consensus FASTA, pseudogenome FASTA, or assembled contig FASTA. Raw FASTQ reads should first be processed through an appropriate external read-processing, alignment, variant-calling, or consensus-generation workflow before NetworkParser query mode is used.
+3. **FASTA input**  
+   NetworkParser uses the selected-feature manifest from training, maps saved context sequences against the query DNA, extracts the marker-centre nucleotide, encodes the result, and creates the one-sample selected-feature matrix required by the trained models.
+
+4. **FASTQ input**  
+   NetworkParser converts paired-end FASTQ reads into per-sample VCF.GZ files using external alignment and variant-calling tools, then uses the VCF query pathway.
 
 ---
 
@@ -237,6 +281,7 @@ python -m network_parser.cli run \
   --label target_label_column \
   --output_dir path/to/results \
   --pipeline_mode both \
+  --central_feature_filter_method chi2_fdr \
   --feature_panel_check on \
   --feature_panel_sizes 100,200,500,1000
 ```
@@ -294,9 +339,9 @@ python -m network_parser.cli run \
 
 ---
 
-## Quick Start: Two-Level Training
+## Quick Start: Hierarchy Training
 
-Train a two-level NetworkParser model registry:
+Train a standard hierarchy NetworkParser model registry:
 
 ```bash
 python -m network_parser.cli train-two-level \
@@ -304,14 +349,15 @@ python -m network_parser.cli train-two-level \
   --meta path/to/metadata.csv \
   --level1_label strain_or_group_label \
   --level2_label phenotype_or_resistance_label \
-  --output_dir path/to/two_level_results \
+  --central_feature_filter_method chi2_fdr \
   --ref_fasta path/to/reference.fasta \
+  --output_dir path/to/hierarchy_results \
   --feature_panel_check on \
   --feature_panel_sizes 100,200,500,1000 \
   --n_jobs 4
 ```
 
-The two-level protocol performs:
+The standard hierarchy protocol performs:
 
 ```text
 Input
@@ -322,7 +368,7 @@ Feature manifest construction where reference context is available
   ↓
 Artifact-filtered binary matrix selection where available
   ↓
-Two-label metadata alignment
+Parent/child metadata alignment
   ↓
 Level 1 configured central feature filtering
   ↓
@@ -332,30 +378,66 @@ Level 1 selected feature manifest
   ↓
 Level 1 model training
   ↓
-Global Level 2 configured feature filtering and feature-panel checking before model training
+Global Level 2 configured feature filtering and feature-panel checking
   ↓
 Global Level 2 selected feature manifest
   ↓
-Level 2 per-group configured feature filtering and feature-panel checking before model training where possible
+Group-specific Level 2 configured feature filtering and feature-panel checking where possible
   ↓
 Group-specific selected feature manifests where possible
   ↓
-Two-level model registry
+Hierarchy-compatible model registry and portable model bundle
 ```
 
-The two-level registry is written as:
+Core training artifacts:
 
 ```text
 two_level_model_registry.json
+networkparser_model_bundle.npb
 ```
 
-This registry is the main trained artifact used by query mode. It should store model paths, selected feature lists, selected feature manifest paths, and relevant encoding/configuration metadata.
+The registry records model paths, selected feature lists, selected feature manifest paths, label columns, fallback routes, and relevant encoding/configuration metadata. The binary bundle packages the registry, trained model payloads, selected-feature metadata, and query-time evidence resources into one portable object when bundle creation is enabled.
+
+---
+
+## Quick Start: Recursive Multi-Level Hierarchy Training
+
+Train an ordered supervised hierarchy with more than two labels:
+
+```bash
+python -m network_parser.cli train-two-level \
+  --genomic path/to/genomic_input \
+  --meta path/to/metadata.csv \
+  --hierarchy_labels level_1_label level_2_label level_3_label final_label \
+  --central_feature_filter_method chi2_fdr \
+  --ref_fasta path/to/reference.fasta \
+  --output_dir path/to/hierarchy_results \
+  --feature_panel_check on \
+  --feature_panel_sizes 100,200,500,1000 \
+  --n_jobs 4
+```
+
+When `--hierarchy_labels` is supplied, it supersedes `--level1_label` and `--level2_label`. NetworkParser trains one model per eligible hierarchy node and stores the recursive routing structure in the registry.
+
+Conceptual flow:
+
+```text
+root model
+  ↓
+child model for predicted Level 1 group
+  ↓
+child model for predicted Level 2 group
+  ↓
+continue until terminal hierarchy label
+```
+
+This is useful when the biological interpretation naturally moves from broad population structure to more specific lineage, clade, phenotype, or resistance endpoints.
 
 ---
 
 ## Quick Start: Query / Inference
 
-Apply a trained two-level registry to new genomic input:
+Apply a trained registry to new genomic input:
 
 ```bash
 python -m network_parser.cli query \
@@ -366,29 +448,42 @@ python -m network_parser.cli query \
   --n_jobs 4
 ```
 
-Query mode is inference-only. It does **not** rerun central feature filtering, permutation testing, FDR correction, decision-tree training, or bootstrap confidence estimation. Instead, new samples are aligned to the trained feature space stored in the registry.
+Apply a portable binary bundle:
 
-### Raw FASTA query mode
+```bash
+python -m network_parser.cli query \
+  --genomic path/to/new_genomic_input \
+  --bundle path/to/networkparser_model_bundle.npb \
+  --output_dir path/to/query_results \
+  --max_markers 10 \
+  --n_jobs 4
+```
 
-Raw FASTA sequence can be queried directly when the training run was created with a selected feature manifest containing reference context. In this mode, NetworkParser uses the saved context sequence for each selected genomic feature, maps the context back to the raw query DNA, extracts the centre nucleotide, and rebuilds the selected-feature matrix before prediction:
+A `.npb` path passed through `--registry` is treated as a bundle for backward compatibility, but `--bundle` is the clearer route.
+
+Query mode aligns new samples to the trained feature space stored in the registry or bundle. Missing trained features are filled conservatively, extra query features are ignored, and the alignment summary records the burden of missing trained markers.
+
+### FASTA query mode
+
+FASTA sequence can be queried directly when training saved selected-feature manifests with reference context:
 
 ```bash
 python -m network_parser.cli query \
   --genomic path/to/new_sample.fasta \
   --registry path/to/two_level_model_registry.json \
   --output_dir path/to/query_results \
-  --query_input_type raw_sequence \
-  --raw_sequence_mapping_mode auto
+  --query_input_type fasta \
+  --fasta_mapping_mode auto
 ```
 
-`--raw_sequence_mapping_mode auto` uses BLAST context mapping when `makeblastdb` and `blastn` are available on `PATH`, otherwise it falls back to exact flanking-context matching. Use `blast` to require BLAST, or `exact` to skip BLAST.
+`--raw_sequence_mapping_mode` is retained as an alias for `--fasta_mapping_mode`. The `raw_sequence` query input type is retained as an alias for `fasta`.
 
-Raw-sequence query mode performs:
+FASTA query mode performs:
 
 ```text
-raw DNA sequence
+FASTA DNA sequence
     ↓
-load selected marker manifest
+load selected-feature manifest
     ↓
 map marker context sequence to query DNA
     ↓
@@ -400,36 +495,12 @@ encode using the same training rule
     ↓
 build one-sample selected-feature matrix
     ↓
-apply saved Level 1 and Level 2 models
+apply saved models
 ```
 
-Query outputs include:
+### FASTQ query mode
 
-```text
-query_predictions.csv
-query_report.json
-query_report.txt
-query_alignment_summary.json
-raw_sequence_query_encoding/raw_sequence_selected_feature_matrix.csv
-raw_sequence_query_encoding/raw_sequence_feature_calls.tsv
-raw_sequence_query_encoding/raw_sequence_mapping_summary.json
-```
-
-The report contains the predicted Level 1 identity, predicted Level 2 phenotype/profile, support values where available, supporting markers, observed nucleotide evidence where available, marker recovery metrics, and decision-path explanations when the saved model exposes tree-like structure.
-
-### Paired FASTQ query mode
-
-FASTQ query mode accepts a directory of paired-end reads, converts each sample into a VCF.GZ file using BWA, samtools, and bcftools, then passes the resulting VCF directory through the existing NetworkParser query pathway. This is a preprocessing bridge only; query mode remains inference-only and does not rerun central statistical filtering, model training, decision-tree construction, or bootstrap confidence scoring.
-
-Required external command-line tools on `PATH`:
-
-```text
-bwa
-samtools
-bcftools
-```
-
-Run FASTQ query mode:
+FASTQ query mode accepts a directory of paired-end reads, converts each sample into a VCF.GZ file using BWA, samtools, and bcftools, then passes the resulting VCF directory through the existing query pathway:
 
 ```bash
 python -m network_parser.cli query \
@@ -457,20 +528,40 @@ DataLoader VCF-directory matrix construction
     ↓
 trained-feature alignment
     ↓
-apply saved Level 1 and Level 2 models
+apply saved models
 ```
 
-FASTQ-specific outputs include:
+---
+
+## Query Outputs
+
+Query mode writes several files intended for different users:
 
 ```text
-fastq_query_preprocessing/final/vcf/*.vcf.gz
-fastq_query_preprocessing/bams/*.sorted.bam
-fastq_query_preprocessing/stats/*.flagstat.txt
-fastq_query_preprocessing/stats/*.alignment.stats.txt
-fastq_query_preprocessing/stats/*.vcf.stats.txt
-fastq_query_preprocessing/logs/*.log
-fastq_query_preprocessing/fastq_processing_summary.json
+query_results/
+├── query_predictions.csv
+├── query_predictions_compact.tsv
+├── query_predictions_readable.html
+├── query_route_audit.json
+├── query_report.json
+├── query_report.txt
+├── query_alignment_summary.json
+├── query_matrix_artifacts/
+├── fasta_query_encoding/ or raw_sequence_query_encoding/
+│   ├── selected_feature_matrix.csv
+│   ├── feature_calls.tsv
+│   └── mapping_summary.json
+└── fastq_query_preprocessing/                 # FASTQ route only
+    ├── final/vcf/*.vcf.gz
+    ├── bams/*.sorted.bam
+    ├── stats/*
+    ├── logs/*
+    └── fastq_processing_summary.json
 ```
+
+The report contains predicted hierarchy or Level 1 identity, predicted Level 2 phenotype/profile where available, support values where exposed by the saved model, supporting markers, marker recovery metrics, active feature evidence, route audit information, and per-feature evidence calls for FASTA-derived queries.
+
+Supporting markers are not restricted to non-baseline states only. A resolved training marker can support interpretation whether the query carries the baseline state or a non-baseline state, as long as the feature is resolved and belongs to the trained selected-feature space.
 
 ---
 
@@ -484,12 +575,11 @@ The single-label `run` workflow supports:
 | `decision_tree_only` | Run central filtering and then decision-tree interpretability. |
 | `ml_only` | Run central filtering and ML protocol/model selector only. |
 | `both` | Run central filtering, ML protocol/model selector, and conditional decision-tree interpretation. |
-| `two_level` | Route into two-level strain/group placement and phenotype/resistance-profile modelling where exposed by the CLI/config. |
 
 The intended publication workflow is:
 
 ```text
-Input → preprocessing → feature manifest → configurable central feature filtering → ranked feature-panel separability check → ML protocol/model selector → conditional decision-tree interpretation → post-tree confidence and interaction outputs → query-ready registry
+Input → preprocessing → feature manifest → central statistical feature filtering → ranked feature-panel separability check → ML protocol/model selector → conditional decision-tree interpretation → post-tree confidence and interaction outputs → query-ready registry / bundle
 ```
 
 ---
@@ -500,10 +590,10 @@ Input → preprocessing → feature manifest → configurable central feature fi
 
 | Argument | Description |
 |---|---|
-| `--genomic` | Genomic input file, VCF directory, query matrix, raw FASTA, or paired FASTQ directory depending on workflow. |
+| `--genomic` | Genomic input file or directory. Meaning depends on workflow: matrix, VCF, FASTA, or FASTQ directory. |
 | `--output_dir` | Output directory. |
 | `--config` | Optional JSON file with `NetworkParserConfig` overrides. |
-| `--ref_fasta` | Optional FASTA or GenBank reference context for VCF-oriented workflows and raw-sequence query support. |
+| `--ref_fasta` | Optional FASTA or GenBank reference context for VCF-oriented workflows, FASTA query support, and FASTQ alignment. |
 | `--n_jobs` | Number of parallel workers where supported. |
 | `--verbose` | Enable debug-level logging. |
 | `--quiet` | Show warnings and errors only. |
@@ -515,38 +605,63 @@ Input → preprocessing → feature manifest → configurable central feature fi
 | `--meta` | Metadata CSV/TSV containing the supervised label column. |
 | `--label` | Metadata column used as the supervised target. |
 | `--known_markers` | Optional known-marker file for comparison or annotation. |
-| `--pipeline_mode` | Select `matrix_only`, `decision_tree_only`, `ml_only`, `both`, or `two_level` where supported. |
+| `--pipeline_mode` | Select `matrix_only`, `decision_tree_only`, `ml_only`, or `both`. |
 | `--validate_statistics` | Compatibility flag for validation controls where supported. |
 | `--validate_interactions` | Run optional post-tree interaction validation where available. |
 | `--run_ml_protocol` | Force the ML protocol branch on. |
 | `--disable_central_feature_filtering` | Pass the aligned matrix forward without central filtering. |
 | `--disable_model_selector` | Disable automatic model-selector behaviour. |
 | `--disable_conditional_dt` | Prevent selector-driven decision-tree triggering. |
+| `--ml_algorithm` | Optional algorithm override, for example `auto`, `RF`, `MLP`, `LR`, `DT`, `SVC`, `MBCS`, or `DNL`. |
 
-### Two-level training options
+### Hierarchy training options
 
 | Argument | Description |
 |---|---|
-| `--level1_label` | Metadata column for strain/lineage/group placement. |
-| `--level2_label` | Metadata column for phenotype or resistance-profile prediction. |
+| `--level1_label` | Metadata column for strain/lineage/group placement. Required unless `--hierarchy_labels` is used. |
+| `--level2_label` | Metadata column for phenotype or resistance-profile prediction. Required unless `--hierarchy_labels` is used. |
+| `--hierarchy_labels` | Ordered metadata columns for recursive hierarchy training. Supersedes `--level1_label` and `--level2_label`. |
+| `--global_level2_label` | Optional broader metadata column for the standard global Level 2 fallback. |
 | `--algorithm` | Optional ML algorithm override passed to the ML protocol. |
 | `--no_global_level2` | Disable the global Level 2 fallback model. |
-| `--min_level2_samples_per_group` | Minimum samples needed to train group-specific Level 2 models. |
+| `--min_level2_samples_per_group` | Optional absolute minimum for group-specific Level 2 models. When unset, eligibility is adaptive. |
+| `--level2_drop_low_support_classes` | Exclude Level 2 classes below the configured support threshold before Level 2 filtering and model screening. |
+| `--level2_min_class_count` | Minimum samples per Level 2 class when low-support class filtering is enabled. |
+| `--level2_train_binary_global_fallback` | Train an additional resistant/susceptible global Level 2 fallback. |
+| `--level2_binary_label_column` | Metadata column containing the binary fallback endpoint. |
+| `--level2_binary_label_mapping_file` | Mapping file for collapsing detailed Level 2 labels into a binary endpoint. |
 
 ### Query options
 
 | Argument | Description |
 |---|---|
-| `--registry` | Path to `two_level_model_registry.json` from training. |
-| `--max_markers` | Maximum number of supporting markers shown per level per sample. |
-| `--query_input_type` | Use `raw_sequence` when `--genomic` is raw FASTA DNA; `auto` detects common FASTA suffixes where supported. |
-| `--raw_sequence_mapping_mode` | Use `auto`, `blast`, or `exact` for context-based raw-sequence feature reconstruction. |
+| `--registry` | Path to `two_level_model_registry.json` from training. A `.npb` path is treated as `--bundle`. |
+| `--bundle` | Path to `networkparser_model_bundle.npb`; preferred for portable query inference. |
+| `--max_markers` | Maximum number of supporting markers shown per prediction level per sample. |
+| `--query_input_type` | Use `auto`, `matrix`, `vcf`, `fasta`, `raw_sequence`, or `fastq`. |
+| `--fasta_mapping_mode` | Use `auto`, `blast`, or `exact` for FASTA context mapping. |
+| `--raw_sequence_mapping_mode` | Alias for `--fasta_mapping_mode`. |
+| `--fastq_threads` | Total threads available to FASTQ preprocessing. |
+| `--fastq_max_parallel_samples` | Number of paired FASTQ samples processed concurrently. |
+| `--fastq_memory_per_sample_mb` | Optional memory guard per FASTQ sample. |
+| `--fastq_clean_intermediates` | Remove intermediate working files after successful FASTQ preprocessing. |
+| `--fastq_no_auto_index_reference` | Do not automatically create missing reference indexes. |
+| `--fastq_min_mapping_quality` | Minimum mapping quality used by FASTQ-derived variant calling. |
 
 ---
 
 ## Central Feature-Selection Controls
 
-NetworkParser supports four central feature-filtering modes: `rf_fdr`, `chi2_fdr`, `fisher_fdr`, and `chi2_perm_fdr`. RF-FDR remains the default because it captures multivariate importance patterns, while chi-square/Fisher modes provide faster association-based screening. The `chi2_perm_fdr` option keeps the classical chi-square statistic but estimates empirical p-values from label permutations before FDR correction.
+NetworkParser supports four central feature-filtering modes:
+
+```text
+rf_fdr
+chi2_fdr
+fisher_fdr
+chi2_perm_fdr
+```
+
+`rf_fdr` uses repeated random-forest feature importance against label permutations, then applies FDR correction. `chi2_fdr` and `fisher_fdr` provide faster association-based routes. `chi2_perm_fdr` keeps a chi-square association statistic but estimates empirical p-values by label permutation before FDR correction.
 
 Common CLI overrides:
 
@@ -564,34 +679,26 @@ Common CLI overrides:
 | `--rf_selector_top_n` | Optional cap on retained RF-FDR features. |
 | `--rf_selector_min_importance` | Minimum observed RF importance for retained features. |
 | `--rf_selector_fallback_strategy` | Behaviour when RF-FDR retains no features: `stop`, `top_n`, or `unfiltered`. |
-| `--rf_selector_fallback_top_n` | Number of RF-ranked features retained if `top_n` fallback is enabled. |
-| `--feature_filter_fallback_strategy` | Fallback for association-FDR or chi-square permutation-FDR filtering when no features survive correction. |
+| `--feature_filter_fallback_strategy` | Fallback for association-FDR or chi-square permutation-FDR when no features survive correction. |
 
-For publication-grade runs, use `rf_selector_fallback_strategy = "stop"` and `feature_filter_fallback_strategy = "stop"` unless an exploratory fallback is explicitly justified. Increasing the number of permutations improves empirical p-value resolution and supports more robust inference.
+For robust inference, prefer strict fallback settings and increase permutation resolution before using exploratory fallback modes.
 
 ---
 
 ## Ranked Feature-Panel Separability Check
 
-The ranked feature-panel separability check is controlled by `--feature_panel_check`. It runs after central statistical filtering and before ML training or decision-tree construction. Its purpose is to avoid two common failure modes:
-
-```text
-Too many retained genomic features  → slower training and harder interpretation
-Too few retained genomic features   → weak label separability and lost signal
-```
-
-The algorithm uses only the already retained filtered matrix. It does not rerun RF-FDR, chi-square/Fisher-FDR, or chi-square permutation-FDR. It also does not compute post-tree bootstrap confidence.
+The ranked feature-panel separability check runs after central statistical filtering and before ML training or decision-tree construction.
 
 Conceptual flow:
 
 ```text
 central filtered matrix
     ↓
-rank retained features by statistical evidence
+rank retained genomic features by statistical evidence
     ↓
 evaluate top-N panels
     ↓
-select the smallest acceptable panel, or the best available fallback
+select the smallest acceptable panel or best available fallback
     ↓
 send selected panel matrix into ML / downstream training
 ```
@@ -609,40 +716,7 @@ chi-square/statistic descending
 original column order as tie-breaker
 ```
 
-Each candidate top-N panel is scored with:
-
-- supervised cross-validated balanced accuracy using a lightweight logistic-regression probe
-- adjusted Rand index comparing KMeans clusters to known labels
-- normalized mutual information comparing KMeans clusters to known labels
-- silhouette score as an unsupervised clustering diagnostic
-
-The default selection metric is `balanced_accuracy`, because ordinary accuracy can be misleading when AMR phenotypes or group labels are imbalanced. The clustering metrics are useful diagnostics, but they are not treated as direct prediction accuracy because cluster IDs are arbitrary.
-
-Common CLI overrides:
-
-| Argument | Description |
-|---|---|
-| `--feature_panel_check` | Use `on` or `off` to enable or disable the post-filter, pre-model panel check. |
-| `--feature_panel_sizes` | Comma-separated top-N panels to evaluate, for example `100,200,500,1000`. |
-| `--feature_panel_metric` | Selection metric: `balanced_accuracy`, `adjusted_rand`, `normalized_mutual_info`, or `silhouette`. |
-| `--feature_panel_min_score` | Minimum score required for a panel to pass. |
-| `--feature_panel_selection_rule` | Panel-selection rule: `smallest_passing`, `best_passing`, or `best_available`. |
-| `--feature_panel_cv_splits` | Maximum number of stratified CV folds used by the supervised balanced-accuracy probe. |
-
-Default behaviour:
-
-```text
-smallest_passing:
-    choose the smallest top-N panel that reaches the configured minimum score
-
-best_passing:
-    choose the highest-scoring panel among panels that reach the minimum score
-
-best_available:
-    choose the highest-scoring available panel even if the minimum threshold is not reached
-```
-
-If the configured metric cannot be computed, the stage falls back to the full central filtered matrix and records the fallback reason in `feature_panel_separability_summary.json`. This keeps the pipeline operational while making the limitation visible.
+The default selection metric is `balanced_accuracy`, because ordinary accuracy can be misleading when AMR phenotypes or group labels are imbalanced. Clustering metrics are written as diagnostics but should not be interpreted as direct prediction accuracy.
 
 Outputs:
 
@@ -656,7 +730,7 @@ feature_panel_separability/
 
 Important interpretation:
 
-> The feature-panel score is an internal pre-model separability diagnostic. It should not be reported as final unbiased model performance, because the same labels contributed to statistical ranking and panel evaluation. Final performance should still come from the downstream ML evaluation strategy and, where possible, independent validation.
+> The feature-panel score is an internal pre-model separability diagnostic. It should not be reported as final unbiased model performance, because the same labels contributed to statistical ranking and panel evaluation.
 
 ---
 
@@ -679,27 +753,20 @@ Example configuration:
 {
   "pipeline_mode": "both",
   "run_central_feature_filtering": true,
-  "central_feature_filter_method": "rf_fdr",
-  "run_rf_fdr_feature_selection": true,
+  "central_feature_filter_method": "chi2_fdr",
   "run_model_selector": true,
   "ml_algorithm": "auto",
   "trigger_decision_tree_on_selected": true,
   "trigger_decision_tree_if_candidate": true,
   "remove_invariant": true,
   "multiple_testing_method": "fdr_bh",
-  "rf_selector_n_estimators": 300,
-  "rf_selector_n_observed_repeats": 10,
-  "rf_selector_n_permutations": 1000,
-  "rf_selector_fdr_alpha": 0.05,
-  "rf_selector_fallback_strategy": "stop",
-  "n_permutation_tests": 1000,
   "feature_filter_fallback_strategy": "stop",
   "run_feature_panel_separability_check": true,
   "feature_panel_sizes": [100, 200, 500, 1000],
   "feature_panel_metric": "balanced_accuracy",
-  "feature_panel_min_score": 0.75,
   "feature_panel_selection_rule": "smallest_passing",
-  "feature_panel_cv_splits": 5,
+  "build_model_bundle": true,
+  "model_bundle_filename": "networkparser_model_bundle.npb",
   "n_jobs": -1,
   "random_state": 42
 }
@@ -721,8 +788,11 @@ Important config areas:
 | Decision-tree branch | Controls tree depth, split behaviour, rule extraction, and interpretability. |
 | Interaction mining | Controls post-tree path-based feature-interaction discovery. |
 | Bootstrap / stability | Controls post-tree confidence estimation and stability evidence. |
+| Hierarchy training | Controls parent/child labels, recursive hierarchy, and fallback behaviour. |
+| Model bundle | Controls whether the portable query bundle is written after training. |
 | Query mode | Controls query-time matrix construction and trained-feature alignment. |
-| Raw-sequence query mode | Controls selected-marker context mapping and allele extraction from user-supplied DNA sequence. |
+| FASTA query mode | Controls selected-marker context mapping and allele extraction. |
+| FASTQ query mode | Controls read-alignment and VCF-generation preprocessing. |
 
 ---
 
@@ -770,7 +840,7 @@ matrices/
     └── matrix_feature_manifest.tsv
 ```
 
-The artifact-filtered binary matrix is preferred for downstream modelling when it can be aligned safely. The marker annotation table is not used as the supervised feature matrix; instead, marker information is carried forward as a synchronized feature manifest.
+The artifact-filtered binary matrix is preferred for downstream modelling when it can be aligned safely. The marker annotation table is not used as the supervised feature matrix; marker information is carried forward as a synchronized feature manifest.
 
 ---
 
@@ -803,21 +873,39 @@ amino_acid_change
 gene_annotation
 ```
 
-During central feature filtering and ranked feature-panel selection, the matrix is reduced to the exact features used by the trained model. The manifest is reduced in parallel:
+During central feature filtering and ranked feature-panel selection, the matrix is reduced to the exact features used by the trained model. The manifest is reduced in parallel and saved as the selected-feature manifest for the corresponding model slot.
+
+Selected manifests are stored in the registry and bundle so query mode can reconstruct the same selected-feature matrix from a new query sample.
+
+---
+
+## Model Registry and Binary Bundle
+
+The JSON registry is transparent and easy to inspect. It records the model hierarchy, selected features, manifest paths, fallback logic, and training summaries.
+
+The binary bundle is portable and query-ready. It can include:
 
 ```text
-all-feature manifest
-    ↓ subset by central-filtered Level 1 features
-    ↓ subset by selected Level 1 feature panel
-Level 1 selected feature manifest
-
-all-feature manifest
-    ↓ subset by central-filtered Level 2 features
-    ↓ subset by selected Level 2 feature panel
-Level 2 selected feature manifest
+registry payload
+trained model payloads
+selected-feature manifests
+ranked feature tables
+feature hashes
+runtime metadata
 ```
 
-The selected manifests are then saved into the two-level registry so that query mode can reconstruct the same selected-feature matrix from a new sequence.
+Bundle creation is controlled by:
+
+```text
+build_model_bundle
+model_bundle_filename
+model_bundle_include_model_payloads
+model_bundle_include_feature_manifests
+model_bundle_include_ranked_feature_tables
+model_bundle_fail_on_error
+```
+
+For most query use, the bundle is preferable because it avoids broken relative paths when results are moved between machines.
 
 ---
 
@@ -845,57 +933,105 @@ results/
 └── networkparser_results_<timestamp>.json
 ```
 
-The final JSON summary records the resolved configuration, selected pipeline mode, aligned matrix shape, central filtered matrix shape, selected panel matrix shape where available, feature-filtering summary, feature-panel summary, ML protocol results, decision-tree results where applicable, and validation results where applicable.
-
-### Two-level training workflow
+### Standard hierarchy training workflow
 
 ```text
-two_level_results/
+hierarchy_results/
 ├── matrices/
 │   └── DataLoader matrix and feature-manifest outputs
-├── level1_strain_identity/
-│   ├── central-filter directory, for example rf_fdr_filter/ or chi2_perm_fdr_filter/
-│   │   ├── feature-level statistical results
-│   │   ├── filtered_matrix.csv
-│   │   └── feature_filtering_summary.json
+├── level1_*/
+│   ├── central-filter directory
 │   ├── feature_panel_separability/
-│   │   ├── ranked_features.csv
-│   │   ├── panel_scores.csv
-│   │   ├── selected_panel_matrix.csv
-│   │   └── feature_panel_separability_summary.json
 │   ├── selected_feature_manifest.tsv
 │   └── model/
-│       └── level-1 model outputs
-├── level2_resistance_profile/
+├── level2_*/
 │   ├── global_fallback/
-│   │   ├── level2_class_support_filter_summary.json
-│   │   ├── central-filter directory
-│   │   ├── feature_panel_separability/
-│   │   ├── selected_feature_manifest.tsv
-│   │   └── model/
+│   ├── global_binary_fallback/          # when enabled
 │   └── by_level1_group/
-│       └── group-specific Level 2 outputs where trainable
-│           └── level2_class_support_filter_summary.json
 ├── aligned_two_level_matrix.csv
 ├── aligned_two_level_labels.csv
-└── two_level_model_registry.json
+├── two_level_model_registry.json
+└── networkparser_model_bundle.npb       # when enabled
+```
+
+### Recursive hierarchy workflow
+
+```text
+hierarchy_results/
+├── matrices/
+├── hierarchy/
+│   ├── root model outputs
+│   └── child-node model outputs where trainable
+├── hierarchy_model_registry.json or two_level_model_registry.json
+└── networkparser_model_bundle.npb       # when enabled and applicable
 ```
 
 ### Query workflow
 
 ```text
 query_results/
-├── query_matrix_artifacts/
-│   └── DataLoader artifacts for matrix or VCF query input
-├── raw_sequence_query_encoding/
-│   ├── raw_sequence_selected_feature_matrix.csv
-│   ├── raw_sequence_feature_calls.tsv
-│   └── raw_sequence_mapping_summary.json
 ├── query_predictions.csv
-├── query_alignment_summary.json
+├── query_predictions_compact.tsv
+├── query_predictions_readable.html
+├── query_route_audit.json
 ├── query_report.json
-└── query_report.txt
+├── query_report.txt
+├── query_alignment_summary.json
+├── query_matrix_artifacts/
+├── fasta_query_encoding/ or raw_sequence_query_encoding/
+└── fastq_query_preprocessing/           # FASTQ route only
 ```
+
+---
+
+## Evaluation and Cross-Validation Utilities
+
+NetworkParser includes evaluation utilities for labelled holdout or repeated cross-validation workflows.
+
+### Held-out prediction evaluation
+
+`model_evaluation.evaluate_predictions()` compares predicted labels to true labels and writes:
+
+```text
+model_performance_summary.json
+model_performance_by_class.tsv
+confusion_matrix.tsv
+roc_auc_summary.tsv
+roc_curve_points.tsv
+pr_curve_points.tsv
+evaluated_sample_predictions.tsv
+```
+
+Metrics include accuracy, balanced accuracy, macro/weighted F1, sensitivity/recall, specificity, PPV, NPV, MCC, and one-vs-rest ROC/PR summaries when class-support scores are available.
+
+### Leakage-aware repeated CV
+
+`cross_validation.run_repeated_cv()` follows the correct statistical order:
+
+```text
+split samples first
+    ↓
+fit feature filtering on training fold only
+    ↓
+run feature-panel selection on training fold only
+    ↓
+train model on training fold only
+    ↓
+evaluate held-out fold
+```
+
+It writes:
+
+```text
+cross_validation_summary.json
+cv_fold_metrics.tsv
+cv_predictions.tsv
+cv_feature_stability.tsv
+cv_by_class_metrics.tsv
+aggregate_performance/
+```
+
+This wrapper is intended for robust inference because held-out samples do not drive supervised marker selection.
 
 ---
 
@@ -903,40 +1039,23 @@ query_results/
 
 ### Central Feature Filtering
 
-Central feature filtering happens once and upstream of model screening. This avoids inconsistent feature sets between the ML protocol and the interpretability branch.
+Central feature filtering happens upstream of model screening and tree construction. This avoids inconsistent feature sets between the ML protocol and interpretability branch.
 
-Preferred method:
-
-```text
-RF feature importance → permutation empirical p-values → FDR correction → retained genomic features
-```
-
-Alternative methods:
+Preferred strict workflow:
 
 ```text
-association testing → multiple-testing correction → retained genomic features
-chi-square statistic → label-permutation empirical p-values → FDR correction → retained genomic features
+feature-level evidence → multiple-testing correction → retained genomic features → model-ready panel → model training
 ```
 
 ### RF-FDR Interpretation
 
-RF-FDR is a feature-filtering procedure, not the final biological explanation. It is used to reduce a high-dimensional genomic matrix into a smaller, statistically defensible feature space before model screening and decision-tree interpretation.
+RF-FDR is a feature-filtering procedure, not the final biological explanation. It reduces a high-dimensional genomic matrix into a statistically defensible feature space before model screening and decision-tree interpretation.
 
-The retained feature list should be interpreted as a supervised marker set that survived the configured empirical and multiple-testing controls. It is not a substitute for biological validation.
-
-### Ranked Feature-Panel Separability Check
-
-The feature-panel check is a compactness and separability checkpoint between statistical filtering and downstream model training. It answers:
-
-> Among the statistically retained genomic features, what is the smallest top-ranked panel that still separates the known labels strongly enough for training?
-
-It evaluates configured top-N panels and writes both the ranked feature table and the selected model-ready matrix. By default, the selected panel is the smallest panel that reaches the configured balanced-accuracy threshold. If no panel reaches the threshold, the stage records that the threshold was not met and uses the best available panel or passes through the full central filtered matrix when scoring fails.
-
-This stage should be described as supervised separability, not final clustering accuracy. KMeans-based adjusted Rand index, normalized mutual information, and silhouette score are diagnostics. The default decision metric remains balanced accuracy from a lightweight supervised probe.
+The retained feature list should be interpreted as a supervised marker set that survived configured empirical and multiple-testing controls. It is not a substitute for biological validation.
 
 ### ML Protocol / Model Selector
 
-The ML protocol receives the selected panel matrix when the feature-panel check is enabled; otherwise it receives the central filtered matrix. It does not train directly on the raw high-dimensional matrix unless central filtering has been explicitly disabled. This makes model screening faster, more stable, and more interpretable.
+The ML protocol receives the selected panel matrix when the feature-panel check is enabled; otherwise it receives the central filtered matrix. It does not train directly on the raw high-dimensional matrix unless central filtering has been explicitly disabled.
 
 The selector can recommend candidate algorithms. The decision-tree branch is triggered only under the configured conditional logic.
 
@@ -950,7 +1069,7 @@ The decision-tree branch assumes central filtering has already happened. It then
 - path-based interaction mining
 - post-tree confidence and stability scoring
 
-The decision tree is retained because it gives a compact, rule-based interpretation layer. It should not be replaced by a black-box model if the goal is publication-ready interpretability.
+The decision tree is retained because it gives a compact, rule-based interpretation layer.
 
 ### Bootstrap and Confidence Scores
 
@@ -966,44 +1085,33 @@ That is the role of pre-tree central feature filtering.
 
 ### Interaction Mining
 
-Interaction mining is path-based. Candidate interactions are extracted from co-occurring features along decision-tree paths, then optionally validated downstream. This avoids exhaustive all-pairs testing across the original high-dimensional feature matrix.
+Interaction mining is path-based. Candidate interactions are extracted from co-occurring genomic features along decision-tree paths, then optionally validated downstream. This avoids exhaustive all-pairs testing across the original high-dimensional feature matrix.
 
 ### Query-Time Interpretation
 
-Query mode aligns new samples to the feature lists stored in the trained registry. Missing trained features are filled conservatively, extra query features are ignored, and central feature filtering is not rerun. This keeps inference consistent with the training-time feature space.
+Query mode aligns new samples to the feature lists stored in the trained registry or bundle. Missing trained features are filled conservatively, extra query features are ignored, and central feature filtering is not rerun.
 
-For raw FASTA queries, the selected-feature manifest is the bridge between training and inference. It carries feature identity, reference/alternate allele, baseline allele, annotation, and context sequence forward so that query-time nucleotide extraction remains traceable.
+For FASTA queries, the selected-feature manifest is the bridge between training and inference. It carries feature identity, reference/alternate allele, baseline allele, annotation, and context sequence forward so query-time nucleotide extraction remains traceable.
 
-### Raw-Sequence Query Logic
-
-Raw-sequence query mode is not new feature discovery. It asks whether the new sequence contains the previously selected markers.
+Resolved marker evidence may include:
 
 ```text
-trained selected feature
-    ↓
-saved context sequence
-    ↓
-context mapped to query DNA
-    ↓
-observed nucleotide extracted at marker centre
-    ↓
-encoded using training rule
-    ↓
-model-compatible query matrix
+baseline_match
+alt_match
+known_nonbaseline_match
 ```
 
-Each marker call should be reported with evidence status, for example:
+Non-evidence or conservative zero-fill states may include:
 
 ```text
-unique_hit
-multi_hit
-no_hit
-low_confidence_hit
-ambiguous_marker_base
-unexpected_allele
+not_called
+ambiguous_base
+multi_hit_context
+unresolved_context
+non_training_allele
 ```
 
-A prediction should therefore be interpreted alongside marker recovery metrics. This supports robust inference because the user can distinguish confidently observed marker evidence from unresolved sequence evidence.
+A query prediction should therefore be interpreted alongside marker recovery and active feature evidence metrics.
 
 ---
 
@@ -1011,11 +1119,11 @@ A prediction should therefore be interpreted alongside marker recovery metrics. 
 
 ### No overlapping sample IDs
 
-Check that sample identifiers in the genomic matrix and metadata file refer to the same biological samples. NetworkParser normalizes common VCF suffixes, but metadata and matrix IDs must still be compatible.
+Check that sample identifiers in the genomic matrix and metadata file refer to the same biological samples. NetworkParser normalizes common VCF suffixes and conservative library suffixes, but metadata and matrix IDs must still be compatible.
 
-### No features retained after RF-FDR or chi-square permutation-FDR
+### No features retained after central filtering
 
-This can happen when the cohort is small, labels are weakly separated, metadata are noisy, classes are imbalanced, or the empirical p-value resolution is too coarse.
+This can happen when the cohort is small, labels are weakly separated, metadata are noisy, classes are imbalanced, or empirical p-value resolution is too coarse.
 
 Review:
 
@@ -1031,27 +1139,23 @@ For robust inference, prefer increasing permutation resolution before using expl
 
 ### Feature manifest is missing after training
 
-Raw-sequence query mode requires selected feature manifests. If the registry does not contain selected manifest paths, rerun training with reference context available and ensure DataLoader writes the feature manifest artifact.
+FASTA query mode requires selected feature manifests. If the registry does not contain selected manifest paths, rerun training with reference context available and ensure DataLoader writes the feature manifest artifact.
 
-### Raw-sequence query has low marker recovery
+### FASTA query has low marker recovery
 
 Low marker recovery means many selected training markers could not be confidently resolved in the query sequence.
 
 Check:
 
-- whether the query sequence is a consensus, pseudogenome, or assembly rather than raw reads
+- whether the query is a consensus FASTA, pseudogenome FASTA, or assembled contig FASTA
 - whether the query sequence uses compatible contig/reference context
-- whether the selected marker contexts are present in the query sequence
-- whether many markers produced multi-hit, no-hit, low-confidence, or ambiguous calls
+- whether selected marker contexts are present in the query sequence
+- whether many markers produced multi-hit, no-hit, ambiguous, or non-training-allele calls
 - whether exact matching is too strict for the expected sequence divergence
 
 ### Query output contains many missing trained features
 
-This indicates that the query input was not represented in the same feature space as training. Check that the same reference, VCF parsing logic, feature-ID convention, and DataLoader settings were used. For raw-sequence query mode, check the selected feature manifest and marker recovery summary.
-
-### Raw FASTQ reads were supplied directly
-
-NetworkParser raw-sequence query mode is not intended to infer marker absence directly from raw reads. Raw reads should first be processed through appropriate external QC, alignment, variant-calling, or consensus-generation steps.
+This indicates that the query input was not represented in the same feature space as training. Check that the same reference, VCF parsing logic, feature-ID convention, and DataLoader settings were used. For FASTA query mode, check the selected feature manifest and marker recovery summary.
 
 ### Decision-tree branch did not run
 
@@ -1069,13 +1173,15 @@ python -m network_parser.cli run \
   --ml_algorithm DT
 ```
 
-### Group-specific Level 2 model is unavailable
+### Child model is unavailable for a hierarchy branch
 
-A group-specific Level 2 model may be skipped when the Level 1 subgroup does not support robust Level 2 training. Common reasons include too few samples, only one Level 2 class inside the group, too few samples in the smallest Level 2 class for stratified cross-validation, or no finite model-selector probe scores after filtering. In these cases, the group summary JSON records the skip reason, label-balance diagnostics, feasible CV splits, and whether prediction will use the global Level 2 fallback.
+A branch-specific child model may be skipped when the parent subgroup does not support robust downstream training. The default eligibility rule is adaptive rather than based on one fixed cohort-size cutoff. Common reasons include only one child-label class inside the branch, too few samples in the smallest child-label class for stratified cross-validation, or no finite model-selector probe scores after filtering.
 
-### Level 2 has rare classes that make cross-validation impossible
+When this happens, query mode can use a configured global fallback if one exists.
 
-When a Level 2 phenotype or resistance-profile class is represented by too few samples, stratified cross-validation cannot produce valid folds. For publication-safe training, either keep the run strict and report that the class is underpowered, or explicitly enable the Level 2 class-support gate:
+### Child labels have rare classes that make cross-validation impossible
+
+When a child phenotype or resistance-profile class has too little support, stratified cross-validation cannot produce valid folds. For publication-safe training, keep the run strict and report the limitation, or explicitly enable the child-label support gate:
 
 ```bash
 python -m network_parser.cli train-two-level \
@@ -1083,18 +1189,16 @@ python -m network_parser.cli train-two-level \
   --meta path/to/metadata.csv \
   --level1_label lineage_column \
   --level2_label phenotype_column \
-  --output_dir path/to/two_level_results \
+  --output_dir path/to/hierarchy_results \
   --level2_drop_low_support_classes \
   --level2_min_class_count 2
 ```
 
-This removes only Level 2 classes below the configured support threshold before Level 2 statistical filtering and model screening. Level 1 training still uses the aligned cohort. The audit files `level2_class_support_filter_summary.json` and, when needed, `level2_low_support_classes.tsv` record what was excluded.
+The audit files record what was excluded and why.
 
-### Use a global binary resistant/susceptible fallback for underrepresented lineages
+### Use a global binary resistant/susceptible fallback
 
-For datasets where detailed Level 2 resistance-profile classes are sparse within some lineages, NetworkParser can train an additional global binary Level 2 fallback model. This model asks a broader question across all lineages: resistant versus susceptible for the selected antibiotic endpoint. It is used at query time only when the predicted Level 1 group does not have a usable group-specific Level 2 model and the detailed global Level 2 fallback is unavailable.
-
-Use a dedicated binary metadata column when available:
+For sparse detailed child resistance-profile labels, NetworkParser can train an additional global binary fallback model:
 
 ```bash
 python -m network_parser.cli train-two-level \
@@ -1102,7 +1206,7 @@ python -m network_parser.cli train-two-level \
   --meta path/to/metadata.csv \
   --level1_label lineage_column \
   --level2_label detailed_resistance_profile_column \
-  --output_dir path/to/two_level_results \
+  --output_dir path/to/hierarchy_results \
   --level2_train_binary_global_fallback \
   --level2_binary_label_column antibiotic_binary_column
 ```
@@ -1115,7 +1219,7 @@ python -m network_parser.cli train-two-level \
   --meta path/to/metadata.csv \
   --level1_label lineage_column \
   --level2_label detailed_resistance_profile_column \
-  --output_dir path/to/two_level_results \
+  --output_dir path/to/hierarchy_results \
   --level2_train_binary_global_fallback \
   --level2_binary_label_mapping_file level2_to_binary_mapping.tsv
 ```
@@ -1123,16 +1227,39 @@ python -m network_parser.cli train-two-level \
 The mapping file should contain:
 
 ```text
-original_level2_label    binary_level2_label
+original_child_label    binary_child_label
 detailed_profile_A       resistant
 detailed_profile_B       susceptible
 ```
 
-The binary model is saved under `level2_resistance_profile/global_binary_fallback/` and recorded in the registry as `level2.global_binary_fallback`. Query mode reports `level2_model_source=global_binary_fallback` when this broader endpoint is used.
+Query mode reports the fallback source when this broader endpoint is used.
 
-### ML protocol fails during two-level training
+### Use a broader standard global child fallback label
 
-By default, the two-level protocol should fail loudly if the configured ML protocol fails. This is publication-safe because it avoids silently substituting an exploratory fallback model. An explicit fallback may be enabled only for exploratory runs.
+When branch-specific models should learn a detailed child label but the standard global fallback should learn a broader endpoint, use `--global_level2_label`:
+
+```bash
+python -m network_parser.cli train-two-level \
+  --genomic path/to/genomic_input \
+  --meta path/to/metadata.csv \
+  --level1_label lineage_column \
+  --level2_label detailed_resistance_profile_column \
+  --global_level2_label broader_binary_or_profile_column \
+  --output_dir path/to/hierarchy_results
+```
+
+In this mode:
+
+```text
+branch-specific child models → trained on the detailed child label
+standard global child fallback → trained on the broader fallback label
+```
+
+The registry records both label targets so query reports can distinguish detailed branch-specific predictions from broader fallback predictions.
+
+### Bundle query fails after moving result directories
+
+Use `--bundle path/to/networkparser_model_bundle.npb` instead of `--registry` when moving trained artifacts between machines. The bundle is designed to carry the trained knowledge object, selected-feature metadata, and model payloads together.
 
 ---
 
@@ -1157,7 +1284,7 @@ Current priorities:
 
 A concise methods-style description:
 
-> NetworkParser applies a modular supervised analysis workflow in which genomic variant matrices are preprocessed, aligned to metadata labels, and reduced through central statistical feature filtering before model screening. The default filtering strategy uses Random Forest feature importance, permutation-derived empirical p-values, and FDR correction to retain a statistically defensible marker set, while configurable chi-square/Fisher alternatives support faster association-based screening. A ranked feature-panel separability check can then evaluate compact top-N marker panels and forward a selected model-ready matrix to the ML protocol and model selector, after which a decision-tree interpretability branch can be conditionally triggered to extract rule-based markers, path-level feature interactions, and post-tree confidence evidence. In the two-level workflow, a first model performs strain or group placement, while Level 2 models evaluate phenotype or AMR-profile prediction globally and, where supported, within Level 1 groups. Query mode applies the trained registry to new samples by projecting them onto the saved selected-feature space; for raw FASTA input, selected marker context sequences are mapped back to the query DNA, marker-centre nucleotides are extracted, and a one-sample selected-feature matrix is reconstructed before prediction.
+> NetworkParser applies a modular supervised analysis workflow in which genomic variant matrices are preprocessed, aligned to metadata labels, and reduced through central statistical feature filtering before model screening. The filtering stage can use Random Forest feature importance with permutation-derived empirical p-values and FDR correction, or configurable chi-square/Fisher alternatives for faster association-based screening. A ranked feature-panel separability check can then evaluate compact top-N marker panels and forward a selected model-ready matrix to the ML protocol and model selector, after which a decision-tree interpretability branch can be conditionally triggered to extract rule-based markers, path-level feature interactions, and post-tree confidence evidence. In hierarchy workflows, supervised models are trained along ordered biological labels so that query samples can be routed from broad strain/group placement toward phenotype or AMR-profile interpretation. Query mode applies the trained registry or binary bundle to new samples by projecting them onto the saved selected-feature space; for FASTA input, selected marker context sequences are mapped back to the query DNA, marker-centre nucleotides are extracted, and a one-sample selected-feature matrix is reconstructed before prediction.
 
 ---
 
@@ -1185,90 +1312,3 @@ This project is distributed under the license specified in the repository.
 **Nomlindelo Mfuphi**  
 Bioinformatics Support Scientist  
 Centre for High Performance Computing
-
-
-### Separate global Level 2 fallback label
-
-For datasets where the detailed Level 2 phenotype/profile is too sparse for a
-robust global fallback, the standard global Level 2 fallback can be trained on a
-different metadata column while group-specific models continue to use the detailed
-`--level2_label`. This is useful when `--level2_label` is a detailed resistance
-profile, but the fallback should answer a broader endpoint such as resistant vs
-susceptible.
-
-```bash
-python -m network_parser.cli train-two-level \
-  --genomic path/to/genomic_input \
-  --meta path/to/metadata.csv \
-  --level1_label Lineage_clean \
-  --level2_label Resistance_Profile_Collapsed \
-  --global_level2_label AMR_binary \
-  --output_dir path/to/two_level_results
-```
-
-In this mode:
-
-```text
-group-specific Level 2 models → trained on Resistance_Profile_Collapsed
-standard global Level 2 fallback → trained on AMR_binary
-```
-
-The registry records both `level2.label_column` and `level2.global_label_column`
-so query reports can state whether the returned Level 2 prediction came from a
-detailed group-specific model or from the broader global fallback endpoint.
-
-
-### Query feature-recovery diagnostics
-
-FASTA query mode now reports feature recovery separately from model prediction. This is important because a selected feature can be recovered from the query genome but still encode as `0` when the query carries the baseline allele.
-
-Additional query outputs include:
-
-```text
-query_predictions.csv
-query_alignment_summary.json
-query_report.json
-query_report.txt
-fasta_query_encoding/fasta_mapping_summary.json
-fasta_query_encoding/fasta_sample_mapping_summary.tsv
-fasta_query_encoding/fasta_feature_calls.tsv
-```
-
-The prediction table includes confidence-oriented fields such as:
-
-```text
-level1_marker_recovery_status
-level2_marker_recovery_status
-level1_interpretation_confidence
-level2_interpretation_confidence
-level1_confidence_note
-level2_confidence_note
-```
-
-The FASTA mapping summary separates:
-
-```text
-selected features requested
-features with unique context mapping
-features mapped to baseline allele
-features mapped to ALT / known non-baseline allele
-features unresolved or missing context
-features with multi-hit context
-features with ambiguous bases
-features with non-training alleles
-```
-
-A prediction can therefore be generated but still marked as low confidence when selected-feature recovery, model support, or active supporting-marker evidence is weak. This keeps query-mode inference statistically defensible and prevents baseline-filled query rows from being over-interpreted.
-
-Preferred FASTA query command:
-
-```bash
-python -m network_parser.cli query \
-  --genomic path/to/query_assembly.fna \
-  --registry path/to/two_level_model_registry.json \
-  --output_dir path/to/query_results \
-  --query_input_type fasta \
-  --fasta_mapping_mode auto
-```
-
-`raw_sequence` is still accepted as a backward-compatible alias for `fasta`, but new documentation and examples should use `fasta`.

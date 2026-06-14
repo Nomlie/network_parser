@@ -1,0 +1,208 @@
+digraph NetworkParserRecentAdditions {
+    rankdir=TB;
+    bgcolor="#fbfbff";
+    splines=ortho;
+    nodesep=0.55;
+    ranksep=0.75;
+
+    graph [
+        fontname="Helvetica",
+        labelloc="t",
+        label="NetworkParser: Recent Additions — Training, Binary Bundle, and Query Evidence",
+        fontsize=22,
+        fontcolor="#2b2d42"
+    ];
+
+    node [
+        shape=rect,
+        style="rounded,filled",
+        fontname="Helvetica",
+        fontsize=12,
+        color="#d0d7de",
+        fillcolor="#ffffff",
+        penwidth=1.4,
+        margin="0.12,0.08"
+    ];
+
+    edge [
+        fontname="Helvetica",
+        fontsize=10,
+        color="#6c757d",
+        arrowsize=0.8
+    ];
+
+    // -------------------------
+    // Training cluster
+    // -------------------------
+    subgraph cluster_training {
+        label="Training / discovery side";
+        style="rounded,filled";
+        color="#cfe8ff";
+        fillcolor="#eef7ff";
+        fontname="Helvetica";
+        fontsize=16;
+        fontcolor="#1f4e79";
+
+        input [
+            label="Input genomic data + metadata",
+            fillcolor="#ffffff"
+        ];
+
+        preprocessing [
+            label="Preprocessing\n• remove invariant / low-information features\n• handle missing-like values\n• construct binary genomic feature matrix",
+            fillcolor="#f8fbff"
+        ];
+
+        manifest [
+            label="Feature manifest generation\n• feature identity\n• REF / ALT / baseline allele\n• context sequence around trained site\n• query-time reconstruction metadata",
+            fillcolor="#fff8e8"
+        ];
+
+        filtering [
+            label="Statistical filtering BEFORE modelling\n• χ² / Fisher / RF-FDR\n• FDR correction\n• statistically defensible marker screen",
+            fillcolor="#eafaf1"
+        ];
+
+        panel [
+            label="Feature-panel selection\n• compact model-ready marker panel\n• improves interpretability\n• reduces query burden",
+            fillcolor="#f4efff"
+        ];
+
+        train_models [
+            label="Two-level model training",
+            fillcolor="#ffffff"
+        ];
+
+        level1 [
+            label="Level 1 model\nstrain / lineage / group placement",
+            fillcolor="#e8f3ff"
+        ];
+
+        level2 [
+            label="Level 2 model\nAMR phenotype / resistance profile",
+            fillcolor="#e8f3ff"
+        ];
+
+        registry [
+            label="Model registry + selected manifests\n• model paths\n• Level 1 / Level 2 feature lists\n• selected-feature manifest paths\n• allele + context metadata",
+            fillcolor="#fff3cd"
+        ];
+
+        bundle [
+            label="Binary model bundle\nportable trained knowledge object\n\nmodels + selected features + manifests\n+ REF/ALT/baseline rules + context sequences",
+            fillcolor="#ffe3ec",
+            color="#d63384",
+            penwidth=2
+        ];
+
+        input -> preprocessing;
+        preprocessing -> manifest;
+        manifest -> filtering;
+        filtering -> panel;
+        panel -> train_models;
+        train_models -> level1;
+        train_models -> level2;
+        level1 -> registry;
+        level2 -> registry;
+        registry -> bundle [
+            label="package into one binary object",
+            color="#d63384",
+            fontcolor="#d63384",
+            penwidth=2
+        ];
+    }
+
+    // -------------------------
+    // Query cluster
+    // -------------------------
+    subgraph cluster_query {
+        label="Query / inference side";
+        style="rounded,filled";
+        color="#d8f3dc";
+        fillcolor="#f1fff4";
+        fontname="Helvetica";
+        fontsize=16;
+        fontcolor="#2d6a4f";
+
+        query_input [
+            label="New query sample\nFASTA / VCF / FASTQ-derived VCF / aligned matrix",
+            fillcolor="#ffffff"
+        ];
+
+        load_bundle [
+            label="Load binary bundle\n• trained models\n• selected features\n• context + allele rules",
+            fillcolor="#ffe3ec",
+            color="#d63384",
+            penwidth=2
+        ];
+
+        resolve [
+            label="Resolve trained markers in query\nmap context or coordinates\nthen call the centre nucleotide",
+            fillcolor="#e7f5ff"
+        ];
+
+        call_status [
+            label="Classify marker call",
+            fillcolor="#ffffff"
+        ];
+
+        baseline [
+            label="baseline_match\nencoded 0\nvalid resolved evidence",
+            fillcolor="#eafaf1"
+        ];
+
+        nonbaseline [
+            label="alt_match / known_nonbaseline_match\nencoded 1\nvalid positive marker evidence",
+            fillcolor="#dcfce7",
+            color="#2f9e44",
+            penwidth=2
+        ];
+
+        unresolved [
+            label="unresolved / ambiguous / multi-hit /\nnon-training allele\nencoded 0 but caution only",
+            fillcolor="#fff0f0",
+            color="#e03131"
+        ];
+
+        vector [
+            label="Same trained binary feature vector\nno change to model input logic",
+            fillcolor="#f8fbff"
+        ];
+
+        prediction [
+            label="Level 1 + Level 2 prediction\nstrain placement + phenotype interpretation",
+            fillcolor="#e8f3ff"
+        ];
+
+        report [
+            label="Readable query report\n• compact TSV\n• HTML report\n• route audit JSON\n• alignment summary\n• resolved-marker evidence roles",
+            fillcolor="#fff8e8"
+        ];
+
+        query_input -> resolve;
+        load_bundle -> resolve;
+        resolve -> call_status;
+        call_status -> baseline;
+        call_status -> nonbaseline;
+        call_status -> unresolved;
+        baseline -> vector;
+        nonbaseline -> vector;
+        unresolved -> vector [
+            label="zero-fill with caution",
+            color="#e03131",
+            fontcolor="#e03131"
+        ];
+        vector -> prediction;
+        prediction -> report;
+    }
+
+    // -------------------------
+    // Bridge from bundle to query
+    // -------------------------
+    bundle -> load_bundle [
+        label="end-to-end query-ready object",
+        color="#d63384",
+        fontcolor="#d63384",
+        penwidth=2
+    ];
+}
