@@ -1,0 +1,201 @@
+# Check remotes and branch
+git remote -v
+git status
+git rev-parse --abbrev-ref HEAD   # shows current branch
+
+# Be on master
+git switch master  # or: git checkout master
+git pull --rebase origin master   # get latest before pushing
+
+# Stage/commit and push
+git add .
+git commit -m "Your message"
+git push --set-upstream origin changesss
+
+git remote set-url origin https://github.com/Nomlie/network_parser.git
+
+
+ python extract_subset.py --vcf-dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/AFRO_TB_ANNOTATION_VCF \
+--meta-file /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/AFRO_dataset_meta.csv \
+--stratify-by Lineage \
+--n-samples 3000 \
+--output-dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/LineageBalanced
+
+ python -m network_parser.cli \
+--genomic /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/LineageBalanced \
+--meta /Users/nmfuphicsir.co.za/Documents/data/AFRO_TB/AFRO_dataset_meta.csv \
+--label Lineage \
+--ref_fasta /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/VCF_2_Matrix/ref/H37Rv.gbk \
+--output_dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/LineageBalanced
+
+python -m network_parser.cli train-two-level \
+--genomic  /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/ALL_Lineage_Balanced \
+--meta /Users/nmfuphicsir.co.za/Documents/data/AFRO_TB/AFRO_dataset_meta.csv \
+--level1_label Lineage \
+--level2_label Pheno \
+--central_feature_filter_method chi2_fdr \
+--ref_fasta /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/VCF_2_Matrix/ref/H37Rv.gbk \
+--output_dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_Lineage_Balanced/chi2_fdr \
+--n_jobs 6
+
+python -m network_parser.cli train-two-level \
+--genomic  /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/ALL \
+--meta /Users/nmfuphicsir.co.za/Documents/data/AFRO_TB/AFRO_dataset_meta_networkparser_ready.csv \
+--level1_label Lineage_clean \
+--level2_label Resistance_Profile_Collapsed \
+--global_level2_label AMR_binary \
+--central_feature_filter_method chi2_fdr \
+--ref_fasta /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/VCF_2_Matrix/ref/H37Rv.gbk \
+--output_dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_with_global/chi2_fdr \
+--feature_panel_check on \
+--feature_panel_classifier rf \
+--feature_panel_sizes 100,200,500,1000 \
+--feature_panel_metric balanced_accuracy \
+--feature_panel_min_score 0.75 \
+--feature_panel_selection_rule smallest_passing \
+--n_jobs 8
+
+python -m network_parser.cli train-two-level \
+--genomic  /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/ALL_Lineage_Balanced \
+--meta /Users/nmfuphicsir.co.za/Documents/data/AFRO_TB/AFRO_dataset_meta.csv \
+--level1_label Lineage \
+--level2_label Pheno \
+--central_feature_filter_method chi2_perm_fdr  \
+--ref_fasta /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/VCF_2_Matrix/ref/H37Rv.gbk \
+--output_dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_Lineage_Balanced/chi2_perm_fdr  \
+--n_jobs 6
+
+
+python -m network_parser.cli bundle \
+--registry /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_with_global/chi2_fdr/two_level_model_registry.json \
+--output /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_with_global/chi2_fdr/networkparser_model_bundle.npb
+
+python -m network_parser.cli query \
+--genomic /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/query_files/ncbi_dataset/data/GCF_000195955.2_ASM19595v2_genomic.fna \
+--registry /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_with_global/chi2_fdr/two_level_model_registry.json \
+--output_dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_with_global/chi2_fdr/query_results \
+--query_input_type fasta \
+--ref_fasta /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/VCF_2_Matrix/ref/H37Rv.gbk \
+--fasta_mapping_mode blast
+
+python -m network_parser.cli query \
+--genomic /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/query_files/ncbi_dataset/data/GCF_003266045.1/GCF_003266045.1_ASM326604v1_genomic.fna \
+--registry /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_with_global/chi2_fdr/two_level_model_registry.json \
+--output_dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_with_global/chi2_fdr/query_results \
+--query_input_type fasta \
+--ref_fasta /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/VCF_2_Matrix/ref/H37Rv.gbk \
+--fasta_mapping_mode blast
+
+/Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/query_files/ncbi_dataset/data/GCF_003266045.1/GCF_003266045.1_ASM326604v1_genomic.fna
+
+datasets download genome accession GCF_000195955.2 --include genome  
+cd /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser
+
+/Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/ALL/ERR4830684.  
+ERR4872199
+ERR4872174
+
+ERR4872152.vcf.gz ,Cameroon,lineage 4,Mono 
+
+
+--query_input_type vcf 
+
+
+python -m network_parser.cli query \
+--genomic  /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/ALL/ERR4872152.vcf.gz \
+--registry /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_with_global/chi2_fdr/networkparser_model_bundle.npb  \
+--output_dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_with_global/chi2_fdr/query_results_ERR4872152 \
+--query_input_type vcf \
+--ref_fasta /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/VCF_2_Matrix/ref/H37Rv.gbk
+
+
+networkparser_model_bundle.npb 
+10_LineageBalanced
+
+python -m network_parser.cli query \
+--genomic  /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/10_LineageBalanced \
+--registry /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_with_global/chi2_fdr/networkparser_model_bundle.npb  \
+--output_dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_with_global/chi2_fdr/query_results_10 \
+--query_input_type vcf \
+--ref_fasta /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/VCF_2_Matrix/ref/H37Rv.gbk
+
+
+
+/Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/query_files/ncbi_dataset/data/FASTA
+
+python -m network_parser.cli query \
+--genomic /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/query_files/ncbi_dataset/data/FASTA \
+--registry /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_with_global/chi2_fdr/networkparser_model_bundle.npb \
+--output_dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_with_global/chi2_fdr/query_results_fasta \
+--query_input_type fasta \
+--ref_fasta /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/VCF_2_Matrix/ref/H37Rv.gbk \
+--fasta_mapping_mode blast
+
+
+python -m network_parser.cli query \
+--genomic /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/query_files/ncbi_dataset/data/FASTA \
+--registry /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_with_global/chi2_fdr/networkparser_model_bundle.npb \
+--output_dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_with_global/chi2_fdr/query_results_fasta_ncbi \
+--query_input_type fasta \
+--ref_fasta /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/VCF_2_Matrix/ref/H37Rv.gbk \
+--fasta_mapping_mode blast \
+--n_jobs 8
+
+python3 extract_subset.py \
+--vcf-dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/subset_valid_hierarchy/train \
+--meta-file /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/AFRO_dataset_meta.csv  \
+--stratify-by lineage \
+--required-label-columns Country Lineage Pheno \
+--n-samples 10 \
+--output-dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/subset_valid_hierarchy/test_10 \
+--random-seed 42
+
+
+python -m network_parser.cli train-two-level \
+--genomic  /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/subset_valid_hierarchy/train \
+--meta  /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/AFRO_dataset_meta.csv \
+--hierarchy_labels Country Lineage Pheno \
+--central_feature_filter_method chi2_fdr  \
+--ref_fasta /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/VCF_2_Matrix/ref/H37Rv.gbk \
+--global_level2_label AMR_binary \
+--output_dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL/chi2_fdr  \
+--n_jobs 8
+
+python -m network_parser.cli query \
+--genomic /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/subset_valid_hierarchy/test_10/test \
+--registry /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_with_global/chi2_fdr/hierarchy_testing/hierarchical_model_registry.json \
+--output_dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_with_global/chi2_fdr/hierarchy_testing/query_results_vcfs \
+--query_input_type vcf \
+--ref_fasta /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/VCF_2_Matrix/ref/H37Rv.gbk \
+--n_jobs 2
+
+
+
+cd /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/
+
+
+python add_test_hierarchy_column.py \
+--input /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/metadata/AFRO_dataset_meta_networkparser_ready.csv \
+--output /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/metadata/AFRO_dataset_meta_with_test_hierarchy.csv \
+--source-col Lineage_clean \
+--output-col Lineage_Supergroup \
+--strategy frequency_bin
+
+python -m network_parser.cli train-two-level \
+--genomic /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/subset_valid_hierarchy/train \
+--meta /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/metadata/AFRO_dataset_meta_with_test_hierarchy.csv \
+--hierarchy_labels Lineage_Supergroup_Test Lineage_clean AMR_binary \
+--central_feature_filter_method chi2_fdr \
+--ref_fasta /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/VCF_2_Matrix/ref/H37Rv.gbk \
+--n_jobs 8
+
+python -m network_parser.cli train-two-level \
+--genomic /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/ALL_Lineage_Balanced \
+--meta /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/metadata/AFRO_dataset_meta_with_test_hierarchy.csv \
+--hierarchy_labels Lineage_Supergroup_Test Lineage_clean Resistance_Profile_Collapsed \
+--central_feature_filter_method chi2_fdr \
+--ref_fasta /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/VCF_2_Matrix/ref/H37Rv.gbk \
+--output_dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_with_global/chi2_fdr/hierarchy_testing \
+--n_jobs 8
+
+
