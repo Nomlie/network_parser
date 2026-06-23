@@ -56,6 +56,14 @@ from statsmodels.stats.multitest import multipletests
 
 logger = logging.getLogger(__name__)
 
+try:
+    from network_parser.utils import progress_iter
+except Exception:  # pragma: no cover
+    try:
+        from utils import progress_iter  # type: ignore
+    except Exception:  # pragma: no cover
+        progress_iter = lambda iterable, **kwargs: iterable  # type: ignore
+
 
 # ---------------------------------------------------------------------------
 # Local utility helpers – kept simple to avoid cross‑module dependencies
@@ -276,7 +284,13 @@ def rf_fdr_feature_selection(
     progress_step = max(1, total_permutations // 10)
     permutation_seeds = [int(rng.integers(0, 2**31 - 1)) for _ in range(total_permutations)]
 
-    for start in range(0, total_permutations, progress_step):
+    batch_starts = list(range(0, total_permutations, progress_step))
+    for start in progress_iter(
+        batch_starts,
+        desc=f"{stage_name} RF-FDR permutations",
+        unit="batch",
+        leave=False,
+    ):
         end = min(total_permutations, start + progress_step)
         batch_tasks = [("permuted", seed, None) for seed in permutation_seeds[start:end]]
         batch_importances = _parallel_importance_map(
@@ -289,13 +303,6 @@ def rf_fdr_feature_selection(
             null_sum              += null_importance
             null_sum_sq           += null_importance ** 2
             null_exceedance_counts += (null_importance >= observed_mean).astype(int)
-
-        logger.info(
-            "%s RF‑FDR permutation progress | %d / %d",
-            stage_name,
-            int(end),
-            int(total_permutations),
-        )
 
     # ------------------------------------------------------------------
     # 4. Empirical p‑values and FDR correction

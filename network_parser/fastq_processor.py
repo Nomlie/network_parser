@@ -36,6 +36,14 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+try:
+    from network_parser.utils import progress_iter
+except Exception:  # pragma: no cover
+    try:
+        from utils import progress_iter  # type: ignore
+    except Exception:  # pragma: no cover
+        progress_iter = lambda iterable, **kwargs: iterable  # type: ignore
+
 
 FASTQ_EXTENSIONS = (
     ".fastq.gz",
@@ -170,7 +178,13 @@ class FastqProcessor:
                 for r1, r2, sample in fastq_pairs
             }
 
-            for future in as_completed(futures):
+            for future in progress_iter(
+                as_completed(futures),
+                total=len(futures),
+                desc="FASTQ preprocessing",
+                unit="sample",
+                leave=False,
+            ):
                 sample = futures[future]
                 try:
                     vcf_path = future.result()

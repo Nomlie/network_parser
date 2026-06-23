@@ -57,6 +57,8 @@ try:
         log_branch_decision,
         log_artifact,
         log_flow_step,
+        PipelineProgress,
+        progress_iter,
     )
 except Exception:  # pragma: no cover - supports running from source tree
     from config import NetworkParserConfig  # type: ignore
@@ -72,6 +74,8 @@ except Exception:  # pragma: no cover - supports running from source tree
         log_branch_decision,
         log_artifact,
         log_flow_step,
+        PipelineProgress,
+        progress_iter,
     )
 
 try:
@@ -80,6 +84,22 @@ except Exception:  # pragma: no cover - supports direct source-tree execution
     from feature_selection import rf_fdr_feature_selection  # type: ignore
 
 logger = logging.getLogger(__name__)
+
+
+def _planned_two_level_stages(config: NetworkParserConfig, train_global_level2: bool) -> List[str]:
+    """Return ordered stage labels for the two-level training progress bar."""
+    stages = [
+        "load and preprocess genomic matrix",
+        "load metadata and align two labels",
+        "Level 1 placement filtering and model training",
+    ]
+    if train_global_level2:
+        stages.append("global Level-2 fallback training")
+    if bool(getattr(config, "level2_train_binary_global_fallback", False)):
+        stages.append("optional global binary Level-2 fallback")
+    stages.append("per-group Level-2 training")
+    stages.append("finalize two-level registry")
+    return stages
 
 
 # -----------------------------------------------------------------------------
@@ -972,8 +992,8 @@ def train_model_safely(
 
         if bool(getattr(config, "allow_two_level_rf_fallback", False)):
             logger.warning(
-                "%s ML protocol failed; fitting explicitly enabled RF fallback | "
-                "reason=%s | samples=%d | features=%d | classes=%d | "
+                "%s ML protocol failed, so an explicitly enabled RF fallback will be fitted because %s | "
+                "samples=%d | features=%d | classes=%d | "
                 "min_class_count=%d | feasible_cv_splits=%d",
                 model_name,
                 diagnostics["failure_reason"],
@@ -998,8 +1018,8 @@ def train_model_safely(
             return fallback
 
         logger.warning(
-            "%s ML protocol failed; group-specific model will be skipped if a global fallback is available | "
-            "reason=%s | samples=%d | features=%d | classes=%d | min_class_count=%d | "
+            "%s ML protocol failed, so the group-specific model will be skipped if a global fallback is available because %s | "
+            "samples=%d | features=%d | classes=%d | min_class_count=%d | "
             "feasible_cv_splits=%d | rf_fallback_enabled=False",
             model_name,
             diagnostics["failure_reason"],
@@ -1647,6 +1667,23 @@ class TwoLevelProtocol:
         )
         log_stage_complete(logger, 3, "recursive hierarchy model training")
 
+        log_stage_start(logger, 4, "terminal hierarchy fallback training")
+        terminal_fallbacks = self._train_hierarchy_terminal_fallbacks(
+            X=X,
+            labels_df=labels_df,
+            hierarchy_labels=labels,
+            output_dir=hierarchy_dir / "terminal_fallbacks",
+            feature_manifest_df=feature_manifest_df,
+            algorithm=algorithm,
+        )
+        log_stage_complete(
+            logger,
+            4,
+            "terminal hierarchy fallback training",
+            status=terminal_fallbacks.get("status"),
+            target=terminal_fallbacks.get("target_label_column"),
+        )
+
         registry = {
             "protocol": "multi_level_hierarchy_protocol",
             "compatible_with": "NetworkParser hierarchical training registry",
@@ -1654,6 +1691,7 @@ class TwoLevelProtocol:
                 "label_columns": labels,
                 "n_levels": int(len(labels)),
                 "root": root_node,
+                "terminal_fallbacks": terminal_fallbacks,
             },
             "training_matrix": {
                 "aligned_matrix_csv": str(out / "aligned_hierarchy_matrix.csv"),
@@ -1915,6 +1953,285 @@ class TwoLevelProtocol:
         write_json(node_payload, node_dir / "node_summary.json")
         return node_payload
 
+    def _terminal_fallback_skip_payload(
+        self,
+        *,
+        status: str,
+        reason: str,
+        target_label_column: str,
+        fallback_scope: str,
+        output_dir: Path,
+        conditioning_label_column: Optional[str] = None,
+        conditioning_value: Optional[str] = None,
+        diagnostics: Optional[Dict[str, Any]] = None,
+        error: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Return a registry-safe skipped fallback payload."""
+        payload: Dict[str, Any] = {
+            "status": status,
+            "reason": reason,
+            "target_label_column": str(target_label_column),
+            "fallback_scope": str(fallback_scope),
+            "conditioning_label_column": conditioning_label_column,
+            "conditioning_value": conditioning_value,
+            "features": [],
+            "model_file": None,
+            "feature_manifest": None,
+            "filter": {},
+            "feature_panel_separability": {},
+            "diagnostics": diagnostics or {},
+        }
+        if error is not None:
+            payload["error"] = str(error)
+        write_json(payload, Path(output_dir) / "fallback_summary.json")
+        return payload
+
+    def _train_one_terminal_fallback_model(
+        self,
+        *,
+        X: pd.DataFrame,
+        y: pd.Series,
+        output_dir: Path,
+        feature_manifest_df: Optional[pd.DataFrame],
+        algorithm: Optional[str],
+        target_label_column: str,
+        fallback_scope: str,
+        conditioning_label_column: Optional[str] = None,
+        conditioning_value: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Train one terminal-label fallback model using the normal filtering path.
+
+        This is still training-time feature discovery: central statistical
+        filtering and panel selection run before model fitting. Query mode will
+        later use this model only when a deeper hierarchy branch is unavailable.
+        """
+        output_dir = ensure_dir(Path(output_dir))
+
+        y_clean = pd.Series(y, index=y.index).astype(str).str.strip()
+        y_clean = y_clean.replace({
+            "": pd.NA,
+            "-": pd.NA,
+            "NA": pd.NA,
+            "N/A": pd.NA,
+            "None": pd.NA,
+            "nan": pd.NA,
+            "NaN": pd.NA,
+        }).dropna()
+
+        common = X.index.intersection(y_clean.index)
+        X0 = X.loc[common].copy()
+        y0 = y_clean.loc[common].astype(str).copy()
+
+        stage_token = "hierarchy_terminal_fallback"
+        if conditioning_label_column is not None:
+            stage_token += f"__by_{safe_hierarchy_token(conditioning_label_column, 40)}"
+        if conditioning_value is not None:
+            stage_token += f"__{safe_hierarchy_token(conditioning_value, 60)}"
+
+        X_train, y_train, support_summary = apply_level2_class_support_filter(
+            X=X0,
+            y=y0,
+            output_dir=output_dir,
+            config=self.config,
+            stage_name=stage_token,
+            requested_cv_splits=5,
+        )
+        label_diag = label_distribution_diagnostics(y_train, requested_cv_splits=5)
+        adaptive_min = adaptive_level2_min_samples(label_diag)
+
+        skip_reasons: List[str] = []
+        if label_diag["n_classes"] < 2:
+            skip_reasons.append("single_class_after_support_filter")
+        elif label_diag["min_class_count"] < 2:
+            skip_reasons.append("insufficient_per_label_support_for_stratified_cv")
+        elif X_train.shape[0] < adaptive_min:
+            skip_reasons.append("insufficient_samples_for_terminal_fallback")
+
+        diagnostics = {
+            "n_samples": int(X_train.shape[0]),
+            "n_features_available": int(X_train.shape[1]),
+            "label_diagnostics": label_diag,
+            "class_support_filter": support_summary,
+            "adaptive_min_training_samples": int(adaptive_min),
+        }
+
+        if skip_reasons:
+            return self._terminal_fallback_skip_payload(
+                status="skipped",
+                reason="+".join(skip_reasons),
+                target_label_column=target_label_column,
+                fallback_scope=fallback_scope,
+                output_dir=output_dir,
+                conditioning_label_column=conditioning_label_column,
+                conditioning_value=conditioning_value,
+                diagnostics=diagnostics,
+            )
+
+        filter_result: Optional[Dict[str, Any]] = None
+        X_filtered: Optional[pd.DataFrame] = None
+        try:
+            filter_result = run_configured_feature_filter(
+                X=X_train,
+                y=y_train,
+                output_base_dir=output_dir,
+                config=self.config,
+                stage_name=stage_token,
+            )
+            filter_result = run_feature_panel_check_after_filter(
+                filter_result=filter_result,
+                y=y_train,
+                output_base_dir=output_dir,
+                config=self.config,
+                stage_name=f"{stage_token}__model_matrix",
+            )
+            X_filtered = filter_result["filtered_matrix"]
+            manifest_summary = write_selected_feature_manifest(
+                features=list(X_filtered.columns),
+                source_manifest=feature_manifest_df,
+                output_path=output_dir / "selected_feature_manifest.tsv",
+            )
+            model_summary = train_model_safely(
+                X=X_filtered,
+                y=y_train.loc[X_filtered.index],
+                output_dir=output_dir / "model",
+                config=self.config,
+                algorithm=algorithm,
+                model_name="hierarchy_terminal_fallback_model",
+            )
+        except Exception as exc:
+            failure_diag = diagnostics.copy()
+            failure_diag.update(
+                {
+                    "failure_reason": classify_ml_failure(exc),
+                    "error": str(exc),
+                    "n_features_at_failure": int(X_filtered.shape[1]) if isinstance(X_filtered, pd.DataFrame) else int(X_train.shape[1]),
+                }
+            )
+            return self._terminal_fallback_skip_payload(
+                status="skipped",
+                reason=classify_ml_failure(exc),
+                target_label_column=target_label_column,
+                fallback_scope=fallback_scope,
+                output_dir=output_dir,
+                conditioning_label_column=conditioning_label_column,
+                conditioning_value=conditioning_value,
+                diagnostics=failure_diag,
+                error=str(exc),
+            )
+
+        payload = {
+            "status": "success",
+            "reason": "trained_terminal_fallback",
+            "target_label_column": str(target_label_column),
+            "fallback_scope": str(fallback_scope),
+            "conditioning_label_column": conditioning_label_column,
+            "conditioning_value": conditioning_value,
+            "n_training_samples": int(X_filtered.shape[0]),
+            "training_label_diagnostics": label_diag,
+            "class_support_filter": support_summary,
+            "filter": filter_result["summary"],
+            "feature_panel_separability": filter_result.get("feature_panel_separability", {}),
+            "model": model_summary,
+            "features": list(X_filtered.columns),
+            "model_file": get_model_file(model_summary),
+            "feature_manifest": manifest_summary,
+        }
+        write_json(payload, output_dir / "fallback_summary.json")
+        return payload
+
+    def _train_hierarchy_terminal_fallbacks(
+        self,
+        *,
+        X: pd.DataFrame,
+        labels_df: pd.DataFrame,
+        hierarchy_labels: List[str],
+        output_dir: Path,
+        feature_manifest_df: Optional[pd.DataFrame],
+        algorithm: Optional[str],
+    ) -> Dict[str, Any]:
+        """Train broad terminal-label fallback models for recursive hierarchy query.
+
+        For a hierarchy such as Country -> Lineage -> Pheno, this trains:
+          1. Pheno within each Lineage across all countries.
+          2. A global Pheno fallback across all aligned samples.
+
+        These fallbacks do not replace the hierarchy. They are used only when a
+        deeper branch is skipped because the country-specific slice is too small
+        or otherwise untrainable.
+        """
+        output_dir = ensure_dir(Path(output_dir))
+        labels = [str(label).strip() for label in hierarchy_labels if str(label).strip()]
+        target_label = labels[-1]
+        parent_label = labels[-2] if len(labels) >= 2 else None
+
+        payload: Dict[str, Any] = {
+            "status": "started",
+            "target_label_column": str(target_label),
+            "preferred_parent_label_column": str(parent_label) if parent_label else None,
+            "fallback_order": ["by_parent_label", "global"],
+            "by_parent_label": {},
+            "global": {},
+        }
+
+        if target_label not in labels_df.columns:
+            payload.update({"status": "skipped", "reason": "target_label_missing_from_aligned_metadata"})
+            write_json(payload, output_dir / "terminal_fallbacks_summary.json")
+            return payload
+
+        if parent_label is not None and parent_label in labels_df.columns:
+            parent_block: Dict[str, Any] = {
+                "label_column": str(parent_label),
+                "target_label_column": str(target_label),
+                "models": {},
+            }
+            parent_values = sorted([str(v) for v in labels_df[parent_label].dropna().astype(str).str.strip().unique() if str(v).strip()])
+            for parent_value in parent_values:
+                idx = labels_df.index[labels_df[parent_label].astype(str).str.strip() == parent_value]
+                model_dir = output_dir / "by_parent_label" / safe_hierarchy_token(str(parent_label)) / safe_hierarchy_token(parent_value)
+                parent_block["models"][parent_value] = self._train_one_terminal_fallback_model(
+                    X=X.loc[X.index.intersection(idx)].copy(),
+                    y=labels_df.loc[idx, target_label],
+                    output_dir=model_dir,
+                    feature_manifest_df=feature_manifest_df,
+                    algorithm=algorithm,
+                    target_label_column=target_label,
+                    fallback_scope="by_parent_label",
+                    conditioning_label_column=parent_label,
+                    conditioning_value=parent_value,
+                )
+            payload["by_parent_label"][str(parent_label)] = parent_block
+
+        payload["global"] = self._train_one_terminal_fallback_model(
+            X=X.copy(),
+            y=labels_df[target_label],
+            output_dir=output_dir / "global",
+            feature_manifest_df=feature_manifest_df,
+            algorithm=algorithm,
+            target_label_column=target_label,
+            fallback_scope="global_terminal",
+            conditioning_label_column=None,
+            conditioning_value=None,
+        )
+
+        n_parent_success = 0
+        for block in payload.get("by_parent_label", {}).values():
+            if isinstance(block, dict):
+                for model_payload in block.get("models", {}).values():
+                    if isinstance(model_payload, dict) and model_payload.get("status") == "success":
+                        n_parent_success += 1
+
+        global_success = isinstance(payload.get("global"), dict) and payload["global"].get("status") == "success"
+        payload.update(
+            {
+                "status": "success" if (n_parent_success > 0 or global_success) else "skipped",
+                "reason": "trained_at_least_one_terminal_fallback" if (n_parent_success > 0 or global_success) else "no_trainable_terminal_fallbacks",
+                "n_parent_conditioned_fallbacks": int(n_parent_success),
+                "global_fallback_available": bool(global_success),
+            }
+        )
+        write_json(payload, output_dir / "terminal_fallbacks_summary.json")
+        return payload
+
     def _summarise_hierarchy_node(self, node: Dict[str, Any]) -> Dict[str, Any]:
         """Return a compact node summary for reports without duplicating model payloads."""
         children = node.get("children", {}) if isinstance(node, dict) else {}
@@ -1962,7 +2279,51 @@ class TwoLevelProtocol:
             n_jobs=getattr(self.config, "n_jobs", "NA"),
         )
 
-        log_stage_start(logger, 1, "load and preprocess genomic matrix")
+        with PipelineProgress(
+            _planned_two_level_stages(self.config, train_global_level2),
+            title="Two-level training",
+        ) as pipeline_progress:
+            return self._train_two_level_body(
+                genomic_path=genomic_path,
+                meta_path=meta_path,
+                level1_label=level1_label,
+                level2_label=level2_label,
+                out=out,
+                matrices_dir=matrices_dir,
+                level1_dir=level1_dir,
+                level2_dir=level2_dir,
+                ref_fasta=ref_fasta,
+                algorithm=algorithm,
+                train_global_level2=train_global_level2,
+                min_level2_samples_per_group=min_level2_samples_per_group,
+                global_level2_label=global_level2_label,
+                pipeline_progress=pipeline_progress,
+            )
+
+    def _train_two_level_body(
+        self,
+        *,
+        genomic_path: str,
+        meta_path: str,
+        level1_label: str,
+        level2_label: str,
+        out: Path,
+        matrices_dir: Path,
+        level1_dir: Path,
+        level2_dir: Path,
+        ref_fasta: Optional[str],
+        algorithm: Optional[str],
+        train_global_level2: bool,
+        min_level2_samples_per_group: Optional[int],
+        global_level2_label: Optional[str],
+        pipeline_progress: PipelineProgress,
+    ) -> Dict[str, Any]:
+        log_stage_start(
+            logger,
+            1,
+            "load and preprocess genomic matrix",
+            progress=pipeline_progress,
+        )
         X_raw_unfiltered = self.loader.load_genomic_matrix(
             file_path=genomic_path,
             output_dir=str(matrices_dir),
@@ -1977,6 +2338,7 @@ class TwoLevelProtocol:
             logger,
             1,
             "load and preprocess genomic matrix",
+            progress=pipeline_progress,
             samples=int(X_raw.shape[0]),
             features=int(X_raw.shape[1]),
         )
@@ -1992,7 +2354,12 @@ class TwoLevelProtocol:
         else:
             logger.info("Using feature manifest for query annotation: %s", str(feature_manifest_path))
 
-        log_stage_start(logger, 2, "load metadata and align two labels")
+        log_stage_start(
+            logger,
+            2,
+            "load metadata and align two labels",
+            progress=pipeline_progress,
+        )
         meta = self.loader.load_metadata(meta_path, output_dir=str(out))
 
         X, y_level1, y_level2 = align_two_labels(
@@ -2018,6 +2385,7 @@ class TwoLevelProtocol:
             logger,
             2,
             "load metadata and align two labels",
+            progress=pipeline_progress,
             samples=int(X.shape[0]),
             features=int(X.shape[1]),
         )
@@ -2059,7 +2427,12 @@ class TwoLevelProtocol:
         # ------------------------------------------------------------------
         # Level 1: strain / lineage / group placement
         # ------------------------------------------------------------------
-        log_stage_start(logger, 3, "Level 1 placement filtering and model training")
+        log_stage_start(
+            logger,
+            3,
+            "Level 1 placement filtering and model training",
+            progress=pipeline_progress,
+        )
         level1_filter = run_configured_feature_filter(
             X=X,
             y=y_level1,
@@ -2093,6 +2466,7 @@ class TwoLevelProtocol:
             logger,
             3,
             "Level 1 placement filtering and model training",
+            progress=pipeline_progress,
             features=int(X_level1.shape[1]),
             status=level1_model.get("status", "complete") if isinstance(level1_model, dict) else "complete",
         )
@@ -2102,6 +2476,7 @@ class TwoLevelProtocol:
         # ------------------------------------------------------------------
         global_level2_payload: Dict[str, Any] = {"status": "skipped"}
         if train_global_level2:
+            pipeline_progress.begin_stage("global Level-2 fallback training")
             global_dir = ensure_dir(level2_dir / "global_fallback")
             X_level2_global_source, y_level2_global_source, global_class_support = apply_level2_class_support_filter(
                 X=X_global_level2_base,
@@ -2199,7 +2574,7 @@ class TwoLevelProtocol:
                         }
                     )
                     logger.warning(
-                        "Global Level-2 model skipped | reason=%s | samples=%d | "
+                        "Global Level-2 model skipped because %s | samples=%d | "
                         "features=%d | classes=%d | min_class_count=%d | feasible_cv_splits=%d",
                         failure_reason,
                         int(failure_diag["n_samples"]),
@@ -2224,6 +2599,7 @@ class TwoLevelProtocol:
                         "level2_label_diagnostics": global_label_diag,
                     }
                     write_json(global_level2_payload, global_dir / "global_level2_summary.json")
+            pipeline_progress.complete_stage("global Level-2 fallback training")
 
         global_binary_level2_payload: Dict[str, Any] = {"status": "skipped", "reason": "disabled"}
         # ------------------------------------------------------------------
@@ -2231,7 +2607,12 @@ class TwoLevelProtocol:
         # ------------------------------------------------------------------
         if getattr(self.config, "level2_train_binary_global_fallback", False):
             binary_dir = ensure_dir(level2_dir / "global_binary_fallback")
-            log_stage_start(logger, "5", "optional global binary Level-2 fallback")
+            log_stage_start(
+                logger,
+                "5",
+                "optional global binary Level-2 fallback",
+                progress=pipeline_progress,
+            )
 
             y_binary_source, binary_label_summary = build_level2_binary_labels(
                 X=X,
@@ -2255,6 +2636,13 @@ class TwoLevelProtocol:
                     "global binary Level-2 fallback",
                     "skipped",
                     reason=global_binary_level2_payload["reason"],
+                )
+                log_stage_complete(
+                    logger,
+                    "5",
+                    "optional global binary Level-2 fallback",
+                    progress=pipeline_progress,
+                    status="skipped",
                 )
             else:
                 X_binary_source = X.loc[X.index.intersection(y_binary_source.index)].copy()
@@ -2305,6 +2693,13 @@ class TwoLevelProtocol:
                         reason=reason,
                         samples=int(binary_label_diag["n_samples"]),
                         classes=int(binary_label_diag["n_classes"]),
+                    )
+                    log_stage_complete(
+                        logger,
+                        "5",
+                        "optional global binary Level-2 fallback",
+                        progress=pipeline_progress,
+                        status="skipped",
                     )
                 else:
                     binary_filter: Optional[Dict[str, Any]] = None
@@ -2367,6 +2762,7 @@ class TwoLevelProtocol:
                             logger,
                             "5",
                             "optional global binary Level-2 fallback",
+                            progress=pipeline_progress,
                             status="success",
                             features=int(X_binary_filtered.shape[1]),
                         )
@@ -2395,7 +2791,7 @@ class TwoLevelProtocol:
                         }
                         write_json(global_binary_level2_payload, binary_dir / "global_binary_level2_summary.json")
                         logger.warning(
-                            "Global binary Level-2 fallback skipped | reason=%s | samples=%d | features=%d | classes=%d | min_class_count=%d | feasible_cv_splits=%d",
+                            "Global binary Level-2 fallback skipped because %s | samples=%d | features=%d | classes=%d | min_class_count=%d | feasible_cv_splits=%d",
                             failure_reason,
                             int(failure_diag["n_samples"]),
                             int(failure_diag["n_features_at_failure"]),
@@ -2404,12 +2800,26 @@ class TwoLevelProtocol:
                             int(failure_diag["feasible_selector_cv_splits"]),
                         )
                         logger.debug("Global binary Level-2 training traceback", exc_info=True)
+                        log_stage_complete(
+                            logger,
+                            "5",
+                            "optional global binary Level-2 fallback",
+                            progress=pipeline_progress,
+                            status="skipped",
+                        )
 
         # ------------------------------------------------------------------
         # Level 2 per level-1 group: resistance prediction within placement
         # ------------------------------------------------------------------
+        pipeline_progress.begin_stage("per-group Level-2 training")
         subgroup_payload: Dict[str, Any] = {}
-        for group_value in sorted(y_level1.astype(str).unique()):
+        group_values = sorted(y_level1.astype(str).unique())
+        for group_value in progress_iter(
+            group_values,
+            desc="Level-2 per-group training",
+            unit="group",
+            leave=False,
+        ):
             group_mask = y_level1.astype(str) == str(group_value)
             group_samples = y_level1.index[group_mask]
             X_group = X.loc[group_samples].copy()
@@ -2471,7 +2881,7 @@ class TwoLevelProtocol:
                 skip_table.to_csv(skip_table_path, sep="\t", index=False)
 
                 logger.info(
-                    "Group %s: skipping group-specific Level-2 model | reason=%s | "
+                    "Group %s: skipping group-specific Level-2 model because %s | "
                     "training_samples=%d | adaptive_min_samples=%d | labels=%d | "
                     "min_class_count=%d | feasible_cv_splits=%d | wrote_diagnostics=%s",
                     str(group_value),
@@ -2543,7 +2953,7 @@ class TwoLevelProtocol:
                 )
 
                 logger.warning(
-                    "Group %s: group-specific Level-2 model skipped | reason=%s | "
+                    "Group %s: group-specific Level-2 model skipped because %s | "
                     "samples=%d | features=%s | classes=%d | min_class_count=%d | "
                     "feasible_cv_splits=%d | prediction_source=%s",
                     str(group_value),
@@ -2629,9 +3039,12 @@ class TwoLevelProtocol:
             "config": asdict(self.config) if is_dataclass(self.config) else vars(self.config),
         }
 
+        pipeline_progress.complete_stage("per-group Level-2 training")
+
         registry_path = out / "two_level_model_registry.json"
         write_json(registry, registry_path)
         logger.info("Two-level training complete: %s", registry_path)
+        pipeline_progress.complete_stage("finalize two-level registry")
         return registry
 
     def predict(

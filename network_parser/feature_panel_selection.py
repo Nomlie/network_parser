@@ -40,6 +40,14 @@ from sklearn.preprocessing import StandardScaler
 
 logger = logging.getLogger(__name__)
 
+try:
+    from network_parser.utils import progress_iter
+except Exception:  # pragma: no cover
+    try:
+        from utils import progress_iter  # type: ignore
+    except Exception:  # pragma: no cover
+        progress_iter = lambda iterable, **kwargs: iterable  # type: ignore
+
 
 # -----------------------------------------------------------------------------
 # Small local utilities
@@ -702,7 +710,12 @@ def run_feature_panel_separability_check(
 
     panel_records: List[Dict[str, Any]] = []
 
-    for panel_size in candidate_sizes:
+    for panel_size in progress_iter(
+        candidate_sizes,
+        desc=f"{stage_name} feature-panel scoring",
+        unit="panel",
+        leave=False,
+    ):
         feature_source = ranked_features if panel_size > len(scoring_ranked_features) else scoring_ranked_features
         panel_features = [feature for feature in feature_source[:panel_size] if feature in X_aligned.columns]
         if not panel_features:
@@ -787,7 +800,7 @@ def run_feature_panel_separability_check(
         json.dump(summary, handle, indent=2, default=_json_default)
 
     logger.info(
-        "%s feature-panel separability complete | selected_features=%d / %d | reason=%s",
+        "%s feature-panel separability complete with %d / %d features; %s",
         stage_name,
         int(X_selected.shape[1]),
         int(X_aligned.shape[1]),

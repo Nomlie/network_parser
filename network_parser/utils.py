@@ -17,10 +17,12 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import re
+import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Union
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Union
 
 try:
     from .config import NetworkParserConfig
@@ -177,6 +179,103 @@ def format_log_kv(**fields: Any) -> str:
     return " | ".join(clean)
 
 
+def _normalize_sentence(text: str) -> str:
+    """Return a single sentence with stable terminal punctuation."""
+    body = str(text or "").strip()
+    if not body:
+        return ""
+    if body[-1] not in ".!?":
+        body += "."
+    return body
+
+
+def _join_step_narrative(happened: str, reason: str) -> str:
+    """Combine action and rationale into plain prose without section labels."""
+    parts = [_normalize_sentence(part) for part in (happened, reason)]
+    return " ".join(part for part in parts if part)
+
+
+def progress_enabled() -> bool:
+    """Return whether tqdm progress bars should be shown."""
+    flag = os.environ.get("NETWORKPARSER_DISABLE_PROGRESS", "").strip().lower()
+    if flag in {"1", "true", "yes", "on"}:
+        return False
+    isatty = getattr(sys.stderr, "isatty", None)
+    return bool(isatty and isatty())
+
+
+def progress_iter(
+    iterable: Iterable[Any],
+    *,
+    desc: str = "",
+    total: int | None = None,
+    unit: str = "",
+    leave: bool = False,
+    position: int | None = None,
+):
+    """Wrap an iterable with tqdm when progress display is enabled."""
+    try:
+        from tqdm.auto import tqdm
+    except Exception:  # pragma: no cover - tqdm is an environment dependency
+        return iterable
+
+    return tqdm(
+        iterable,
+        desc=desc,
+        total=total,
+        unit=unit,
+        leave=leave,
+        position=position,
+        disable=not progress_enabled(),
+        dynamic_ncols=True,
+    )
+
+
+class PipelineProgress:
+    """Track high-level pipeline stage completion with a progress bar."""
+
+    def __init__(self, stages: Sequence[str], *, title: str = "Pipeline") -> None:
+        self._stages = [str(stage) for stage in stages]
+        self._title = str(title)
+        self._bar = None
+        if not self._stages:
+            return
+        try:
+            from tqdm.auto import tqdm
+        except Exception:  # pragma: no cover
+            return
+        self._bar = tqdm(
+            total=len(self._stages),
+            desc=self._title,
+            unit="stage",
+            leave=True,
+            disable=not progress_enabled(),
+            dynamic_ncols=True,
+        )
+
+    def begin_stage(self, name: str) -> None:
+        if self._bar is not None:
+            self._bar.set_description(f"{self._title} — {name}")
+
+    def complete_stage(self, name: str = "") -> None:
+        if self._bar is None:
+            return
+        if name:
+            self._bar.set_postfix_str(str(name)[:48], refresh=False)
+        self._bar.update(1)
+
+    def close(self) -> None:
+        if self._bar is not None:
+            self._bar.close()
+            self._bar = None
+
+    def __enter__(self) -> "PipelineProgress":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
+
+
 def log_pipeline_header(log: logging.Logger, title: str, **fields: Any) -> None:
     """Emit a clear run-level banner without exposing feature names or labels."""
     line = "=" * 78
@@ -187,22 +286,46 @@ def log_pipeline_header(log: logging.Logger, title: str, **fields: Any) -> None:
     log.info(line)
 
 
-def log_stage_start(log: logging.Logger, stage: Union[int, str], name: str, **fields: Any) -> None:
+def log_stage_start(
+    log: logging.Logger,
+    stage: Union[int, str],
+    name: str,
+    *,
+    progress: PipelineProgress | None = None,
+    **fields: Any,
+) -> None:
     """Emit a standard stage-start message."""
+    if progress is not None:
+        progress.begin_stage(name)
     suffix = f" | {format_log_kv(**fields)}" if fields else ""
     log.info("▶ Stage %s — %s%s", stage, name, suffix)
 
 
-def log_stage_complete(log: logging.Logger, stage: Union[int, str], name: str, **fields: Any) -> None:
+def log_stage_complete(
+    log: logging.Logger,
+    stage: Union[int, str],
+    name: str,
+    *,
+    progress: PipelineProgress | None = None,
+    **fields: Any,
+) -> None:
     """Emit a standard stage-complete message."""
     suffix = f" | {format_log_kv(**fields)}" if fields else ""
     log.info("✓ Stage %s complete — %s%s", stage, name, suffix)
+    if progress is not None:
+        progress.complete_stage(name)
 
 
 def log_branch_decision(log: logging.Logger, branch: str, status: str, **fields: Any) -> None:
     """Emit a concise branch decision message for optional workflow branches."""
+    fields = dict(fields)
+    reason = fields.pop("reason", None)
     suffix = f" | {format_log_kv(**fields)}" if fields else ""
-    log.info("Branch decision — %s: %s%s", branch, status, suffix)
+    if reason:
+        reason_text = _normalize_sentence(str(reason)).rstrip(".")
+        log.info("Branch decision — %s: %s; %s%s", branch, status, reason_text, suffix)
+    else:
+        log.info("Branch decision — %s: %s%s", branch, status, suffix)
 
 
 def log_artifact(log: logging.Logger, label: str, path: Union[str, Path]) -> None:
@@ -408,15 +531,16 @@ def log_flow_step(
     status: str | None = None,
     artifact: Union[str, Path, None] = None,
 ) -> None:
-    """Log a user-facing explanation block answering what, why, and movement.
+    """Log a user-facing explanation block with action, rationale, and movement.
 
     This is intentionally INFO-level because it explains the statistical and
     preprocessing rationale. Exact feature/sample identifiers should remain in
     DEBUG logs or audit artifacts.
     """
     log.info("%s", step)
-    log.info("  What happened: %s", happened)
-    log.info("  Why it happened: %s", reason)
+    narrative = _join_step_narrative(happened, reason)
+    if narrative:
+        log.info("  %s", narrative)
 
     movement = format_log_kv(
         input_samples=before_samples,
@@ -427,9 +551,9 @@ def log_flow_step(
         status=status,
     )
     if movement:
-        log.info("  Data moved forward: %s", movement)
+        log.info("  %s", movement)
     if artifact is not None:
-        log.info("  Audit artifact: %s", str(artifact))
+        log.info("  Wrote audit record to %s", str(artifact))
 
 
 def log_filter_step(

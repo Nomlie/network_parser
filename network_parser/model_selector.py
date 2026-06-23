@@ -1,9 +1,12 @@
 # network_parser/model_selector.py
 from __future__ import annotations
 
+import os
 import warnings
 from collections import Counter
-from typing import Dict, Any, List, Tuple
+from typing import Any, Dict, List, Tuple
+
+from joblib import Parallel, delayed
 
 import numpy as np
 import pandas as pd
@@ -21,6 +24,18 @@ from sklearn.neural_network import MLPClassifier
 from sklearn.tree import DecisionTreeClassifier
 
 from sklearn.exceptions import ConvergenceWarning
+
+try:
+    from network_parser.utils import progress_iter
+except Exception:  # pragma: no cover
+    try:
+        from utils import progress_iter  # type: ignore
+    except Exception:  # pragma: no cover
+        progress_iter = lambda iterable, **kwargs: iterable  # type: ignore
+
+
+def _probe_one(name: str, estimator, X: np.ndarray, y: np.ndarray) -> Tuple[str, float]:
+    return name, _cv_score(estimator, X, y)
 
 
 def _basic_stats(X: np.ndarray, y: np.ndarray) -> Dict[str, Any]:
@@ -139,32 +154,62 @@ def probe_models(X: np.ndarray, y: np.ndarray) -> Dict[str, float]:
         random_state=42,
     )
 
-    rf = RandomForestClassifier(
-        n_estimators=300,
-        max_features="sqrt",
-        n_jobs=-1,
-        random_state=42,
-    )
-
-    mlp = Pipeline([
-        ("scaler", StandardScaler()),
-        ("clf", MLPClassifier(
-            hidden_layer_sizes=(64,),
-            max_iter=1000,
-            alpha=1e-4,
-            learning_rate_init=1e-3,
+    probe_specs: List[Tuple[str, Any]] = [
+        ("LR", lr),
+        ("LinearSVC", linsvc),
+        ("SVC_RBF", svc_rbf),
+        ("RF", RandomForestClassifier(
+            n_estimators=300,
+            max_features="sqrt",
+            n_jobs=-1,
             random_state=42,
         )),
-    ])
+        ("DT", dt),
+        ("MLP_small", Pipeline([
+            ("scaler", StandardScaler()),
+            ("clf", MLPClassifier(
+                hidden_layer_sizes=(64,),
+                max_iter=1000,
+                alpha=1e-4,
+                learning_rate_init=1e-3,
+                random_state=42,
+            )),
+        ])),
+    ]
 
-    probes["LR"] = _cv_score(lr, X, y)
-    probes["LinearSVC"] = _cv_score(linsvc, X, y)
-    probes["SVC_RBF"] = _cv_score(svc_rbf, X, y)
-    probes["RF"] = _cv_score(rf, X, y)
-    probes["DT"] = _cv_score(dt, X, y)
-    probes["MLP_small"] = _cv_score(mlp, X, y)
+    n_probe_jobs = min(len(probe_specs), max(1, os.cpu_count() or 1))
+    if n_probe_jobs > 1:
+        parallel_specs: List[Tuple[str, Any]] = []
+        for name, estimator in probe_specs:
+            if name == "RF" and isinstance(estimator, RandomForestClassifier):
+                parallel_specs.append((
+                    name,
+                    RandomForestClassifier(
+                        n_estimators=300,
+                        max_features="sqrt",
+                        n_jobs=1,
+                        random_state=42,
+                    ),
+                ))
+            else:
+                parallel_specs.append((name, estimator))
+        probe_specs = parallel_specs
 
-    return probes
+    if n_probe_jobs <= 1:
+        for name, estimator in progress_iter(probe_specs, desc="Model screening probes", unit="model", leave=False):
+            probes[name] = _cv_score(estimator, X, y)
+        return probes
+
+    probe_results = Parallel(n_jobs=n_probe_jobs)(
+        delayed(_probe_one)(name, estimator, X, y)
+        for name, estimator in progress_iter(
+            probe_specs,
+            desc="Model screening probes",
+            unit="model",
+            leave=False,
+        )
+    )
+    return dict(probe_results)
 
 
 def _normalize_algo_name(name: str) -> str:

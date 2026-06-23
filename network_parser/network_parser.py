@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple, List
 
@@ -32,6 +33,7 @@ try:
         audit_warning,
         write_stage_checkpoint,
         load_stage_checkpoint,
+        PipelineProgress,
     )
 except Exception:  # pragma: no cover
     from config import NetworkParserConfig  # type: ignore
@@ -56,7 +58,38 @@ except Exception:  # pragma: no cover
         audit_warning,
         write_stage_checkpoint,
         load_stage_checkpoint,
+        PipelineProgress,
     )
+
+
+def _planned_single_label_stages(
+    config: NetworkParserConfig,
+    mode: str,
+    meta_path: Optional[str],
+    validate_interactions: bool,
+) -> List[str]:
+    """Return the ordered stage labels used for the pipeline progress bar."""
+    stages: List[str] = ["load and preprocess genomic matrix"]
+    if meta_path:
+        stages.append("load metadata")
+    if mode == "matrix_only":
+        stages.append("finalize results")
+        return stages
+
+    if meta_path:
+        stages.append("supervised sample alignment")
+    stages.append("central statistical filtering")
+    stages.append("ranked feature-panel separability check")
+
+    run_ml = mode in {"ml_only", "both"} or bool(getattr(config, "run_ml_protocol", False))
+    if run_ml:
+        stages.append("ML protocol and model screening")
+    if mode in {"both", "decision_tree_only"}:
+        stages.append("conditional decision-tree interpretability")
+        if validate_interactions:
+            stages.append("optional post-tree interaction validation")
+    stages.append("finalize results")
+    return stages
 
 
 try:
@@ -971,6 +1004,51 @@ class NetworkParser:
             n_jobs=getattr(self.config, "n_jobs", "NA"),
         )
 
+        progress_stages = (
+            []
+            if mode == "two_level"
+            else _planned_single_label_stages(self.config, mode, meta_path, validate_interactions)
+        )
+        progress_ctx = (
+            PipelineProgress(progress_stages, title="NetworkParser pipeline")
+            if progress_stages
+            else nullcontext()
+        )
+
+        with progress_ctx as pipeline_progress:
+            return self._run_single_label_pipeline_body(
+                genomic_path=genomic_path,
+                meta_path=meta_path,
+                label_column=label_column,
+                known_markers_path=known_markers_path,
+                output_dir=output_dir,
+                validate_statistics=validate_statistics,
+                validate_interactions=validate_interactions,
+                ref_fasta=ref_fasta,
+                level1_label_column=level1_label_column,
+                level2_label_column=level2_label_column,
+                mode=mode,
+                pipeline_progress=pipeline_progress,
+            )
+
+    def _run_single_label_pipeline_body(
+        self,
+        *,
+        genomic_path: str,
+        meta_path: Optional[str],
+        label_column: Optional[str],
+        known_markers_path: Optional[str],
+        output_dir: str,
+        validate_statistics: bool,
+        validate_interactions: bool,
+        ref_fasta: Optional[str],
+        level1_label_column: Optional[str],
+        level2_label_column: Optional[str],
+        mode: str,
+        pipeline_progress: PipelineProgress | None,
+    ) -> Dict[str, Any]:
+        output_dir_path = Path(output_dir)
+
         if mode == "two_level":
             if meta_path is None:
                 raise ValueError(
@@ -1061,7 +1139,12 @@ class NetworkParser:
                 title="NetworkParser two-level final run summary",
             )
             return results
-        log_stage_start(logger, 1, "load and preprocess genomic matrix")
+        log_stage_start(
+            logger,
+            1,
+            "load and preprocess genomic matrix",
+            progress=pipeline_progress,
+        )
 
         genomic_df = self._load_matrix_checkpoint(output_dir_path, "stage1_preprocessed_matrix")
         if genomic_df is not None:
@@ -1100,17 +1183,24 @@ class NetworkParser:
             logger,
             1,
             "load and preprocess genomic matrix",
+            progress=pipeline_progress,
             samples=int(genomic_df.shape[0]),
             features=int(genomic_df.shape[1]),
         )
         meta_df = None
         if meta_path:
-            log_stage_start(logger, "2a", "load metadata")
+            log_stage_start(
+                logger,
+                "2a",
+                "load metadata",
+                progress=pipeline_progress,
+            )
             meta_df = self.loader.load_metadata(meta_path, output_dir=output_dir)
             log_stage_complete(
                 logger,
                 "2a",
                 "load metadata",
+                progress=pipeline_progress,
                 rows=int(meta_df.shape[0]),
                 columns=int(meta_df.shape[1]),
             )
@@ -1162,6 +1252,8 @@ class NetworkParser:
                 results=results,
                 results_path=results_path,
             )
+            if pipeline_progress is not None:
+                pipeline_progress.complete_stage("finalize results")
             return results
 
         if meta_df is None:
@@ -1176,12 +1268,18 @@ class NetworkParser:
                 "primarily by config.run_central_feature_filtering."
             )
 
-        log_stage_start(logger, "2b", "supervised sample alignment")
+        log_stage_start(
+            logger,
+            "2b",
+            "supervised sample alignment",
+            progress=pipeline_progress,
+        )
         X, y = self._align_X_y(genomic_df, meta_df, label_column=label_column)
         log_stage_complete(
             logger,
             "2b",
             "supervised sample alignment",
+            progress=pipeline_progress,
             samples=int(X.shape[0]),
             features=int(X.shape[1]),
         )
@@ -1242,7 +1340,12 @@ class NetworkParser:
             )
             return results
 
-        log_stage_start(logger, 3, "central statistical filtering")
+        log_stage_start(
+            logger,
+            3,
+            "central statistical filtering",
+            progress=pipeline_progress,
+        )
         feature_filter_result: Dict[str, Any]
         feature_filter_summary: Dict[str, Any]
         X_filtered = self._load_matrix_checkpoint(output_dir_path, "stage3_central_filtered_matrix")
@@ -1285,11 +1388,17 @@ class NetworkParser:
             logger,
             3,
             "central statistical filtering",
+            progress=pipeline_progress,
             retained_features=int(X_filtered.shape[1]),
             input_features=int(X.shape[1]),
         )
 
-        log_stage_start(logger, 4, "ranked feature-panel separability check")
+        log_stage_start(
+            logger,
+            4,
+            "ranked feature-panel separability check",
+            progress=pipeline_progress,
+        )
         X_model = self._load_matrix_checkpoint(output_dir_path, "stage4_model_matrix")
         panel_checkpoint = load_stage_checkpoint(output_dir_path, "stage4_feature_panel") if bool(getattr(self.config, "resume_from_checkpoints", False)) else None
         if X_model is not None and isinstance(panel_checkpoint, dict):
@@ -1341,6 +1450,7 @@ class NetworkParser:
             logger,
             4,
             "ranked feature-panel separability check",
+            progress=pipeline_progress,
             selected_features=int(X_model.shape[1]),
             input_features=int(X_filtered.shape[1]),
         )
@@ -1353,7 +1463,12 @@ class NetworkParser:
             run_ml = False 
 
         if run_ml:
-            log_stage_start(logger, 5, "ML protocol and model screening")
+            log_stage_start(
+                logger,
+                5,
+                "ML protocol and model screening",
+                progress=pipeline_progress,
+            )
             log_flow_step(
                 logger,
                 step="Model-screening checkpoint — ML protocol",
@@ -1375,6 +1490,7 @@ class NetworkParser:
                 logger,
                 5,
                 "ML protocol and model screening",
+                progress=pipeline_progress,
                 selected_algorithm=ml_results.get("selected_algorithm"),
                 features=int(X_model.shape[1]),
             )
@@ -1405,7 +1521,12 @@ class NetworkParser:
         run_tree = self._should_run_decision_tree(mode=mode, ml_results=ml_results)
 
         if run_tree:
-            log_stage_start(logger, 6, "conditional decision-tree interpretability")
+            log_stage_start(
+                logger,
+                6,
+                "conditional decision-tree interpretability",
+                progress=pipeline_progress,
+            )
             log_flow_step(
                 logger,
                 step="Interpretability checkpoint — decision tree",
@@ -1429,6 +1550,7 @@ class NetworkParser:
                 logger,
                 6,
                 "conditional decision-tree interpretability",
+                progress=pipeline_progress,
                 discovered_features=len(discovery_results.get("discovered_features", [])),
                 interactions=len(discovery_results.get("epistatic_interactions", [])),
             )
@@ -1443,7 +1565,12 @@ class NetworkParser:
             )
 
             if validate_interactions:
-                log_stage_start(logger, 7, "optional post-tree interaction validation")
+                log_stage_start(
+                    logger,
+                    7,
+                    "optional post-tree interaction validation",
+                    progress=pipeline_progress,
+                )
                 interaction_pairs = self._extract_interaction_pairs(
                     discovery_results.get("epistatic_interactions", [])
                 )
@@ -1464,6 +1591,13 @@ class NetworkParser:
                         "status": "skipped",
                         "reason": "no_interactions_detected",
                     }
+                log_stage_complete(
+                    logger,
+                    7,
+                    "optional post-tree interaction validation",
+                    progress=pipeline_progress,
+                    status=validation_results.get("interactions", {}).get("status", "complete"),
+                )
         else:
             log_branch_decision(
                 logger,
@@ -1472,6 +1606,10 @@ class NetworkParser:
                 reason="conditional trigger not met",
                 mode=mode,
             )
+            if pipeline_progress is not None and mode in {"both", "decision_tree_only"}:
+                pipeline_progress.complete_stage("decision-tree skipped")
+                if validate_interactions:
+                    pipeline_progress.complete_stage("interaction validation skipped")
             self._write_checkpoint(
                 output_dir_path,
                 "stage6_decision_tree",
@@ -1516,6 +1654,9 @@ class NetworkParser:
             results=results,
             results_path=results_path,
         )
+
+        if pipeline_progress is not None:
+            pipeline_progress.complete_stage("finalize results")
 
         return results
 

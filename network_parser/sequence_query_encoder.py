@@ -31,7 +31,6 @@ from __future__ import annotations
 import gzip
 import json
 import logging
-import os
 import shutil
 import subprocess
 from collections import Counter, defaultdict
@@ -448,7 +447,6 @@ def run_blast_context_mapping(
     rows: List[Dict[str, str]],
     output_dir: Path,
     min_query_coverage: float = 0.80,
-    num_threads: int = 1,
 ) -> Dict[str, Dict[str, Any]]:
     """Best-effort BLAST mapping of context sequences to a raw sample FASTA."""
     if not blast_available():
@@ -458,7 +456,6 @@ def run_blast_context_mapping(
     query_fasta = blast_dir / "selected_feature_contexts.fasta"
     db_prefix = blast_dir / f"{sample_fasta.stem}.blastdb"
     out_tsv = blast_dir / f"{sample_fasta.stem}.blast.tsv"
-    num_threads = max(1, int(num_threads or 1))
 
     write_context_query_fasta(rows, query_fasta)
 
@@ -482,8 +479,6 @@ def run_blast_context_mapping(
             "6 qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore",
             "-out",
             str(out_tsv),
-            "-num_threads",
-            str(num_threads),
         ],
         check=True,
         stdout=subprocess.PIPE,
@@ -795,6 +790,17 @@ def parse_vcf_calls(path: Path) -> Dict[Tuple[str, int], Dict[str, Any]]:
     return calls
 
 
+def _build_vcf_position_index(calls: Dict[Tuple[str, int], Dict[str, Any]]) -> Dict[int, List[Dict[str, Any]]]:
+    """Build a per-position lookup for fast contig-name fallback in VCF query mode."""
+    index: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+    for (_, pos), payload in calls.items():
+        try:
+            index[int(pos)].append(payload)
+        except Exception:
+            continue
+    return index
+
+
 def _manifest_coordinate_keys(row: Dict[str, str]) -> Tuple[str, int]:
     sequence = str(row.get("Sequence", "")).strip()
     try:
@@ -808,7 +814,11 @@ def _manifest_coordinate_keys(row: Dict[str, str]) -> Tuple[str, int]:
     return sequence, pos
 
 
-def _vcf_mapping_for_row(row: Dict[str, str], calls: Dict[Tuple[str, int], Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+def _vcf_mapping_for_row(
+    row: Dict[str, str],
+    calls: Dict[Tuple[str, int], Dict[str, Any]],
+    position_index: Optional[Dict[int, List[Dict[str, Any]]]] = None,
+) -> Optional[Dict[str, Any]]:
     """Create a mapping record for one trained feature from a VCF call set.
 
     If the VCF has no record at the trained coordinate, we treat the observed
@@ -829,7 +839,10 @@ def _vcf_mapping_for_row(row: Dict[str, str], calls: Dict[Tuple[str, int], Dict[
     call = calls.get((sequence, pos))
     coordinate_match = "exact_sequence_position"
     if call is None:
-        position_hits = [payload for (chrom, p), payload in calls.items() if p == pos]
+        if position_index is None:
+            position_hits = [payload for (chrom, p), payload in calls.items() if p == pos]
+        else:
+            position_hits = position_index.get(pos, [])
         if len(position_hits) == 1:
             call = position_hits[0]
             coordinate_match = "position_only_fallback"
@@ -1031,6 +1044,140 @@ def _write_selected_feature_outputs(
     return summary, pd.DataFrame(per_sample)
 
 
+def _enrich_vcf_per_sample_summary(rows: List[Dict[str, Any]]) -> None:
+    """Add fraction/status fields to precomputed VCF per-sample summary rows."""
+    for item in rows:
+        n = max(1, int(item.get("n_feature_calls", 0)))
+        unique_fraction = float(item.get("n_unique_mapped_calls", 0) / n)
+        active_fraction = float(item.get("n_encoded_active_features", 0) / n)
+        resolved_fraction = float(item.get("n_resolved_features", 0) / n)
+        resolved_baseline_fraction = float(item.get("n_resolved_baseline_features", 0) / n)
+        recovery_status, recovery_reason = _marker_recovery_status(unique_fraction)
+        active_status, active_reason = _active_evidence_status(
+            active_fraction, int(item.get("n_encoded_active_features", 0))
+        )
+        resolved_status, resolved_reason = _resolved_marker_evidence_status(
+            resolved_fraction, int(item.get("n_resolved_features", 0))
+        )
+        item["unique_mapped_fraction"] = unique_fraction
+        item["active_feature_fraction"] = active_fraction
+        item["resolved_feature_fraction"] = resolved_fraction
+        item["resolved_baseline_feature_fraction"] = resolved_baseline_fraction
+        item["marker_recovery_status"] = recovery_status
+        item["marker_recovery_reason"] = recovery_reason
+        item["active_marker_evidence_status"] = active_status
+        item["active_marker_evidence_reason"] = active_reason
+        item["resolved_marker_evidence_status"] = resolved_status
+        item["resolved_marker_evidence_reason"] = resolved_reason
+
+
+def _write_vcf_selected_feature_outputs_from_counts(
+    *,
+    matrix: pd.DataFrame,
+    calls: pd.DataFrame,
+    out: Path,
+    per_sample: List[Dict[str, Any]],
+    global_counts: Dict[str, Any],
+    compact_call_table: bool,
+) -> Dict[str, Any]:
+    """Write VCF query artifacts without requiring a full sample × feature call table."""
+    matrix_path = out / "vcf_selected_feature_matrix.csv"
+    calls_path = out / "vcf_feature_calls.tsv"
+    per_sample_path = out / "vcf_sample_mapping_summary.tsv"
+    summary_path = out / "vcf_mapping_summary.json"
+
+    matrix.to_csv(matrix_path)
+    calls.to_csv(calls_path, sep="\t", index=False)
+    _enrich_vcf_per_sample_summary(per_sample)
+    pd.DataFrame(per_sample).to_csv(per_sample_path, sep="\t", index=False)
+
+    n_calls = int(global_counts.get("n_feature_calls", 0))
+    unique_mapped = int(global_counts.get("n_unique_mapped_calls", 0))
+    active_features = int(global_counts.get("n_encoded_active_feature_calls", 0))
+    resolved_features = int(global_counts.get("n_resolved_features", 0))
+    resolved_baseline_features = int(global_counts.get("n_resolved_baseline_features", 0))
+    resolved_nonbaseline_features = int(global_counts.get("n_resolved_nonbaseline_features", 0))
+
+    unique_fraction = float(unique_mapped / max(1, n_calls))
+    active_fraction = float(active_features / max(1, n_calls))
+    resolved_fraction = float(resolved_features / max(1, n_calls))
+    resolved_baseline_fraction = float(resolved_baseline_features / max(1, n_calls))
+    recovery_status, recovery_reason = _marker_recovery_status(unique_fraction)
+    active_status, active_reason = _active_evidence_status(active_fraction, active_features)
+    resolved_status, resolved_reason = _resolved_marker_evidence_status(resolved_fraction, resolved_features)
+
+    summary = {
+        "mode": "vcf_manifest_coordinate_encoding",
+        "mapping_mode_requested": "vcf_manifest_coordinates",
+        "blast_available": False,
+        "n_samples": int(matrix.shape[0]),
+        "n_features_requested": int(matrix.shape[1]),
+        "n_features_missing_context": 0,
+        "missing_context_feature_ids": [],
+        "n_feature_calls": n_calls,
+        "n_unique_mapped_calls": unique_mapped,
+        "unique_mapped_fraction": unique_fraction,
+        "n_encoded_active_feature_calls": active_features,
+        "active_feature_fraction": active_fraction,
+        "n_resolved_features": resolved_features,
+        "resolved_feature_fraction": resolved_fraction,
+        "n_resolved_baseline_features": resolved_baseline_features,
+        "resolved_baseline_feature_fraction": resolved_baseline_fraction,
+        "n_resolved_nonbaseline_features": resolved_nonbaseline_features,
+        "resolved_nonbaseline_feature_fraction": float(resolved_nonbaseline_features / max(1, n_calls)),
+        "marker_recovery_status": recovery_status,
+        "marker_recovery_reason": recovery_reason,
+        "active_marker_evidence_status": active_status,
+        "active_marker_evidence_reason": active_reason,
+        "resolved_marker_evidence_status": resolved_status,
+        "resolved_marker_evidence_reason": resolved_reason,
+        "mapping_status_counts": dict(global_counts.get("mapping_status_counts", {})),
+        "mapping_quality_counts": dict(global_counts.get("mapping_quality_counts", {})),
+        "allele_call_counts": dict(global_counts.get("allele_call_counts", {})),
+        "per_sample": per_sample,
+        "compact_call_table": bool(compact_call_table),
+        "compact_call_table_note": (
+            "For large VCF query batches, vcf_feature_calls.tsv stores non-baseline and caution calls only. "
+            "Resolved baseline/reference states are retained in the selected-feature matrix and per-sample/global summaries."
+            if compact_call_table else "vcf_feature_calls.tsv contains one row per sample-feature call."
+        ),
+        "zero_fill_policy": {
+            "unresolved_context": "encoded as 0",
+            "missing_context": "encoded as 0",
+            "multi_hit_context": "encoded as 0",
+            "ambiguous_base": "encoded as 0",
+            "non_training_allele": "encoded as 0",
+            "baseline_or_reference_state": "encoded as 0",
+        },
+        "artifacts": {
+            "vcf_selected_feature_matrix_csv": str(matrix_path),
+            "vcf_feature_calls_tsv": str(calls_path),
+            "vcf_sample_mapping_summary_tsv": str(per_sample_path),
+            "vcf_mapping_summary_json": str(summary_path),
+        },
+    }
+    write_json(summary, summary_path)
+    return summary
+
+
+def _should_keep_vcf_call_row(encoded: Dict[str, Any], compact: bool) -> bool:
+    """Keep full call rows for small runs; for large runs retain only evidence/caution rows."""
+    if not compact:
+        return True
+    try:
+        if int(encoded.get("encoded_value", 0)) != 0:
+            return True
+    except Exception:
+        pass
+    allele_call = str(encoded.get("allele_call", ""))
+    mapping_status = str(encoded.get("mapping_status", ""))
+    if allele_call not in {"baseline_match"}:
+        return True
+    if any(token in mapping_status for token in ("multi_hit", "ambiguous_base", "non_training_allele", "missing_context", "unresolved_context")):
+        return True
+    return False
+
+
 def encode_vcf_query_from_manifest(
     *,
     vcf_path: str,
@@ -1044,6 +1191,13 @@ def encode_vcf_query_from_manifest(
     mode must not rediscover, filter, or collapse features; it must reconstruct
     the saved training feature columns and encode each selected feature using the
     same baseline/REF/ALT rule saved in the selected-feature manifest.
+
+    Performance note
+    ----------------
+    Large VCF batches can contain millions of sample-feature calls. For those
+    batches, the matrix and summaries remain complete, while the per-call TSV is
+    compacted to non-baseline/caution rows to avoid spending most runtime writing
+    baseline-reference rows that are already represented as 0 in the matrix.
     """
     out = ensure_dir(Path(output_dir))
     feature_order = [str(f) for f in features]
@@ -1052,19 +1206,41 @@ def encode_vcf_query_from_manifest(
 
     manifest = load_feature_manifest(Path(feature_manifest_path))
     rows = [normalise_manifest_row(r) for r in manifest_rows_for_features(manifest, feature_order)]
-    logger.info(
-        "Loaded selected-feature manifest for VCF query | requested_features=%d",
-        int(len(rows)),
-    )
     vcf_paths = discover_vcf_inputs(vcf_path)
     if not vcf_paths:
         raise ValueError("No VCF files were found for VCF query encoding.")
 
+    total_call_slots = int(len(vcf_paths) * len(rows))
+    compact_call_table = total_call_slots > 2_000_000
+    if compact_call_table:
+        logger.info(
+            "Large VCF query batch detected | samples=%d | trained_features=%d | call_slots=%d | writing compact call table",
+            int(len(vcf_paths)),
+            int(len(rows)),
+            total_call_slots,
+        )
+
     matrix_rows: Dict[str, List[int]] = {}
     call_rows: List[Dict[str, Any]] = []
+    per_sample: List[Dict[str, Any]] = []
+    global_counts: Dict[str, Any] = {
+        "n_feature_calls": 0,
+        "n_unique_mapped_calls": 0,
+        "n_encoded_active_feature_calls": 0,
+        "n_resolved_features": 0,
+        "n_resolved_baseline_features": 0,
+        "n_resolved_nonbaseline_features": 0,
+        "mapping_status_counts": Counter(),
+        "mapping_quality_counts": Counter(),
+        "allele_call_counts": Counter(),
+    }
 
-    for path in vcf_paths:
+    resolved_calls = {"baseline_match", "alt_match", "known_nonbaseline_match"}
+    nonbaseline_calls = {"alt_match", "known_nonbaseline_match"}
+
+    for sample_i, path in enumerate(vcf_paths, start=1):
         calls = parse_vcf_calls(path)
+        position_index = _build_vcf_position_index(calls)
         sample_id = _sample_id_from_vcf_path(path)
         # Prefer sample name from VCF header if available.
         for payload in calls.values():
@@ -1073,37 +1249,103 @@ def encode_vcf_query_from_manifest(
                 break
 
         values: List[int] = []
+        sample_counts: Dict[str, Any] = {
+            "sample_id": sample_id,
+            "n_feature_calls": 0,
+            "n_encoded_active_features": 0,
+            "n_resolved_features": 0,
+            "n_resolved_baseline_features": 0,
+            "n_resolved_nonbaseline_features": 0,
+            "n_unique_mapped_calls": 0,
+            "n_unresolved_or_missing_context_calls": 0,
+            "n_multi_hit_calls": 0,
+            "n_ambiguous_base_calls": 0,
+            "n_non_training_allele_calls": 0,
+            "status_counts": Counter(),
+            "allele_call_counts": Counter(),
+        }
+
         for row in rows:
-            mapping = _vcf_mapping_for_row(row, calls)
+            mapping = _vcf_mapping_for_row(row, calls, position_index=position_index)
             encoded = encode_mapping(row, mapping)
             encoded["sample_id"] = sample_id
             encoded["source_query_file"] = str(path)
-            values.append(int(encoded["encoded_value"]))
-            call_rows.append(encoded)
+            encoded_value = int(encoded["encoded_value"])
+            values.append(encoded_value)
+
+            mapping_status = str(encoded.get("mapping_status", ""))
+            mapping_quality = str(encoded.get("mapping_quality", ""))
+            allele_call = str(encoded.get("allele_call", ""))
+
+            global_counts["n_feature_calls"] += 1
+            sample_counts["n_feature_calls"] += 1
+            global_counts["mapping_status_counts"][mapping_status] += 1
+            global_counts["mapping_quality_counts"][mapping_quality] += 1
+            global_counts["allele_call_counts"][allele_call] += 1
+            sample_counts["status_counts"][mapping_status] += 1
+            sample_counts["allele_call_counts"][allele_call] += 1
+
+            if mapping_status == "mapped_unique_context":
+                global_counts["n_unique_mapped_calls"] += 1
+                sample_counts["n_unique_mapped_calls"] += 1
+            if encoded_value != 0:
+                global_counts["n_encoded_active_feature_calls"] += 1
+                sample_counts["n_encoded_active_features"] += 1
+            if allele_call in resolved_calls:
+                global_counts["n_resolved_features"] += 1
+                sample_counts["n_resolved_features"] += 1
+            if allele_call == "baseline_match":
+                global_counts["n_resolved_baseline_features"] += 1
+                sample_counts["n_resolved_baseline_features"] += 1
+            if allele_call in nonbaseline_calls:
+                global_counts["n_resolved_nonbaseline_features"] += 1
+                sample_counts["n_resolved_nonbaseline_features"] += 1
+            if "missing_context" in mapping_status or "unresolved_context" in mapping_status:
+                sample_counts["n_unresolved_or_missing_context_calls"] += 1
+            if "multi_hit" in mapping_status:
+                sample_counts["n_multi_hit_calls"] += 1
+            if "ambiguous_base" in mapping_status:
+                sample_counts["n_ambiguous_base_calls"] += 1
+            if "non_training_allele" in mapping_status:
+                sample_counts["n_non_training_allele_calls"] += 1
+
+            if _should_keep_vcf_call_row(encoded, compact=compact_call_table):
+                call_rows.append(encoded)
 
         matrix_rows[sample_id] = values
+        sample_counts["status_counts"] = dict(sample_counts["status_counts"])
+        sample_counts["allele_call_counts"] = dict(sample_counts["allele_call_counts"])
+        per_sample.append(sample_counts)
+
+        if sample_i == 1 or sample_i % 250 == 0 or sample_i == len(vcf_paths):
+            logger.info(
+                "VCF query encoding progress | samples_done=%d/%d | trained_features=%d | retained_call_rows=%d",
+                int(sample_i),
+                int(len(vcf_paths)),
+                int(len(rows)),
+                int(len(call_rows)),
+            )
 
     matrix = pd.DataFrame.from_dict(matrix_rows, orient="index", columns=feature_order, dtype=int)
     matrix.index.name = "Sample"
     calls_df = pd.DataFrame(call_rows)
 
-    summary, _ = _write_selected_feature_outputs(
+    summary = _write_vcf_selected_feature_outputs_from_counts(
         matrix=matrix,
         calls=calls_df,
         out=out,
-        prefix="vcf",
-        mode="vcf_manifest_coordinate_encoding",
-        mapping_mode_requested="vcf_manifest_coordinates",
-        blast_is_available=False,
-        missing_context=[],
+        per_sample=per_sample,
+        global_counts=global_counts,
+        compact_call_table=compact_call_table,
     )
 
     logger.info(
-        "VCF query encoding complete | samples=%d | trained_features=%d | active_calls=%d | unique_fraction=%.3f",
+        "VCF query encoding complete | samples=%d | trained_features=%d | active_calls=%d | unique_fraction=%.3f | compact_call_table=%s",
         int(matrix.shape[0]),
         int(matrix.shape[1]),
         int(summary.get("n_encoded_active_feature_calls", 0)),
         float(summary.get("unique_mapped_fraction", 0.0)),
+        "yes" if compact_call_table else "no",
     )
     return matrix, summary, calls_df
 
@@ -1119,7 +1361,6 @@ def encode_raw_sequence_query(
     features: Sequence[str],
     output_dir: str,
     mapping_mode: str = "auto",
-    n_jobs: Optional[int] = None,
 ) -> Tuple[pd.DataFrame, Dict[str, Any], pd.DataFrame]:
     """
     Build a sample × selected-feature matrix from FASTA DNA.
@@ -1138,10 +1379,6 @@ def encode_raw_sequence_query(
         - ``auto``: use BLAST if available, otherwise exact flanking-context search
         - ``blast``: require BLAST context mapping
         - ``exact``: use exact flanking-context search only
-    n_jobs
-        Optional thread count for BLAST query mapping. Exact fallback remains
-        deterministic and uses a per-sample context cache to avoid repeated
-        scans for duplicated selected-feature contexts.
     """
     out = ensure_dir(Path(output_dir))
     mapping_mode = str(mapping_mode or "auto").lower()
@@ -1155,19 +1392,6 @@ def encode_raw_sequence_query(
     manifest = load_feature_manifest(Path(feature_manifest_path))
     rows = [normalise_manifest_row(r) for r in manifest_rows_for_features(manifest, feature_order)]
     missing_context = [r["Feature_ID"] for r in rows if not r.get("Context_sequence")]
-    context_present = int(len(rows) - len(missing_context))
-    logger.info(
-        "Loaded selected-feature manifest | requested_features=%d | context_present=%d",
-        int(len(rows)),
-        context_present,
-    )
-
-    if n_jobs is None or int(n_jobs) == 0:
-        blast_threads = 1
-    elif int(n_jobs) < 0:
-        blast_threads = max(1, int(os.cpu_count() or 1))
-    else:
-        blast_threads = max(1, int(n_jobs))
 
     fasta_paths = discover_fasta_inputs(raw_sequence_path)
     if not fasta_paths:
@@ -1193,7 +1417,6 @@ def encode_raw_sequence_query(
                     records=records,
                     rows=selected_context_rows,
                     output_dir=out / sample_id,
-                    num_threads=blast_threads,
                 )
             except Exception as exc:
                 if mapping_mode == "blast":
@@ -1207,22 +1430,17 @@ def encode_raw_sequence_query(
                 use_blast = False
 
         values: List[int] = []
-        exact_mapping_cache: Dict[Tuple[str, int], Optional[Dict[str, Any]]] = {}
         for row in rows:
             feature_id = row["Feature_ID"]
             mapping: Optional[Dict[str, Any]] = None
             if feature_id in blast_mappings:
                 mapping = blast_mappings[feature_id]
             elif row.get("Context_sequence") and mapping_mode != "blast":
-                center_offset = int(float(row.get("Context_center_offset", -1)))
-                cache_key = (str(row["Context_sequence"]), center_offset)
-                if cache_key not in exact_mapping_cache:
-                    exact_mapping_cache[cache_key] = find_by_flanking_context(
-                        records=records,
-                        context=row["Context_sequence"],
-                        center_offset=center_offset,
-                    )
-                mapping = exact_mapping_cache[cache_key]
+                mapping = find_by_flanking_context(
+                    records=records,
+                    context=row["Context_sequence"],
+                    center_offset=int(float(row.get("Context_center_offset", -1))),
+                )
 
             encoded = encode_mapping(row, mapping)
             encoded["sample_id"] = sample_id

@@ -59,6 +59,14 @@ except Exception:  # pragma: no cover
 
 logger = logging.getLogger(__name__)
 
+try:
+    from network_parser.utils import progress_iter
+except Exception:  # pragma: no cover
+    try:
+        from utils import progress_iter  # type: ignore
+    except Exception:  # pragma: no cover
+        progress_iter = lambda iterable, **kwargs: iterable  # type: ignore
+
 
 class StatisticalValidatorBranch:
     """
@@ -292,15 +300,14 @@ class StatisticalValidatorBranch:
         features = list(data.columns)
         results = []
 
-        for i in range(0, len(features), chunk_size):
+        chunk_starts = list(range(0, len(features), chunk_size))
+        for i in progress_iter(
+            chunk_starts,
+            desc="Association tests",
+            unit="chunk",
+            leave=False,
+        ):
             chunk = features[i : i + chunk_size]
-            logger.info(
-                "Processing feature chunk %d/%d | size=%d",
-                i // chunk_size + 1,
-                (len(features) + chunk_size - 1) // chunk_size,
-                len(chunk),
-            )
-
             chunk_results = Parallel(n_jobs=self.n_jobs)(
                 delayed(test_feature)(f) for f in chunk
             )
@@ -605,21 +612,17 @@ class StatisticalValidatorBranch:
         asymptotic_p[~valid] = 1.0
 
         exceedances = np.zeros(X_arr.shape[1], dtype=np.int64)
-        progress_step = max(1, n_permutations // 10)
 
-        for perm_idx in range(n_permutations):
+        for perm_idx in progress_iter(
+            range(n_permutations),
+            desc=f"{stage_name} chi2 permutations",
+            unit="perm",
+            leave=False,
+        ):
             permuted_codes = rng.permutation(y_codes)
             perm_counts1 = counts1_for_codes(permuted_codes)
             perm_stat, _ = chi2_stats_from_counts1(perm_counts1)
             exceedances += (perm_stat >= observed_stat).astype(np.int64)
-
-            if (perm_idx + 1) % progress_step == 0 or (perm_idx + 1) == n_permutations:
-                logger.info(
-                    "%s chi2 permutation progress | %d / %d",
-                    stage_name,
-                    int(perm_idx + 1),
-                    int(n_permutations),
-                )
 
         empirical_p = (1.0 + exceedances.astype(float)) / float(n_permutations + 1)
         empirical_p[~valid] = 1.0
@@ -730,7 +733,13 @@ class StatisticalValidatorBranch:
 
         rows = Parallel(n_jobs=self.n_jobs)(
             delayed(process_feature)(feature, int(seed))
-            for feature, seed in zip(feature_names, base_seeds)
+            for feature, seed in progress_iter(
+                zip(feature_names, base_seeds),
+                total=len(feature_names),
+                desc="Chi2 permutation features",
+                unit="feature",
+                leave=False,
+            )
         )
         return pd.DataFrame([row for row in rows if row is not None])
 
@@ -851,7 +860,13 @@ class StatisticalValidatorBranch:
                 return None
 
         boot = Parallel(n_jobs=self.n_jobs)(
-            delayed(bootstrap_sample)(i) for i in range(self.n_bootstrap)
+            delayed(bootstrap_sample)(i)
+            for i in progress_iter(
+                range(self.n_bootstrap),
+                desc="Bootstrap validation",
+                unit="sample",
+                leave=False,
+            )
         )
         boot = [b for b in boot if b is not None]
 
@@ -952,7 +967,13 @@ class StatisticalValidatorBranch:
                 return pair, None
 
         raw_out = Parallel(n_jobs=self.n_jobs)(
-            delayed(test_pair)(pair) for pair in valid_interactions
+            delayed(test_pair)(pair)
+            for pair in progress_iter(
+                valid_interactions,
+                desc="Interaction permutation tests",
+                unit="pair",
+                leave=False,
+            )
         )
 
         out: Dict[str, Any] = {}

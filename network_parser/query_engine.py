@@ -237,6 +237,7 @@ def _collect_features_from_hierarchy_node(
     ordered: List[str],
     seen: set,
 ) -> None:
+    """Recursively collect selected features from all trainable hierarchy nodes."""
     if not isinstance(node, dict):
         return
     _add_unique_features(ordered, seen, node.get("features", []))
@@ -245,6 +246,23 @@ def _collect_features_from_hierarchy_node(
         for child in children.values():
             if isinstance(child, dict):
                 _collect_features_from_hierarchy_node(child, ordered, seen)
+
+
+def _collect_manifest_candidates_from_hierarchy_node(
+    node: Dict[str, Any],
+    candidates: List[Optional[str]],
+) -> None:
+    """Recursively collect selected-feature manifest paths from hierarchy nodes."""
+    if not isinstance(node, dict):
+        return
+    feature_manifest = node.get("feature_manifest")
+    if isinstance(feature_manifest, dict):
+        candidates.append(feature_manifest.get("manifest_file"))
+    children = node.get("children", {})
+    if isinstance(children, dict):
+        for child in children.values():
+            if isinstance(child, dict):
+                _collect_manifest_candidates_from_hierarchy_node(child, candidates)
 
 
 def collect_required_features_from_registry(registry: Dict[str, Any]) -> List[str]:
@@ -281,6 +299,11 @@ def resolve_registry_feature_manifest(registry: Dict[str, Any], registry_base: P
     candidates: List[Optional[str]] = []
     training_matrix = registry.get("training_matrix", {}) if isinstance(registry, dict) else {}
     candidates.append(training_matrix.get("feature_manifest_file"))
+
+    if is_hierarchical_registry(registry):
+        hierarchy = registry.get("hierarchy", {}) if isinstance(registry, dict) else {}
+        root = hierarchy.get("root", {}) if isinstance(hierarchy, dict) else {}
+        _collect_manifest_candidates_from_hierarchy_node(root, candidates)
 
     level1 = registry.get("level1", {}) if isinstance(registry, dict) else {}
     l1_manifest = level1.get("feature_manifest", {}) if isinstance(level1, dict) else {}
@@ -417,6 +440,35 @@ def unpack_model_payload(payload: Any) -> Tuple[Any, Optional[Any], Optional[Lis
     return payload, None, None
 
 
+def _marker_value_for_identify(value: Any) -> str:
+    """Normalize query marker values to the symbol format used during ML training.
+
+    MLProtocolRunner trains NetworkParser-style models on string symbols such
+    as "0" and "1".  Query alignment produces numeric 0/1 values, so passing
+    floats directly to identify() turns them into "0.0"/"1.0", which the
+    fitted OneHotEncoder treats as unseen categories.
+    """
+    try:
+        if value is None or pd.isna(value):
+            return ""
+    except Exception:
+        if value is None:
+            return ""
+
+    text = str(value).strip()
+    if text.lower() in {"", "nan", "none", "nd"}:
+        return ""
+
+    try:
+        numeric = float(text)
+        if np.isfinite(numeric) and numeric.is_integer():
+            return str(int(numeric))
+    except Exception:
+        pass
+
+    return text
+
+
 def predict_labels_and_support(
     payload: Any,
     X: pd.DataFrame,
@@ -480,7 +532,7 @@ def predict_labels_and_support(
     if hasattr(model, "identify"):
         for _, row in X.iterrows():
             marker_dict = {
-                str(col): float(value)
+                str(col): _marker_value_for_identify(value)
                 for col, value in row.items()
             }
 
@@ -1103,7 +1155,7 @@ def decision_tree_path_explanation(payload: Any, X: pd.DataFrame) -> Dict[str, L
 # -----------------------------------------------------------------------------
 
 class NetworkParserQueryEngine:
-    """Apply saved two-level or multi-level NetworkParser models to new samples."""
+    """Apply saved two-level NetworkParser models to new samples."""
 
     def __init__(self, registry_path: str, config: NetworkParserConfig):
         self.registry_path = Path(registry_path)
@@ -1113,305 +1165,286 @@ class NetworkParserQueryEngine:
         self.registry = load_json(self.registry_path)
         self.config = config
 
-    def _load_level1(self) -> Tuple[List[str], Any, Optional[pd.DataFrame], Optional[pd.DataFrame]]:
-        level1 = self.registry.get("level1", {})
-        features = [str(f) for f in level1.get("features", [])]
-        model_path = resolve_path(level1.get("model_file"), self.registry_base)
-        if not features:
-            raise ValueError("Registry is missing Level 1 selected features.")
-        if model_path is None or not model_path.exists():
-            raise ValueError("Registry is missing a readable Level 1 model file.")
-        payload = load_pickle(model_path)
-        ranked = read_ranked_feature_table(level1.get("filter", {}), self.registry_base)
-        model_importance = extract_model_importance(payload, features)
-        return features, payload, ranked, model_importance
-
-    def _select_level2_payload(self, predicted_level1: str) -> Tuple[str, List[str], Any, Optional[pd.DataFrame], Optional[pd.DataFrame]]:
-        level2 = self.registry.get("level2", {})
-        by_group = level2.get("by_level1_group", {}) if isinstance(level2, dict) else {}
-        group_payload = by_group.get(str(predicted_level1), {}) if isinstance(by_group, dict) else {}
-
-        source = "level1_group_specific"
-        selected = group_payload
-        if not selected or selected.get("status") != "success" or not selected.get("model_file"):
-            selected = level2.get("global_fallback", {}) if isinstance(level2, dict) else {}
-            source = "global_fallback"
-            if not selected or selected.get("status") != "success" or not selected.get("model_file"):
-                selected = level2.get("global_binary_fallback", {}) if isinstance(level2, dict) else {}
-                source = "global_binary_fallback"
-
-        features = [str(f) for f in selected.get("features", [])]
-        model_path = resolve_path(selected.get("model_file"), self.registry_base)
-        if not features or model_path is None or not model_path.exists():
-            raise ValueError(
-                "No usable Level 2 model found for predicted Level 1 group and no global fallback is available."
-            )
-
-        payload = load_pickle(model_path)
-        ranked = read_ranked_feature_table(selected.get("filter", {}), self.registry_base)
-        model_importance = extract_model_importance(payload, features)
-        return source, features, payload, ranked, model_importance
-
-    def _load_hierarchy_node(
+    def _load_hierarchy_node_payload(
         self,
         node: Dict[str, Any],
     ) -> Tuple[List[str], Any, Optional[pd.DataFrame], Optional[pd.DataFrame]]:
-        """Load a trainable hierarchy node from the recursive registry."""
+        """Load the saved model payload for one trainable hierarchy node."""
         features = [str(f) for f in node.get("features", [])]
         model_path = resolve_path(node.get("model_file"), self.registry_base)
         if not features:
-            raise ValueError(
-                f"Hierarchy node for label '{node.get('label_column')}' has no selected features."
-            )
+            raise ValueError("Hierarchy node is marked trainable but has no selected features.")
         if model_path is None or not model_path.exists():
-            raise ValueError(
-                f"Hierarchy node for label '{node.get('label_column')}' has no readable model file."
-            )
+            raise ValueError("Hierarchy node is missing a readable model file.")
         payload = load_pickle(model_path)
         ranked = read_ranked_feature_table(node.get("filter", {}), self.registry_base)
         model_importance = extract_model_importance(payload, features)
         return features, payload, ranked, model_importance
 
     @staticmethod
-    def _hierarchy_node_key(node: Dict[str, Any], fallback: str = "root") -> str:
-        """Stable audit key for a hierarchy node without exposing feature names."""
-        level_number = str(node.get("level_number", "NA"))
-        label_column = str(node.get("label_column", "label"))
-        path = node.get("path", []) or []
-        path_values = []
-        for item in path:
-            if isinstance(item, dict):
-                path_values.append(str(item.get("value", "")))
-        suffix = "__" + "__".join(path_values) if path_values else ""
-        key = f"level_{level_number}__{label_column}{suffix}".strip("_")
-        return key or fallback
+    def _hierarchy_node_key(node: Dict[str, Any], path_tokens: Sequence[str]) -> str:
+        level = str(node.get("level_number", "NA"))
+        label = str(node.get("label_column", "label"))
+        path_part = "/".join(str(p) for p in path_tokens if str(p)) or "root"
+        return f"level_{level}:{label}:{path_part}"
 
-    def _query_hierarchy_from_matrix(
+    def _query_hierarchy(
         self,
         *,
         X_raw: pd.DataFrame,
         raw_calls: Optional[pd.DataFrame],
         raw_mapping_summary: Optional[Dict[str, Any]],
-        raw_feature_metadata: Dict[str, Dict[str, Dict[str, Any]]],
-        raw_sample_quality: Dict[str, Dict[str, Any]],
-        raw_available_features: set,
-        out: Path,
-        genomic_path: str,
-        query_input_type: str,
         fastq_processing_summary: Optional[Dict[str, Any]],
+        query_input_type: str,
+        genomic_path: str,
+        output_dir: Path,
         max_markers: int,
     ) -> pd.DataFrame:
-        """Recursive query traversal for ``hierarchical_model_registry.json``."""
+        """Traverse an arbitrary-depth trained hierarchy without rerunning discovery."""
+        output_dir = ensure_dir(Path(output_dir))
         hierarchy = self.registry.get("hierarchy", {}) if isinstance(self.registry, dict) else {}
         root = hierarchy.get("root", {}) if isinstance(hierarchy, dict) else {}
         label_columns = [str(x) for x in hierarchy.get("label_columns", [])] if isinstance(hierarchy, dict) else []
         if not isinstance(root, dict) or not root:
             raise ValueError("Hierarchical registry is missing hierarchy.root.")
 
+        raw_available_features = set(map(str, X_raw.columns))
+        raw_feature_metadata = feature_call_metadata_by_sample(raw_calls)
+        if raw_feature_metadata:
+            raw_feature_metadata = {
+                normalize_sample_id(str(sample_id)): feature_map
+                for sample_id, feature_map in raw_feature_metadata.items()
+            }
+
+        raw_sample_quality: Dict[str, Dict[str, Any]] = {}
+        if isinstance(raw_mapping_summary, dict):
+            for item in raw_mapping_summary.get("per_sample", []) or []:
+                if isinstance(item, dict) and item.get("sample_id") is not None:
+                    raw_sample_quality[normalize_sample_id(str(item.get("sample_id")))] = item
+
         rows: List[Dict[str, Any]] = []
         report_samples: List[Dict[str, Any]] = []
         alignment_by_node: Dict[str, Any] = {}
 
         for sample_id in X_raw.index.astype(str):
-            sample_row = X_raw.loc[[sample_id]].copy()
+            sample_id = normalize_sample_id(sample_id)
             sample_feature_metadata = raw_feature_metadata.get(sample_id, {})
             sample_mapping_quality = raw_sample_quality.get(sample_id, {})
+            current = root
+            path_tokens: List[str] = []
+            hierarchy_steps: List[Dict[str, Any]] = []
+            row: Dict[str, Any] = {"sample_id": sample_id}
+            terminal_status = "complete"
+            terminal_reason = "traversed_to_terminal_node"
+            terminal_label: Optional[str] = None
+            terminal_level: Optional[int] = None
+            guard = 0
 
-            row: Dict[str, Any] = {
-                "sample_id": sample_id,
-                "query_marker_recovery_status": sample_mapping_quality.get("marker_recovery_status"),
-                "query_marker_recovery_reason": sample_mapping_quality.get("marker_recovery_reason"),
-                "query_active_marker_evidence_status": sample_mapping_quality.get("active_marker_evidence_status"),
-                "query_active_marker_evidence_reason": sample_mapping_quality.get("active_marker_evidence_reason"),
-                "query_unique_mapped_fraction": sample_mapping_quality.get("unique_mapped_fraction"),
-                "query_active_feature_fraction": sample_mapping_quality.get("active_feature_fraction"),
-                "query_n_encoded_active_features": sample_mapping_quality.get("n_encoded_active_features"),
-                "query_n_resolved_features": sample_mapping_quality.get("n_resolved_features"),
-                "query_resolved_feature_fraction": sample_mapping_quality.get("resolved_feature_fraction"),
-                "query_n_resolved_baseline_features": sample_mapping_quality.get("n_resolved_baseline_features"),
-                "query_resolved_baseline_feature_fraction": sample_mapping_quality.get("resolved_baseline_feature_fraction"),
-                "query_resolved_marker_evidence_status": sample_mapping_quality.get("resolved_marker_evidence_status"),
-                "query_resolved_marker_evidence_reason": sample_mapping_quality.get("resolved_marker_evidence_reason"),
-                "query_n_unresolved_or_missing_calls": sample_mapping_quality.get("n_unresolved_or_missing_context_calls", sample_mapping_quality.get("n_unresolved_or_missing_calls")),
-                "query_n_multi_hit_calls": sample_mapping_quality.get("n_multi_hit_calls"),
-                "query_n_ambiguous_base_calls": sample_mapping_quality.get("n_ambiguous_base_calls"),
-                "query_n_non_training_allele_calls": sample_mapping_quality.get("n_non_training_allele_calls"),
-            }
+            while isinstance(current, dict) and current and guard < 100:
+                guard += 1
+                status = str(current.get("status", ""))
+                level_number = int(current.get("level_number", guard) or guard)
+                label_column = str(current.get("label_column", f"level_{level_number}"))
+                node_key = self._hierarchy_node_key(current, path_tokens)
+                prefix = f"level{level_number}"
 
-            report_entry: Dict[str, Any] = {
-                **row,
-                "hierarchy_steps": [],
-                "fasta_mapping_quality": sample_mapping_quality if query_input_type == "fasta" else {},
-                "vcf_mapping_quality": sample_mapping_quality if query_input_type in {"vcf", "fastq"} else {},
-                "raw_sequence_mapping_quality": sample_mapping_quality,
-            }
-
-            current_node = root
-            terminal_status = "started"
-            terminal_reason = ""
-            final_prediction: Optional[str] = None
-            path_parts: List[str] = []
-            visited = 0
-            max_depth = max(1, int(hierarchy.get("n_levels", len(label_columns) or 1))) + 2
-
-            while isinstance(current_node, dict) and current_node and visited < max_depth:
-                visited += 1
-                level_number = int(current_node.get("level_number", visited) or visited)
-                label_column = str(current_node.get("label_column", f"level_{level_number}"))
-                node_status = str(current_node.get("status", "unknown"))
-                level_prefix = f"level{level_number}"
-                node_key = self._hierarchy_node_key(current_node)
-
-                row[f"{level_prefix}_label_column"] = label_column
-                row[f"{level_prefix}_model_status"] = node_status
-
-                if node_status == "constant":
-                    prediction = str(current_node.get("constant_label", ""))
-                    support: Optional[float] = 1.0 if prediction else None
-                    confidence = "deterministic_branch"
-                    confidence_note = (
-                        "This branch had only one observed child state during training, so no model was fitted at this level."
-                    )
-                    markers: List[Dict[str, Any]] = []
-                    evidence: Dict[str, Any] = {}
-                    class_support: Dict[str, float] = {prediction: 1.0} if prediction else {}
-                    decision_path: List[str] = []
-
-                elif node_status == "success":
-                    features, payload, ranked, importance = self._load_hierarchy_node(current_node)
-                    X_node, alignment = align_to_training_features(sample_row, features)
-                    alignment_by_node.setdefault(node_key, alignment)
-                    pred, support_values, class_support_values = predict_labels_and_support(payload, X_node)
-                    tree_paths = decision_tree_path_explanation(payload, X_node)
-                    prediction = str(pred[0]) if pred else "unavailable"
-                    support = support_values[0] if support_values else None
-                    class_support = class_support_values[0] if class_support_values else {}
-                    decision_path = tree_paths.get(sample_id, [])
-
-                    markers = supporting_markers_for_sample(
-                        X_node.loc[sample_id],
-                        ranked_features=ranked,
-                        model_importance=importance,
-                        max_markers=max_markers,
-                        feature_metadata=sample_feature_metadata,
-                        available_features=raw_available_features,
-                    )
-                    evidence = summarize_feature_evidence_for_model(
-                        sample_values=X_node.loc[sample_id],
-                        features=features,
-                        feature_metadata=sample_feature_metadata,
-                        available_features=raw_available_features,
-                    )
-                    confidence, confidence_note = interpretation_confidence_for_level(
-                        support=support,
-                        evidence=evidence,
-                        n_supporting_markers=len(markers),
-                    )
-                    row[f"n_{level_prefix}_supporting_markers"] = int(len(markers))
-                    row.update(flatten_feature_evidence(level_prefix, evidence))
-
-                else:
-                    terminal_status = f"stopped_at_{node_status}"
-                    terminal_reason = str(current_node.get("reason", "No trained or deterministic branch was available."))
-                    row[f"{level_prefix}_stop_reason"] = terminal_reason
-                    report_entry["hierarchy_steps"].append(
+                if status == "constant":
+                    prediction = str(current.get("constant_label", "unavailable"))
+                    terminal_label = prediction
+                    terminal_level = level_number
+                    step = {
+                        "level_number": level_number,
+                        "label_column": label_column,
+                        "prediction": prediction,
+                        "support": 1.0,
+                        "class_support": {prediction: 1.0},
+                        "node_status": status,
+                        "node_key": node_key,
+                        "interpretation_confidence": "deterministic_branch",
+                        "confidence_note": "This hierarchy branch had one observed child during training, so no model was fitted at this node.",
+                        "feature_evidence": {},
+                        "supporting_markers": [],
+                        "decision_path": [],
+                    }
+                    hierarchy_steps.append(step)
+                    row.update(
                         {
-                            "level_number": level_number,
-                            "label_column": label_column,
-                            "node_status": node_status,
-                            "stop_reason": terminal_reason,
+                            f"{prefix}_label_column": label_column,
+                            f"predicted_{prefix}": prediction,
+                            f"{prefix}_support": 1.0,
+                            f"{prefix}_node_status": status,
+                            f"{prefix}_interpretation_confidence": "deterministic_branch",
+                            f"{prefix}_n_supporting_markers": 0,
+                        }
+                    )
+                    path_tokens.append(prediction)
+                    children = current.get("children", {})
+                    next_node = children.get(prediction) if isinstance(children, dict) else None
+                    if isinstance(next_node, dict):
+                        current = next_node
+                        continue
+                    terminal_reason = "constant_terminal_branch"
+                    break
+
+                if status != "success":
+                    terminal_status = "stopped"
+                    terminal_reason = str(current.get("reason", "hierarchy_node_not_trainable"))
+                    terminal_level = level_number
+                    step = {
+                        "level_number": level_number,
+                        "label_column": label_column,
+                        "prediction": "unavailable",
+                        "support": None,
+                        "class_support": {},
+                        "node_status": status or "unavailable",
+                        "node_key": node_key,
+                        "interpretation_confidence": "unavailable",
+                        "confidence_note": terminal_reason,
+                        "feature_evidence": {},
+                        "supporting_markers": [],
+                        "decision_path": [],
+                    }
+                    hierarchy_steps.append(step)
+                    row.update(
+                        {
+                            f"{prefix}_label_column": label_column,
+                            f"predicted_{prefix}": "unavailable",
+                            f"{prefix}_support": None,
+                            f"{prefix}_node_status": status or "unavailable",
+                            f"{prefix}_interpretation_confidence": "unavailable",
+                            f"{prefix}_n_supporting_markers": 0,
                         }
                     )
                     break
 
-                row[f"predicted_{level_prefix}_label"] = prediction
-                row[f"{level_prefix}_support"] = support
-                row[f"{level_prefix}_interpretation_confidence"] = confidence
-                row[f"{level_prefix}_confidence_note"] = confidence_note
-                row[f"{level_prefix}_node_key"] = node_key
-                row[f"n_{level_prefix}_supporting_markers"] = int(len(markers))
+                features, payload, ranked, importance = self._load_hierarchy_node_payload(current)
+                X_node, alignment = align_to_training_features(X_raw.loc[[sample_id]], features)
+                alignment_by_node.setdefault(node_key, alignment)
+                pred, support, class_support = predict_labels_and_support(payload, X_node)
+                prediction = str(pred[0]) if pred else "unavailable"
+                support_value = support[0] if support else None
+                class_support_value = class_support[0] if class_support else {}
+                tree_paths = decision_tree_path_explanation(payload, X_node)
 
-                # Backward-compatible aliases for tools that still expect the
-                # old two-level column names.
-                if level_number == 1:
-                    row["predicted_level1_identity"] = prediction
-                    row["level1_support"] = support
-                    row["n_level1_supporting_markers"] = int(len(markers))
-                elif level_number == 2:
-                    row["predicted_level2_resistance_profile"] = prediction
-                    row["level2_support"] = support
-                    row["level2_model_source"] = "hierarchy_node"
-                    row["level2_target_label_column"] = label_column
-                    row["n_level2_supporting_markers"] = int(len(markers))
+                markers = supporting_markers_for_sample(
+                    X_node.loc[sample_id],
+                    ranked_features=ranked,
+                    model_importance=importance,
+                    max_markers=max_markers,
+                    feature_metadata=sample_feature_metadata,
+                    available_features=raw_available_features,
+                )
+                evidence = summarize_feature_evidence_for_model(
+                    sample_values=X_node.loc[sample_id],
+                    features=features,
+                    feature_metadata=sample_feature_metadata,
+                    available_features=raw_available_features,
+                )
+                confidence, confidence_note = interpretation_confidence_for_level(
+                    support=support_value,
+                    evidence=evidence,
+                    n_supporting_markers=len(markers),
+                )
+                decision_path = tree_paths.get(sample_id, [])
 
-                report_entry["hierarchy_steps"].append(
+                step = {
+                    "level_number": level_number,
+                    "label_column": label_column,
+                    "prediction": prediction,
+                    "support": support_value,
+                    "class_support": class_support_value,
+                    "node_status": status,
+                    "node_key": node_key,
+                    "interpretation_confidence": confidence,
+                    "confidence_note": confidence_note,
+                    "feature_evidence": evidence,
+                    "supporting_markers": markers,
+                    "decision_path": decision_path,
+                }
+                hierarchy_steps.append(step)
+
+                row.update(
                     {
-                        "level_number": level_number,
-                        "label_column": label_column,
-                        "prediction": prediction,
-                        "support": support,
-                        "class_support": class_support,
-                        "node_status": node_status,
-                        "node_key": node_key,
-                        "interpretation_confidence": confidence,
-                        "confidence_note": confidence_note,
-                        "feature_evidence": evidence,
-                        "supporting_markers": markers,
-                        "decision_path": decision_path,
+                        f"{prefix}_label_column": label_column,
+                        f"predicted_{prefix}": prediction,
+                        f"{prefix}_support": support_value,
+                        f"{prefix}_node_status": status,
+                        f"{prefix}_interpretation_confidence": confidence,
+                        f"{prefix}_confidence_note": confidence_note,
+                        f"{prefix}_n_supporting_markers": int(len(markers)),
+                        **flatten_feature_evidence(prefix, evidence),
                     }
                 )
 
-                if prediction:
-                    path_parts.append(f"{label_column}={prediction}")
-                    final_prediction = prediction
-
-                children = current_node.get("children", {})
+                terminal_label = prediction
+                terminal_level = level_number
+                path_tokens.append(prediction)
+                children = current.get("children", {})
                 next_node = children.get(prediction) if isinstance(children, dict) else None
-                if isinstance(next_node, dict) and next_node:
-                    current_node = next_node
-                    terminal_status = "continued"
+                if isinstance(next_node, dict):
+                    current = next_node
                     continue
-
-                terminal_status = "complete"
-                terminal_reason = "No deeper child node exists for the predicted label."
+                terminal_reason = "no_child_node_for_predicted_label"
                 break
 
-            if visited >= max_depth:
-                terminal_status = "stopped_max_depth_guard"
-                terminal_reason = "Traversal stopped by recursion guard."
+            if guard >= 100:
+                terminal_status = "stopped"
+                terminal_reason = "hierarchy_traversal_guard_exceeded"
 
-            row["predicted_hierarchy_path"] = " > ".join(path_parts)
-            row["predicted_terminal_label"] = final_prediction
-            row["predicted_terminal_level"] = len(path_parts)
-            row["hierarchy_terminal_status"] = terminal_status
-            row["hierarchy_terminal_reason"] = terminal_reason
-            report_entry.update(
+            predicted_path = " / ".join(
+                f"{step.get('label_column')}={step.get('prediction')}"
+                for step in hierarchy_steps
+                if step.get("prediction") not in {None, ""}
+            )
+            row.update(
                 {
-                    **row,
-                    "predicted_hierarchy_path": row["predicted_hierarchy_path"],
-                    "predicted_terminal_label": final_prediction,
-                    "predicted_terminal_level": len(path_parts),
+                    "predicted_hierarchy_path": predicted_path,
+                    "predicted_terminal_label": terminal_label,
+                    "predicted_terminal_level": terminal_level,
                     "hierarchy_terminal_status": terminal_status,
                     "hierarchy_terminal_reason": terminal_reason,
+                    "query_marker_recovery_status": sample_mapping_quality.get("marker_recovery_status"),
+                    "query_marker_recovery_reason": sample_mapping_quality.get("marker_recovery_reason"),
+                    "query_active_marker_evidence_status": sample_mapping_quality.get("active_marker_evidence_status"),
+                    "query_active_marker_evidence_reason": sample_mapping_quality.get("active_marker_evidence_reason"),
+                    "query_unique_mapped_fraction": sample_mapping_quality.get("unique_mapped_fraction"),
+                    "query_active_feature_fraction": sample_mapping_quality.get("active_feature_fraction"),
+                    "query_n_encoded_active_features": sample_mapping_quality.get("n_encoded_active_features"),
+                    "query_n_resolved_features": sample_mapping_quality.get("n_resolved_features"),
+                    "query_resolved_feature_fraction": sample_mapping_quality.get("resolved_feature_fraction"),
+                    "query_n_resolved_baseline_features": sample_mapping_quality.get("n_resolved_baseline_features"),
+                    "query_resolved_baseline_feature_fraction": sample_mapping_quality.get("resolved_baseline_feature_fraction"),
+                    "query_resolved_marker_evidence_status": sample_mapping_quality.get("resolved_marker_evidence_status"),
+                    "query_resolved_marker_evidence_reason": sample_mapping_quality.get("resolved_marker_evidence_reason"),
+                    "query_n_unresolved_or_missing_calls": sample_mapping_quality.get("n_unresolved_or_missing_context_calls", sample_mapping_quality.get("n_unresolved_or_missing_calls")),
+                    "query_n_multi_hit_calls": sample_mapping_quality.get("n_multi_hit_calls"),
+                    "query_n_ambiguous_base_calls": sample_mapping_quality.get("n_ambiguous_base_calls"),
+                    "query_n_non_training_allele_calls": sample_mapping_quality.get("n_non_training_allele_calls"),
                 }
             )
             rows.append(row)
-            report_samples.append(report_entry)
+            report_samples.append(
+                {
+                    **row,
+                    "hierarchy_steps": hierarchy_steps,
+                    "fasta_mapping_quality": sample_mapping_quality if query_input_type == "fasta" else {},
+                    "vcf_mapping_quality": sample_mapping_quality if query_input_type in {"vcf", "fastq"} else {},
+                    "raw_sequence_mapping_quality": sample_mapping_quality,
+                }
+            )
 
         predictions = pd.DataFrame(rows)
-        predictions_path = out / "query_predictions.csv"
-        compact_path = out / "query_predictions_compact.tsv"
-        readable_path = out / "query_predictions_readable.html"
-        route_audit_path = out / "query_route_audit.json"
-        alignment_path = out / "query_alignment_summary.json"
+        predictions_path = output_dir / "query_predictions.csv"
+        compact_path = output_dir / "query_predictions_compact.tsv"
+        readable_path = output_dir / "query_predictions_readable.html"
+        route_audit_path = output_dir / "query_route_audit.json"
+        alignment_path = output_dir / "query_alignment_summary.json"
 
         predictions.to_csv(predictions_path, index=False)
-        write_hierarchical_compact_predictions(predictions, compact_path)
+        write_compact_predictions(predictions, compact_path)
 
         alignment_summary = {
             "mode": "multi_level_hierarchy_query_alignment",
-            "hierarchy_label_columns": label_columns,
-            "hierarchy_n_levels": int(hierarchy.get("n_levels", len(label_columns) or 0)),
             "alignment_by_node": alignment_by_node,
             "n_query_samples": int(X_raw.shape[0]),
             "n_query_features_raw": int(X_raw.shape[1]),
@@ -1454,18 +1487,17 @@ class NetworkParserQueryEngine:
                 "predictions_readable_html": str(readable_path),
                 "route_audit_json": str(route_audit_path),
                 "alignment_summary_json": str(alignment_path),
-                "report_json": str(out / "query_report.json"),
-                "report_txt": str(out / "query_report.txt"),
+                "report_json": str(output_dir / "query_report.json"),
+                "report_txt": str(output_dir / "query_report.txt"),
                 "fastq_processing_summary": (
-                    str(out / "fastq_query_preprocessing" / "fastq_processing_summary.json")
+                    str(output_dir / "fastq_query_preprocessing" / "fastq_processing_summary.json")
                     if fastq_processing_summary is not None else None
                 ),
             },
         }
-        write_json(report, out / "query_report.json")
-        write_hierarchical_text_report(report, out / "query_report.txt")
+        write_json(report, output_dir / "query_report.json")
+        write_hierarchical_text_report(report, output_dir / "query_report.txt")
         write_hierarchical_readable_html_report(report, readable_path)
-
         logger.info(
             "Hierarchy query complete | predictions=%s | compact=%s | readable=%s",
             predictions_path,
@@ -1473,6 +1505,45 @@ class NetworkParserQueryEngine:
             readable_path,
         )
         return predictions
+
+    def _load_level1(self) -> Tuple[List[str], Any, Optional[pd.DataFrame], Optional[pd.DataFrame]]:
+        level1 = self.registry.get("level1", {})
+        features = [str(f) for f in level1.get("features", [])]
+        model_path = resolve_path(level1.get("model_file"), self.registry_base)
+        if not features:
+            raise ValueError("Registry is missing Level 1 selected features.")
+        if model_path is None or not model_path.exists():
+            raise ValueError("Registry is missing a readable Level 1 model file.")
+        payload = load_pickle(model_path)
+        ranked = read_ranked_feature_table(level1.get("filter", {}), self.registry_base)
+        model_importance = extract_model_importance(payload, features)
+        return features, payload, ranked, model_importance
+
+    def _select_level2_payload(self, predicted_level1: str) -> Tuple[str, List[str], Any, Optional[pd.DataFrame], Optional[pd.DataFrame]]:
+        level2 = self.registry.get("level2", {})
+        by_group = level2.get("by_level1_group", {}) if isinstance(level2, dict) else {}
+        group_payload = by_group.get(str(predicted_level1), {}) if isinstance(by_group, dict) else {}
+
+        source = "level1_group_specific"
+        selected = group_payload
+        if not selected or selected.get("status") != "success" or not selected.get("model_file"):
+            selected = level2.get("global_fallback", {}) if isinstance(level2, dict) else {}
+            source = "global_fallback"
+            if not selected or selected.get("status") != "success" or not selected.get("model_file"):
+                selected = level2.get("global_binary_fallback", {}) if isinstance(level2, dict) else {}
+                source = "global_binary_fallback"
+
+        features = [str(f) for f in selected.get("features", [])]
+        model_path = resolve_path(selected.get("model_file"), self.registry_base)
+        if not features or model_path is None or not model_path.exists():
+            raise ValueError(
+                "No usable Level 2 model found for predicted Level 1 group and no global fallback is available."
+            )
+
+        payload = load_pickle(model_path)
+        ranked = read_ranked_feature_table(selected.get("filter", {}), self.registry_base)
+        model_importance = extract_model_importance(payload, features)
+        return source, features, payload, ranked, model_importance
 
     def query(
         self,
@@ -1626,17 +1697,15 @@ class NetworkParserQueryEngine:
                     raw_sample_quality[normalize_sample_id(str(item.get("sample_id")))] = item
 
         if is_hierarchical_registry(self.registry):
-            return self._query_hierarchy_from_matrix(
+            logger.info("Detected multi-level hierarchy registry; using recursive hierarchy query traversal.")
+            return self._query_hierarchy(
                 X_raw=X_raw,
                 raw_calls=raw_calls,
                 raw_mapping_summary=raw_mapping_summary,
-                raw_feature_metadata=raw_feature_metadata,
-                raw_sample_quality=raw_sample_quality,
-                raw_available_features=raw_available_features,
-                out=out,
-                genomic_path=genomic_path,
-                query_input_type=query_input_type,
                 fastq_processing_summary=fastq_processing_summary,
+                query_input_type=query_input_type,
+                genomic_path=genomic_path,
+                output_dir=out,
                 max_markers=max_markers,
             )
 
@@ -1841,6 +1910,24 @@ def write_compact_predictions(predictions: pd.DataFrame, path: Path) -> None:
     """Write a terminal-friendly compact TSV with key prediction/evidence fields."""
     preferred = [
         "sample_id",
+        "predicted_hierarchy_path",
+        "predicted_terminal_label",
+        "predicted_terminal_level",
+        "hierarchy_terminal_status",
+        "hierarchy_terminal_reason",
+        "predicted_level1",
+        "level1_label_column",
+        "level1_support",
+        "level1_interpretation_confidence",
+        "level1_n_supporting_markers",
+        "level1_n_resolved_features",
+        "level1_resolved_feature_fraction",
+        "level1_n_resolved_baseline_features",
+        "level1_n_active_features",
+        "level1_resolved_marker_evidence_status",
+        "level1_nonbaseline_evidence_status",
+        "predicted_level2",
+        "level2_label_column",
         "predicted_level1_identity",
         "level1_support",
         "level1_interpretation_confidence",
@@ -1919,44 +2006,6 @@ def build_query_route_audit(
     }
 
 
-def write_hierarchical_compact_predictions(predictions: pd.DataFrame, path: Path) -> None:
-    """Write a compact TSV for arbitrary-depth hierarchy predictions."""
-    base_cols = [
-        "sample_id",
-        "predicted_hierarchy_path",
-        "predicted_terminal_label",
-        "predicted_terminal_level",
-        "hierarchy_terminal_status",
-        "hierarchy_terminal_reason",
-    ]
-    level_cols: List[str] = []
-    for col in predictions.columns:
-        if col.startswith("predicted_level") or col.endswith("_support") or col.endswith("_interpretation_confidence"):
-            level_cols.append(col)
-    evidence_cols = [
-        col for col in predictions.columns
-        if col.endswith("_resolved_marker_evidence_status")
-        or col.endswith("_nonbaseline_evidence_status")
-        or col.startswith("n_level") and col.endswith("_supporting_markers")
-    ]
-    query_cols = [
-        "query_marker_recovery_status",
-        "query_resolved_marker_evidence_status",
-        "query_n_unresolved_or_missing_calls",
-        "query_n_multi_hit_calls",
-        "query_n_ambiguous_base_calls",
-        "query_n_non_training_allele_calls",
-    ]
-    ordered: List[str] = []
-    for col in base_cols + sorted(level_cols) + sorted(evidence_cols) + query_cols:
-        if col in predictions.columns and col not in ordered:
-            ordered.append(col)
-    if not ordered:
-        ordered = list(predictions.columns)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    predictions.loc[:, ordered].to_csv(path, sep="\t", index=False)
-
-
 def build_hierarchical_query_route_audit(
     *,
     registry_path: Path,
@@ -1964,7 +2013,7 @@ def build_hierarchical_query_route_audit(
     report_samples: List[Dict[str, Any]],
     alignment_by_node: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """Build an audit payload for recursive hierarchy traversal."""
+    """Build a compact audit of recursive hierarchy traversal."""
     routes: List[Dict[str, Any]] = []
     for sample in report_samples:
         routes.append(
@@ -2004,6 +2053,93 @@ def build_hierarchical_query_route_audit(
     }
 
 
+def _hierarchy_marker_lines(markers: List[Dict[str, Any]]) -> List[str]:
+    lines: List[str] = []
+    for marker in markers[:10]:
+        role = marker.get("evidence_role") or "NA"
+        extra = f" | role={role}"
+        if marker.get("observed_allele"):
+            quality = marker.get("mapping_quality") or marker.get("allele_call") or ""
+            quality_txt = f" | quality={quality}" if quality else ""
+            extra += f" | observed={marker.get('observed_allele')} | status={marker.get('mapping_status', '')}{quality_txt}"
+        lines.append(f"    - {marker.get('feature')} = {marker.get('value')}{extra}")
+    return lines
+
+
+def write_hierarchical_text_report(report: Dict[str, Any], path: Path) -> None:
+    """Write a readable text report for arbitrary-depth hierarchy query."""
+    lines: List[str] = []
+    lines.append("NetworkParser multi-level hierarchy query report")
+    lines.append("=" * 54)
+    lines.append(f"Samples queried: {report.get('n_samples', 0)}")
+    if report.get("hierarchy_label_columns"):
+        lines.append(f"Hierarchy labels: {', '.join(map(str, report.get('hierarchy_label_columns', [])))}")
+    if report.get("diagnostic_question"):
+        lines.append("")
+        lines.append("Diagnostic question")
+        lines.append("-------------------")
+        lines.append(str(report.get("diagnostic_question")))
+
+    for sample in report.get("samples", []) or []:
+        lines.append("")
+        lines.append(f"Sample: {sample.get('sample_id')}")
+        lines.append("-" * (8 + len(str(sample.get("sample_id", "")))))
+        if sample.get("raw_sequence_mapping_quality"):
+            rq = sample.get("raw_sequence_mapping_quality") or {}
+            lines.append("Query trained-feature recovery")
+            lines.append(f"  Marker recovery: {rq.get('marker_recovery_status', 'NA')}")
+            if rq.get("resolved_marker_evidence_status"):
+                lines.append(f"  Resolved marker pattern: {rq.get('resolved_marker_evidence_status', 'NA')}")
+            lines.append(f"  Nonbaseline marker evidence: {rq.get('active_marker_evidence_status', 'NA')}")
+            lines.append(f"  Resolved trained-marker calls: {rq.get('n_resolved_features', 0)}")
+            lines.append(f"  Active encoded calls: {rq.get('n_encoded_active_features', 0)}")
+            lines.append("")
+
+        lines.append(f"Predicted hierarchy path: {sample.get('predicted_hierarchy_path', 'NA')}")
+        lines.append(f"Terminal label: {sample.get('predicted_terminal_label', 'NA')}")
+        lines.append(f"Terminal status: {sample.get('hierarchy_terminal_status', 'NA')} ({sample.get('hierarchy_terminal_reason', 'NA')})")
+
+        for step in sample.get("hierarchy_steps", []) or []:
+            lines.append("")
+            lines.append(f"Level {step.get('level_number')} — {step.get('label_column')}")
+            lines.append(f"  Prediction: {step.get('prediction')}")
+            if step.get("support") is not None:
+                try:
+                    lines.append(f"  Support: {float(step.get('support')):.4f}")
+                except Exception:
+                    lines.append(f"  Support: {step.get('support')}")
+            if step.get("interpretation_confidence"):
+                lines.append(f"  Interpretation confidence: {step.get('interpretation_confidence')}")
+            if step.get("confidence_note"):
+                lines.append(f"  Confidence note: {step.get('confidence_note')}")
+            evidence = step.get("feature_evidence") or {}
+            if evidence:
+                lines.append("  Level-specific marker evidence:")
+                lines.append(f"    Selected features: {evidence.get('n_selected_features', 'NA')}")
+                lines.append(f"    Nonbaseline features: {evidence.get('n_active_features', 'NA')}")
+                lines.append(f"    Resolved trained-marker states: {evidence.get('n_resolved_features', 'NA')}")
+                lines.append(f"    Resolved baseline states: {evidence.get('n_resolved_baseline_features', 'NA')}")
+                if evidence.get("resolved_feature_fraction") is not None:
+                    lines.append(f"    Resolved feature fraction: {float(evidence.get('resolved_feature_fraction')):.4f}")
+                lines.append(f"    Marker recovery: {evidence.get('marker_recovery_status', 'NA')}")
+                lines.append(f"    Resolved marker pattern: {evidence.get('resolved_marker_evidence_status', 'NA')}")
+            if step.get("supporting_markers"):
+                lines.append("  Supporting markers:")
+                lines.extend(_hierarchy_marker_lines(step.get("supporting_markers", [])))
+            if step.get("decision_path"):
+                lines.append("  Decision path:")
+                for rule in step.get("decision_path", []):
+                    lines.append(f"    - {rule}")
+
+    lines.append("")
+    lines.append("Notes")
+    lines.append("-----")
+    for note in report.get("notes", []):
+        lines.append(f"- {note}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def write_hierarchical_readable_html_report(report: Dict[str, Any], path: Path) -> None:
     """Write a browser-readable report for arbitrary-depth hierarchy query."""
     def _marker_table(markers: List[Dict[str, Any]]) -> str:
@@ -2032,132 +2168,55 @@ def write_hierarchical_readable_html_report(report: Dict[str, Any], path: Path) 
         steps_html: List[str] = []
         for step in sample.get("hierarchy_steps", []) or []:
             level = html.escape(str(step.get("level_number", "NA")))
-            label = html.escape(str(step.get("label_column", "NA")))
+            label_col = html.escape(str(step.get("label_column", "NA")))
+            pred = html.escape(str(step.get("prediction", "NA")))
+            support = step.get("support")
+            support_text = "NA" if support is None else html.escape(str(round(float(support), 4))) if isinstance(support, (int, float)) else html.escape(str(support))
             evidence = step.get("feature_evidence") or {}
-            markers = step.get("supporting_markers") or []
+            markers_html = _marker_table(step.get("supporting_markers", []) or [])
             steps_html.append(
                 "<div class='step'>"
-                f"<h3>Level {level}: {label}</h3>"
-                + _html_kv("Prediction", step.get("prediction"))
-                + _html_kv("Support", step.get("support"))
-                + _html_kv("Node status", step.get("node_status"))
-                + _html_kv("Interpretation confidence", step.get("interpretation_confidence"))
-                + _html_kv("Resolved marker evidence", evidence.get("resolved_marker_evidence_status"))
-                + _html_kv("Resolved features", evidence.get("n_resolved_features"))
-                + _html_kv("Resolved baseline features", evidence.get("n_resolved_baseline_features"))
-                + _html_kv("Nonbaseline features", evidence.get("n_active_features"))
-                + _marker_table(markers)
-                + "</div>"
+                f"<h3>Level {level}: {label_col}</h3>"
+                f"<p><strong>Prediction:</strong> {pred} &nbsp; <strong>Support:</strong> {support_text}</p>"
+                f"<p><strong>Confidence:</strong> {html.escape(str(step.get('interpretation_confidence', 'NA')))}</p>"
+                f"<p><strong>Resolved markers:</strong> {html.escape(str(evidence.get('n_resolved_features', 'NA')))} / {html.escape(str(evidence.get('n_selected_features', 'NA')))}</p>"
+                f"<p><strong>Resolved marker status:</strong> {html.escape(str(evidence.get('resolved_marker_evidence_status', 'NA')))}</p>"
+                f"{markers_html}"
+                "</div>"
             )
-
         cards.append(
             "<section class='card'>"
-            f"<h2>Sample: {sid}</h2>"
-            + _html_kv("Predicted hierarchy path", sample.get("predicted_hierarchy_path"))
-            + _html_kv("Terminal label", sample.get("predicted_terminal_label"))
-            + _html_kv("Terminal status", sample.get("hierarchy_terminal_status"))
-            + "<div class='steps'>"
-            + "".join(steps_html)
-            + "</div></section>"
+            f"<h2>{sid}</h2>"
+            f"<p><strong>Predicted hierarchy path:</strong> {html.escape(str(sample.get('predicted_hierarchy_path', 'NA')))}</p>"
+            f"<p><strong>Terminal label:</strong> {html.escape(str(sample.get('predicted_terminal_label', 'NA')))}</p>"
+            f"<p><strong>Terminal status:</strong> {html.escape(str(sample.get('hierarchy_terminal_status', 'NA')))} — {html.escape(str(sample.get('hierarchy_terminal_reason', 'NA')))}</p>"
+            f"{''.join(steps_html)}"
+            "</section>"
         )
 
-    notes = "".join(f"<li>{html.escape(str(note))}</li>" for note in report.get("notes", []) or [])
-    labels = ", ".join(html.escape(str(x)) for x in report.get("hierarchy_label_columns", []) or [])
-    question = html.escape(str(report.get("diagnostic_question", "")))
-    document = f"""<!doctype html>
-<html lang=\"en\">
+    html_doc = f"""<!doctype html>
+<html>
 <head>
-<meta charset=\"utf-8\">
+<meta charset="utf-8">
 <title>NetworkParser hierarchy query report</title>
 <style>
-body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 2rem; line-height: 1.45; background: #f7f7f7; color: #222; }}
-.card {{ background: white; border: 1px solid #ddd; border-radius: 12px; padding: 1rem 1.25rem; margin: 1rem 0; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }}
-.step {{ border-left: 4px solid #ddd; padding: 0.75rem 1rem; margin: 0.75rem 0; background: #fbfbfb; }}
-table {{ border-collapse: collapse; width: 100%; margin-top: 0.5rem; font-size: 0.92rem; }}
-th, td {{ border: 1px solid #ddd; padding: 0.4rem; text-align: left; vertical-align: top; }}
-th {{ background: #f0f0f0; }}
-.question {{ background: #eef5ff; border-left: 4px solid #6699cc; padding: 0.75rem 1rem; }}
+body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 2rem; background: #fafafa; color: #1f2933; }}
+.card {{ background: white; border: 1px solid #e5e7eb; border-radius: 12px; padding: 1rem 1.2rem; margin-bottom: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }}
+.step {{ border-left: 4px solid #d1d5db; padding-left: 1rem; margin: 1rem 0; }}
+table {{ border-collapse: collapse; width: 100%; font-size: 0.9rem; }}
+th, td {{ border: 1px solid #e5e7eb; padding: 0.35rem 0.5rem; text-align: left; }}
+th {{ background: #f3f4f6; }}
 </style>
 </head>
 <body>
 <h1>NetworkParser multi-level hierarchy query report</h1>
-<p class=\"question\"><strong>Diagnostic question:</strong> {question}</p>
-<p><strong>Hierarchy labels:</strong> {labels}</p>
-<p>Samples queried: {html.escape(str(report.get('n_samples', 0)))}</p>
+<p>{html.escape(str(report.get('diagnostic_question', '')))}</p>
 {''.join(cards)}
-<h2>Notes</h2>
-<ul>{notes}</ul>
 </body>
 </html>
 """
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(document, encoding="utf-8")
-
-
-def write_hierarchical_text_report(report: Dict[str, Any], path: Path) -> None:
-    """Write a plain-text arbitrary-depth hierarchy query report."""
-    lines: List[str] = []
-    lines.append("NetworkParser multi-level hierarchy query report")
-    lines.append("=" * 54)
-    lines.append(f"Samples queried: {report.get('n_samples', 0)}")
-    if report.get("hierarchy_label_columns"):
-        lines.append("Hierarchy labels: " + " > ".join(map(str, report.get("hierarchy_label_columns", []))))
-    if report.get("diagnostic_question"):
-        lines.append("")
-        lines.append("Diagnostic question")
-        lines.append("-------------------")
-        lines.append(str(report.get("diagnostic_question")))
-    lines.append("")
-
-    for sample in report.get("samples", []) or []:
-        lines.append(f"Sample: {sample.get('sample_id')}")
-        lines.append("-" * (8 + len(str(sample.get("sample_id", "")))))
-        lines.append(f"Predicted hierarchy path: {sample.get('predicted_hierarchy_path')}")
-        lines.append(f"Terminal label: {sample.get('predicted_terminal_label')}")
-        lines.append(f"Terminal status: {sample.get('hierarchy_terminal_status')}")
-        if sample.get("hierarchy_terminal_reason"):
-            lines.append(f"Terminal reason: {sample.get('hierarchy_terminal_reason')}")
-        lines.append("")
-
-        for step in sample.get("hierarchy_steps", []) or []:
-            lines.append(f"Level {step.get('level_number')} — {step.get('label_column')}")
-            lines.append(f"  Node status: {step.get('node_status')}")
-            if step.get("prediction") is not None:
-                lines.append(f"  Prediction: {step.get('prediction')}")
-            if step.get("support") is not None:
-                try:
-                    lines.append(f"  Support: {float(step.get('support')):.4f}")
-                except Exception:
-                    lines.append(f"  Support: {step.get('support')}")
-            if step.get("interpretation_confidence"):
-                lines.append(f"  Interpretation confidence: {step.get('interpretation_confidence')}")
-            evidence = step.get("feature_evidence") or {}
-            if evidence:
-                lines.append(f"  Selected features: {evidence.get('n_selected_features', 'NA')}")
-                lines.append(f"  Resolved trained-marker states: {evidence.get('n_resolved_features', 'NA')}")
-                lines.append(f"  Resolved baseline states: {evidence.get('n_resolved_baseline_features', 'NA')}")
-                lines.append(f"  Nonbaseline features: {evidence.get('n_active_features', 'NA')}")
-                if evidence.get("resolved_marker_evidence_status"):
-                    lines.append(f"  Resolved marker evidence: {evidence.get('resolved_marker_evidence_status')}")
-            markers = step.get("supporting_markers") or []
-            if markers:
-                lines.append("  Supporting markers:")
-                for marker in markers[:10]:
-                    extra = f" | role={marker.get('evidence_role', 'NA')}"
-                    if marker.get("observed_allele"):
-                        extra += f" | observed={marker.get('observed_allele')} | status={marker.get('mapping_status', '')}"
-                    lines.append(f"    - {marker.get('feature')} = {marker.get('value')}{extra}")
-            lines.append("")
-        lines.append("")
-
-    lines.append("Notes")
-    lines.append("-----")
-    for note in report.get("notes", []) or []:
-        lines.append(f"- {note}")
-    lines.append("")
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(lines), encoding="utf-8")
+    path.write_text(html_doc, encoding="utf-8")
 
 
 def _html_kv(label: str, value: Any) -> str:
@@ -2381,11 +2440,11 @@ def write_text_report(report: Dict[str, Any], path: Path) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Apply trained two-level or multi-level NetworkParser models to new strain/sample input.",
+        description="Apply trained two-level NetworkParser models to new strain/sample input.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--genomic", required=True, help="New genomic matrix file or VCF directory.")
-    parser.add_argument("--registry", required=True, help="Path to two_level_model_registry.json or hierarchical_model_registry.json from training.")
+    parser.add_argument("--registry", required=True, help="Path to two_level_model_registry.json from training.")
     parser.add_argument("--output_dir", required=True, help="Directory for query outputs.")
     parser.add_argument("--config", default=None, help="Optional JSON config override file.")
     parser.add_argument("--ref_fasta", default=None, help="Optional reference FASTA for VCF parsing context.")
