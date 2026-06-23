@@ -185,6 +185,71 @@ def _feature_hash(features: Iterable[Any]) -> str:
 # -----------------------------------------------------------------------------
 
 
+def is_hierarchical_registry(registry: Dict[str, Any]) -> bool:
+    """Return True when the registry uses the recursive hierarchy schema."""
+    if not isinstance(registry, dict):
+        return False
+    protocol = str(registry.get("protocol", "")).strip().lower()
+    hierarchy = registry.get("hierarchy", {})
+    return protocol == "multi_level_hierarchy_protocol" or (
+        isinstance(hierarchy, dict) and isinstance(hierarchy.get("root"), dict)
+    )
+
+
+def _iter_hierarchy_model_slots(
+    node: Dict[str, Any],
+    tokens: List[Any],
+) -> Iterator[Tuple[List[Any], str, Dict[str, Any]]]:
+    """Yield recursive hierarchy model-file slots."""
+    if not isinstance(node, dict):
+        return
+
+    label_column = str(node.get("label_column", "label"))
+    level_number = str(node.get("level_number", "level"))
+    path_values = []
+    for item in node.get("path", []) or []:
+        if isinstance(item, dict):
+            path_values.append(str(item.get("value", "")))
+    model_id = "hierarchy." + ".".join(
+        [f"level_{level_number}", _safe_token(label_column, 40)]
+        + [_safe_token(value, 40) for value in path_values]
+    )
+
+    yield tokens + ["model_file"], model_id, node
+
+    children = node.get("children", {})
+    if isinstance(children, dict):
+        for child_key, child in children.items():
+            if isinstance(child, dict):
+                yield from _iter_hierarchy_model_slots(
+                    child,
+                    tokens + ["children", str(child_key)],
+                )
+
+
+def _iter_hierarchy_manifest_slots(
+    node: Dict[str, Any],
+    tokens: List[Any],
+) -> Iterator[Tuple[List[Any], str]]:
+    """Yield recursive hierarchy selected-feature manifest slots."""
+    if not isinstance(node, dict):
+        return
+
+    label_column = str(node.get("label_column", "label"))
+    level_number = str(node.get("level_number", "level"))
+    logical_name = f"hierarchy.level_{level_number}.{_safe_token(label_column, 40)}.feature_manifest"
+    yield tokens + ["feature_manifest", "manifest_file"], logical_name
+
+    children = node.get("children", {})
+    if isinstance(children, dict):
+        for child_key, child in children.items():
+            if isinstance(child, dict):
+                yield from _iter_hierarchy_manifest_slots(
+                    child,
+                    tokens + ["children", str(child_key)],
+                )
+
+
 def iter_model_file_slots(registry: Dict[str, Any]) -> Iterator[Tuple[List[Any], str, Dict[str, Any]]]:
     """
     Yield model-file locations in a two-level registry.
@@ -192,6 +257,12 @@ def iter_model_file_slots(registry: Dict[str, Any]) -> Iterator[Tuple[List[Any],
     Each yield is: (path_tokens_to_model_file, model_id, payload_dict).
     The payload dict is the registry section holding model_file/features/status.
     """
+    if is_hierarchical_registry(registry):
+        hierarchy = registry.get("hierarchy", {}) if isinstance(registry, dict) else {}
+        root = hierarchy.get("root", {}) if isinstance(hierarchy, dict) else {}
+        if isinstance(root, dict):
+            yield from _iter_hierarchy_model_slots(root, ["hierarchy", "root"])
+
     level1 = registry.get("level1", {}) if isinstance(registry, dict) else {}
     if isinstance(level1, dict):
         yield ["level1", "model_file"], "level1", level1
@@ -222,6 +293,12 @@ def iter_manifest_slots(registry: Dict[str, Any]) -> Iterator[Tuple[List[Any], s
     training_matrix = registry.get("training_matrix", {}) if isinstance(registry, dict) else {}
     if isinstance(training_matrix, dict):
         yield ["training_matrix", "feature_manifest_file"], "training_matrix.feature_manifest"
+
+    if is_hierarchical_registry(registry):
+        hierarchy = registry.get("hierarchy", {}) if isinstance(registry, dict) else {}
+        root = hierarchy.get("root", {}) if isinstance(hierarchy, dict) else {}
+        if isinstance(root, dict):
+            yield from _iter_hierarchy_manifest_slots(root, ["hierarchy", "root"])
 
     level1 = registry.get("level1", {}) if isinstance(registry, dict) else {}
     if isinstance(level1, dict):
@@ -690,6 +767,20 @@ class BundledNetworkParserQueryEngine(NetworkParserQueryEngine):
         model_importance = extract_model_importance(payload, features)
         return source, features, payload, ranked, model_importance
 
+    def _load_hierarchy_node(self, node: Dict[str, Any]) -> Tuple[List[str], Any, Optional[pd.DataFrame], Optional[pd.DataFrame]]:
+        """Load a recursive hierarchy node from embedded bundle payloads when available."""
+        features = [str(f) for f in node.get("features", [])]
+        if not features:
+            raise ValueError(
+                f"Hierarchy node for label '{node.get('label_column')}' has no selected features."
+            )
+        payload = self._payload_from_registry_section(
+            node,
+            f"Hierarchy node ({node.get('label_column', 'label')})",
+        )
+        ranked = read_ranked_feature_table(node.get("filter", {}), self.registry_base)
+        model_importance = extract_model_importance(payload, features)
+        return features, payload, ranked, model_importance
 
 
 def query_bundle(
@@ -724,10 +815,6 @@ def query_bundle(
         n_jobs=n_jobs,
         query_input_type=query_input_type,
         raw_sequence_mapping_mode=raw_sequence_mapping_mode,
-        meta_path=meta_path,
-        level1_label=level1_label,
-        level2_label=level2_label,
-        sample_id_column=sample_id_column,
     )
 
 

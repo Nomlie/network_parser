@@ -65,6 +65,9 @@ python -m network_parser.cli train-two-level \
 --output_dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_Lineage_Balanced/chi2_perm_fdr  \
 --n_jobs 6
 
+python -m network_parser.cli bundle \
+--registry /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_VCFs/chi2_fdr/hierarchy_testing_with_global_fallback/hierarchical_model_registry.json \
+--output /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_VCFs/chi2_fdr/hierarchy_testing_with_global_fallback/hierachical_networkparser_model_bundle.npb
 
 python -m network_parser.cli bundle \
 --registry /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_with_global/chi2_fdr/two_level_model_registry.json \
@@ -170,10 +173,6 @@ python -m network_parser.cli query \
 --n_jobs 2
 
 
-
-cd /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/
-
-
 python add_test_hierarchy_column.py \
 --input /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/metadata/AFRO_dataset_meta_networkparser_ready.csv \
 --output /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/metadata/AFRO_dataset_meta_with_test_hierarchy.csv \
@@ -190,12 +189,81 @@ python -m network_parser.cli train-two-level \
 --n_jobs 8
 
 python -m network_parser.cli train-two-level \
---genomic /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/ALL_Lineage_Balanced \
+--genomic /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/subset_valid_hierarchy/train \
 --meta /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/metadata/AFRO_dataset_meta_with_test_hierarchy.csv \
---hierarchy_labels Lineage_Supergroup_Test Lineage_clean Resistance_Profile_Collapsed \
+--hierarchy_labels Lineage_Supergroup Lineage_clean Resistance_Profile_Collapsed \
+--global_level2_label AMR_binary \
 --central_feature_filter_method chi2_fdr \
 --ref_fasta /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/VCF_2_Matrix/ref/H37Rv.gbk \
---output_dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_with_global/chi2_fdr/hierarchy_testing \
+--output_dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_VCFs/chi2_fdr/hierarchy_testing_with_global_fallback \
 --n_jobs 8
 
 
+/Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_VCFs/chi2_fdr/hierarchy_testing/hierarchical_model_registry.json
+
+
+python -m network_parser.cli query \
+--genomic /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/subset_valid_hierarchy/test \
+--registry /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/chi2_fdr/hierarchy_testing_AMR/training_1/hierarchical_model_registry.json \
+--output_dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/chi2_fdr/hierarchy_testing_AMR/query_results \
+--query_input_type vcf \
+--ref_fasta /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/VCF_2_Matrix/ref/H37Rv.gbk \
+--n_jobs 4
+
+python -m network_parser.cli evaluate \
+--predictions /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/chi2_fdr/hierarchy_testing_with_global_fallback/testing/query/query_predictions.csv \
+--meta /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/metadata/AFRO_dataset_meta_with_test_hierarchy.csv \
+--hierarchy_labels Lineage_Supergroup Lineage_clean Resistance_Profile_Collapsed \
+--output_dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/chi2_fdr/hierarchy_testing_with_global_fallback/testing/evaluate
+
+python -m network_parser.cli query \
+--genomic /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/subset_valid_hierarchy/test \
+--registry /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/chi2_fdr/hierarchy_testing_with_global_fallback/training/hierachical_networkparser_model_bundle.npb \
+--output_dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/chi2_fdr/hierarchy_testing_with_global_fallback/testing/query \
+--query_input_type vcf \
+--ref_fasta /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/VCF_2_Matrix/ref/H37Rv.gbk \
+--n_jobs 4
+
+python -m network_parser.cli train-two-level \
+--genomic /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/subset_valid_hierarchy/train \
+--meta /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/metadata/AFRO_dataset_meta_with_test_hierarchy.csv \
+--hierarchy_labels Lineage Resistance_Profile AMR_binary \
+--central_feature_filter_method chi2_fdr \
+--ref_fasta /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/VCF_2_Matrix/ref/H37Rv.gbk \
+--output_dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_VCFs/chi2_fdr/hierarchy_testing_AMR/training \
+--n_jobs 8
+
+
+python -m network_parser.cli evaluate \
+--predictions /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_with_global/chi2_fdr/hierarchy_testing/query_results_vcfs/query_predictions.csv \
+--meta /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/metadata/AFRO_dataset_meta_with_test_hierarchy.csv \
+--hierarchy_labels Lineage_Supergroup Lineage Resistance_Profile \
+--output_dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_with_global/chi2_fdr/hierarchy_testing/validation
+
+python -m network_parser.cli evaluate \
+--predictions /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/chi2_fdr/hierarchy_testing_AMR/query_results/query_predictions.csv \
+--meta /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/metadata/AFRO_dataset_meta_with_test_hierarchy.csv \
+--hierarchy_labels Lineage Resistance_Profile AMR_binary \
+--output_dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/chi2_fdr/hierarchy_testing_AMR/validation
+
+cd /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/
+
+
+
+python -m network_parser.cli cross-validate \
+--genomic /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/subset_valid_hierarchy/train \
+--meta /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/metadata/AFRO_dataset_meta_with_test_hierarchy.csv \
+--label Lineage_clean \
+--central_feature_filter_method chi2_fdr \
+--n_repeats 3 \
+--n_splits 5 \
+--n_jobs 8
+
+===================================================================================
+Two_levels_with_global_AMR_binary_fallback
+
+
+
+Hierarchy_with_AMR_binary
+
+Hierarchy_with_resistance_profiles

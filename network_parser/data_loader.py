@@ -45,19 +45,21 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 from concurrent.futures import ProcessPoolExecutor
 from joblib import Parallel, delayed
+import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
 
 try:
-    from network_parser.utils import log_flow_step, log_filter_step, log_artifact
+    from network_parser.utils import log_flow_step, log_filter_step, log_artifact, progress_iter
 except Exception:  # pragma: no cover - supports direct source-tree execution
     try:
-        from utils import log_flow_step, log_filter_step, log_artifact  # type: ignore
+        from utils import log_flow_step, log_filter_step, log_artifact, progress_iter  # type: ignore
     except Exception:  # pragma: no cover
         log_flow_step = None  # type: ignore
         log_filter_step = None  # type: ignore
         log_artifact = None  # type: ignore
+        progress_iter = lambda iterable, **kwargs: iterable  # type: ignore
 
 def _minor_count_chunk(cols: List[List[str]]) -> List[Tuple[int, int]]:
     # returns [(count0, count1), ...] for each col in chunk
@@ -1117,7 +1119,10 @@ class DataLoader:
         n_jobs = getattr(self, "n_jobs", -1)
         logger.info("DataLoader: starting parallel per-sample parsing (n_jobs=%s)", _fmt_n_jobs(n_jobs))
 
-        results = Parallel(n_jobs=n_jobs)(delayed(process_vcf)(vcf) for vcf in vcfs)
+        results = Parallel(n_jobs=n_jobs)(
+            delayed(process_vcf)(vcf)
+            for vcf in progress_iter(vcfs, desc="Parsing VCF samples", unit="sample", leave=False)
+        )
 
         # 6) Parsing summary + clarify where it is stored
         n_samples = len(results)
@@ -1547,17 +1552,14 @@ class DataLoader:
         # 2) Enforce minimum minor allele count
         # ─────────────────────────────────────────────
         if self.min_minor_count > 0 and not df.empty:
-            keep_mask = []
-
-            for col in df.columns:
-                vc = df[col].value_counts(dropna=False)
-                count_0 = vc.get(0, 0)
-                count_1 = vc.get(1, 0)
-                keep_mask.append(min(count_0, count_1) >= self.min_minor_count)
+            arr = df.to_numpy(copy=False)
+            count_1 = (arr == 1).sum(axis=0)
+            count_0 = (arr == 0).sum(axis=0)
+            keep_mask = np.minimum(count_0, count_1) >= self.min_minor_count
 
             before_minor = int(df.shape[1])
             before_minor_samples = int(df.shape[0])
-            df = df.loc[:, keep_mask]
+            df = df.loc[:, np.asarray(keep_mask, dtype=bool)]
             removed_low_minor_count = before_minor - df.shape[1]
 
             if log_filter_step is not None:
@@ -2420,8 +2422,8 @@ class DataLoader:
 
         if missing_cells > 0:
             logger.info(
-                "Preprocessing note — missing values detected | cells=%d | "
-                "reason=missing values are preserved at matrix loading so downstream stages can apply their configured baseline/imputation rules",
+                "Preprocessing note — detected %d missing cells; values are preserved at matrix loading "
+                "so downstream stages can apply their configured baseline/imputation rules",
                 missing_cells,
             )
 
