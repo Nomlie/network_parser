@@ -259,11 +259,6 @@ python -m network_parser.cli cross-validate \
 --n_splits 5 \
 --n_jobs 8
 
-===================================================================================
-Two_levels_with_global_AMR_binary_fallback
-
-
-
-Hierarchy_with_AMR_binary
-
-Hierarchy_with_resistance_profiles
+python -m network_parser.cli bundle \
+--registry /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_VCFs/chi2_fdr/Two_levels_with_global_AMR_binary_fallback/two_level_model_registry.json \
+--output /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_VCFs/chi2_fdr/Two_levels_with_global_AMR_binary_fallback/networkparser_model_bundle.npb
