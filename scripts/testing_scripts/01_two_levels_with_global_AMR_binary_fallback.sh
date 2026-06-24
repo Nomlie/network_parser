@@ -7,18 +7,19 @@ source "${SCRIPT_DIR}/00_config.sh"
 RUN_NAME="Two_levels_with_global_AMR_binary_fallback"
 RUN_DIR="${BASE_OUT}/${RUN_NAME}"
 
-mkdir -p "${RUN_DIR}" "${RUN_DIR}/query" "${RUN_DIR}/evaluate"
+#mkdir -p "${RUN_DIR}" "${RUN_DIR}/query" "${RUN_DIR}/evaluate"
 
-python -m network_parser.cli train-two-level \
-  --genomic "${TRAIN_GENOMIC}" \
-  --meta "${META}" \
-  --level1_label Lineage_clean \
-  --level2_label Resistance_Profile_Collapsed \
-  --global_level2_label AMR_binary \
-  --central_feature_filter_method "${FILTER}" \
-  --ref_fasta "${REF}" \
-  --output_dir "${RUN_DIR}" \
-  --n_jobs "${N_JOBS}"
+
+#python -m network_parser.cli train-two-level \
+#  --genomic "${TRAIN_GENOMIC}" \
+#  --meta "${META}" \
+#  --level1_label Lineage_clean \
+#  --level2_label Resistance_Profile_Collapsed \
+#  --global_level2_label AMR_binary \
+#  --central_feature_filter_method "${FILTER}" \
+#  --ref_fasta "${REF}" \
+#  --output_dir "${RUN_DIR}" \
+#  --n_jobs "${N_JOBS}"
 
 python -m network_parser.cli query \
   --genomic "${TEST_GENOMIC}" \
