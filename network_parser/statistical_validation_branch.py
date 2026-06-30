@@ -296,22 +296,28 @@ class StatisticalValidatorBranch:
                 logger.warning("Association testing failed for feature '%s': %s", feature, exc)
                 return feature, None
 
-        # Chunked execution
         features = list(data.columns)
-        results = []
+        batch_size = int(getattr(self.config, "association_test_batch_size", chunk_size))
+        batch_size = max(50, min(batch_size, chunk_size))
 
-        chunk_starts = list(range(0, len(features), chunk_size))
-        for i in progress_iter(
-            chunk_starts,
-            desc="Association tests",
-            unit="chunk",
-            leave=False,
-        ):
-            chunk = features[i : i + chunk_size]
-            chunk_results = Parallel(n_jobs=self.n_jobs)(
-                delayed(test_feature)(f) for f in chunk
+        logger.info(
+            "Association testing dispatch | features=%d | batch_size=%d",
+            len(features),
+            int(batch_size),
+        )
+
+        results = Parallel(
+            n_jobs=self.n_jobs,
+            batch_size=int(batch_size),
+        )(
+            delayed(test_feature)(feature)
+            for feature in progress_iter(
+                features,
+                desc="Association tests",
+                unit="feature",
+                leave=False,
             )
-            results.extend(chunk_results)
+        )
 
         # Build final dict
         final_results: Dict[str, Any] = {}

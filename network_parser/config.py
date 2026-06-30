@@ -4,7 +4,7 @@ network_parser.config
 
 Central configuration object for NetworkParser.
 
-Updated architecture
+Architecture
 --------------------
 Input -> preprocessing
       -> central feature filtering
@@ -160,6 +160,17 @@ class NetworkParserConfig:
     random_state: int = 42
     memory_efficient: bool = False
 
+    # Query-time parallelism. Hierarchy/two-level query can process independent
+    # samples concurrently; two-level Level-2 inference is also batched by group.
+    query_parallel_samples: bool = True
+    query_parallel_n_jobs: Optional[int] = None
+
+    # Training-time parallelism for independent workloads.
+    hierarchy_parallel_fallback_training: bool = True
+    level2_parallel_group_training: bool = True
+    feature_panel_parallel_scoring: bool = True
+    association_test_batch_size: int = 250
+
     # -------------------------------------------------
     # 13) FASTQ query preprocessing
     # -------------------------------------------------
@@ -205,13 +216,49 @@ class NetworkParserConfig:
     # with the number of Level-2 labels represented in that group.
     min_level2_samples_per_group: Optional[int] = None
 
-    # Optional Level-2 label-support gate. Disabled by default so legacy runs
-    # remain unchanged. When enabled, Level-2 classes with fewer than
-    # level2_min_class_count samples are excluded before Level-2 statistical
-    # filtering and model screening. This prevents impossible stratified CV
-    # caused by singleton or extremely underrepresented phenotype classes.
-    level2_drop_low_support_classes: bool = False
+    # Label-support gate applied before hierarchy-node and Level-2 statistical
+    # filtering. Classes with fewer than level2_min_class_count samples are
+    # excluded so stratified CV and model screening remain feasible.
+    level2_drop_low_support_classes: bool = True
     level2_min_class_count: int = 2
+
+    # Query-time reporting for labels that were rare in training. Instead of
+    # emitting a hard class call, NetworkParser can surface a review-required
+    # endpoint and ask the user to inspect the sample or merge rare classes in
+    # metadata when that is biologically appropriate.
+    low_support_review_enabled: bool = True
+    low_support_review_min_class_count: int = 10
+    low_support_review_label: str = "low_support_review_required"
+    low_support_review_action_message: str = (
+        "Manually review this sample or merge rare classes in metadata if that "
+        "grouping is biologically appropriate."
+    )
+
+    # Query-time AMR evidence guard. Branch AMR models can call susceptible with
+    # high probability when too few lineage-specific resistance markers resolve.
+    # When that happens, optionally escalate to a saved terminal AMR fallback
+    # model; otherwise report an evidence-review endpoint instead of susceptible.
+    amr_weak_evidence_review_enabled: bool = True
+    amr_weak_evidence_min_resolved_fraction: float = 0.15
+    amr_weak_evidence_review_label: str = "amr_evidence_review_required"
+    amr_weak_evidence_review_action_message: str = (
+        "Branch AMR prediction had insufficient resolved resistance-marker evidence. "
+        "Manually review the resistance phenotype or inspect marker coverage before "
+        "accepting a susceptible call."
+    )
+    amr_evidence_guard_label_columns: Optional[str] = None
+    hierarchy_global_amr_fallback_on_weak_evidence: bool = True
+    hierarchy_global_amr_fallback_min_resistant_probability: float = 0.50
+
+    # Recursive-hierarchy global lineage fallback. Trains one global model for the
+    # resolved lineage label column (for example Lineage_clean) and uses it during
+    # query when a branch-specific lineage node is unavailable, low-confidence,
+    # or disagrees with the global prediction.
+    hierarchy_train_global_lineage_fallback: bool = True
+    hierarchy_global_lineage_fallback_label: Optional[str] = None
+    hierarchy_global_lineage_fallback_on_low_confidence: bool = True
+    hierarchy_global_lineage_fallback_on_disagreement: bool = True
+    hierarchy_global_lineage_fallback_min_support_delta: float = 0.0
 
     # Optional additional Level-2 global binary fallback. This trains a
     # resistant/susceptible endpoint across all lineages and is used only when
@@ -366,6 +413,72 @@ class NetworkParserConfig:
         if int(self.level2_min_class_count) < 2:
             raise ValueError("level2_min_class_count must be >= 2")
         self.level2_min_class_count = int(self.level2_min_class_count)
+        if not isinstance(self.low_support_review_enabled, bool):
+            raise ValueError("low_support_review_enabled must be boolean")
+        review_min = int(self.low_support_review_min_class_count)
+        if review_min < 2:
+            raise ValueError("low_support_review_min_class_count must be >= 2")
+        self.low_support_review_min_class_count = review_min
+        review_label = str(self.low_support_review_label or "").strip()
+        if not review_label:
+            raise ValueError("low_support_review_label must be a non-empty string")
+        self.low_support_review_label = review_label
+        action_message = str(self.low_support_review_action_message or "").strip()
+        if not action_message:
+            raise ValueError("low_support_review_action_message must be a non-empty string")
+        self.low_support_review_action_message = action_message
+        if not isinstance(self.amr_weak_evidence_review_enabled, bool):
+            raise ValueError("amr_weak_evidence_review_enabled must be boolean")
+        amr_min_frac = float(self.amr_weak_evidence_min_resolved_fraction)
+        if not (0.0 <= amr_min_frac <= 1.0):
+            raise ValueError("amr_weak_evidence_min_resolved_fraction must be between 0 and 1")
+        self.amr_weak_evidence_min_resolved_fraction = amr_min_frac
+        amr_review_label = str(self.amr_weak_evidence_review_label or "").strip()
+        if not amr_review_label:
+            raise ValueError("amr_weak_evidence_review_label must be a non-empty string")
+        self.amr_weak_evidence_review_label = amr_review_label
+        amr_action = str(self.amr_weak_evidence_review_action_message or "").strip()
+        if not amr_action:
+            raise ValueError("amr_weak_evidence_review_action_message must be a non-empty string")
+        self.amr_weak_evidence_review_action_message = amr_action
+        if self.amr_evidence_guard_label_columns is not None:
+            cols = [str(x).strip() for x in str(self.amr_evidence_guard_label_columns).split(",") if str(x).strip()]
+            self.amr_evidence_guard_label_columns = ",".join(cols) if cols else None
+        if not isinstance(self.hierarchy_global_amr_fallback_on_weak_evidence, bool):
+            raise ValueError("hierarchy_global_amr_fallback_on_weak_evidence must be boolean")
+        amr_res_prob = float(self.hierarchy_global_amr_fallback_min_resistant_probability)
+        if not (0.0 <= amr_res_prob <= 1.0):
+            raise ValueError("hierarchy_global_amr_fallback_min_resistant_probability must be between 0 and 1")
+        self.hierarchy_global_amr_fallback_min_resistant_probability = amr_res_prob
+        if self.hierarchy_global_lineage_fallback_label is not None:
+            self.hierarchy_global_lineage_fallback_label = (
+                str(self.hierarchy_global_lineage_fallback_label).strip() or None
+            )
+        if not isinstance(self.hierarchy_train_global_lineage_fallback, bool):
+            raise ValueError("hierarchy_train_global_lineage_fallback must be boolean")
+        if not isinstance(self.hierarchy_global_lineage_fallback_on_low_confidence, bool):
+            raise ValueError("hierarchy_global_lineage_fallback_on_low_confidence must be boolean")
+        if not isinstance(self.hierarchy_global_lineage_fallback_on_disagreement, bool):
+            raise ValueError("hierarchy_global_lineage_fallback_on_disagreement must be boolean")
+        delta = float(self.hierarchy_global_lineage_fallback_min_support_delta)
+        if delta < 0.0:
+            raise ValueError("hierarchy_global_lineage_fallback_min_support_delta must be >= 0")
+        self.hierarchy_global_lineage_fallback_min_support_delta = delta
+
+        if not isinstance(self.query_parallel_samples, bool):
+            raise ValueError("query_parallel_samples must be boolean")
+        if self.query_parallel_n_jobs is not None and int(self.query_parallel_n_jobs) == 0:
+            raise ValueError("query_parallel_n_jobs must be != 0 or None")
+        if not isinstance(self.hierarchy_parallel_fallback_training, bool):
+            raise ValueError("hierarchy_parallel_fallback_training must be boolean")
+        if not isinstance(self.level2_parallel_group_training, bool):
+            raise ValueError("level2_parallel_group_training must be boolean")
+        if not isinstance(self.feature_panel_parallel_scoring, bool):
+            raise ValueError("feature_panel_parallel_scoring must be boolean")
+        batch_size = int(self.association_test_batch_size)
+        if batch_size < 1:
+            raise ValueError("association_test_batch_size must be >= 1")
+        self.association_test_batch_size = batch_size
         if not isinstance(self.level2_train_binary_global_fallback, bool):
             raise ValueError("level2_train_binary_global_fallback must be boolean")
         if self.level2_binary_label_column is not None:

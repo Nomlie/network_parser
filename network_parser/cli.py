@@ -3,7 +3,7 @@
 """
 NetworkParser command-line interface.
 
-Supports three entry points:
+Supports four entry points:
 
 1) run
    Single-label NetworkParser workflow:
@@ -11,12 +11,15 @@ Supports three entry points:
    -> conditional decision-tree interpretability -> optional downstream validation.
 
 2) train-two-level
-   Two-label hierarchical protocol:
+   Two-label / recursive hierarchical protocol:
    Level 1: strain / lineage / group placement
-   Level 2: drug-resistance phenotype / resistance-profile prediction
+   Level 2+: phenotype / AMR-profile / terminal endpoint prediction
 
-3) query
-   User-facing inference on a new strain/sample using a saved two-level registry.
+3) bundle
+   Package a trained registry into a portable .npb binary model bundle.
+
+4) query
+   User-facing inference on a new strain/sample using a saved registry or bundle.
 
 Backward compatibility:
 If no subcommand is supplied, arguments are interpreted as the single-label
@@ -31,7 +34,7 @@ import json
 import logging
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 try:
     from network_parser.config import NetworkParserConfig
@@ -47,7 +50,7 @@ except Exception:  # pragma: no cover - allows direct execution from source tree
 
 LOGGER = logging.getLogger(__name__)
 VALID_PIPELINE_MODES = {"matrix_only", "decision_tree_only", "ml_only", "both"}
-VALID_SUBCOMMANDS = {"run", "train-two-level", "query"}
+VALID_SUBCOMMANDS = {"run", "train-two-level", "bundle", "query", "evaluate", "cross-validate", "cross_validation"}
 
 
 # -----------------------------------------------------------------------------
@@ -137,12 +140,34 @@ def apply_common_overrides(config: NetworkParserConfig, args: argparse.Namespace
 
     set_if_provided(config, "global_level2_label_column", getattr(args, "global_level2_label", None))
 
-    if bool(getattr(args, "level2_drop_low_support_classes", False)):
+    if bool(getattr(args, "keep_low_support_classes", False)):
+        config.level2_drop_low_support_classes = False
+    elif bool(getattr(args, "level2_drop_low_support_classes", False)):
         config.level2_drop_low_support_classes = True
     set_if_provided(config, "level2_min_class_count", getattr(args, "level2_min_class_count", None))
 
+    if bool(getattr(args, "no_hierarchy_global_lineage_fallback", False)):
+        config.hierarchy_train_global_lineage_fallback = False
+    set_if_provided(
+        config,
+        "hierarchy_global_lineage_fallback_label",
+        getattr(args, "hierarchy_global_lineage_fallback_label", None),
+    )
+    if bool(getattr(args, "no_hierarchy_global_lineage_low_confidence_fallback", False)):
+        config.hierarchy_global_lineage_fallback_on_low_confidence = False
+    if bool(getattr(args, "no_hierarchy_global_lineage_disagreement_fallback", False)):
+        config.hierarchy_global_lineage_fallback_on_disagreement = False
+    set_if_provided(
+        config,
+        "hierarchy_global_lineage_fallback_min_support_delta",
+        getattr(args, "hierarchy_global_lineage_fallback_min_support_delta", None),
+    )
+
     if bool(getattr(args, "level2_train_binary_global_fallback", False)):
         config.level2_train_binary_global_fallback = True
+    apply_low_support_review_overrides(config, args)
+    apply_amr_evidence_guard_overrides(config, args)
+    apply_performance_overrides(config, args)
     set_if_provided(config, "level2_binary_label_column", getattr(args, "level2_binary_label_column", None))
     set_if_provided(config, "level2_binary_label_mapping_file", getattr(args, "level2_binary_label_mapping_file", None))
     set_if_provided(config, "level2_binary_resistant_values", getattr(args, "level2_binary_resistant_values", None))
@@ -161,6 +186,168 @@ def add_logging_args(parser: argparse.ArgumentParser) -> None:
 def add_config_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--config", default=None, help="Optional JSON file with NetworkParserConfig overrides.")
     parser.add_argument("--n_jobs", type=int, default=None, help="Number of parallel workers where supported.")
+
+
+def add_amr_evidence_guard_args(parser: argparse.ArgumentParser) -> None:
+    group = parser.add_argument_group("AMR evidence guard")
+    group.add_argument(
+        "--no_amr_weak_evidence_review",
+        action="store_true",
+        help=(
+            "Disable query-time blocking of weak-evidence susceptible AMR branch "
+            "predictions. When enabled, such calls are surfaced for manual review."
+        ),
+    )
+    group.add_argument(
+        "--amr_weak_evidence_min_resolved_fraction",
+        type=float,
+        default=None,
+        help=(
+            "Minimum fraction of branch AMR panel features that must resolve before "
+            "a susceptible call is reported confidently."
+        ),
+    )
+    group.add_argument(
+        "--amr_weak_evidence_review_label",
+        default=None,
+        help="Label reported when a susceptible AMR call is blocked for weak marker evidence.",
+    )
+    group.add_argument(
+        "--no_hierarchy_global_amr_fallback_on_weak_evidence",
+        action="store_true",
+        help=(
+            "Do not try lineage/global terminal AMR fallback models before blocking "
+            "weak-evidence susceptible branch predictions."
+        ),
+    )
+    group.add_argument(
+        "--hierarchy_global_amr_fallback_min_resistant_probability",
+        type=float,
+        default=None,
+        help=(
+            "Minimum resistant probability required from a terminal AMR fallback "
+            "model before it overrides a weak-evidence susceptible branch call."
+        ),
+    )
+    group.add_argument(
+        "--amr_evidence_guard_label_columns",
+        default=None,
+        help="Comma-separated metadata label columns guarded by the AMR evidence policy.",
+    )
+
+
+def apply_amr_evidence_guard_overrides(config: NetworkParserConfig, args: argparse.Namespace) -> None:
+    if bool(getattr(args, "no_amr_weak_evidence_review", False)):
+        config.amr_weak_evidence_review_enabled = False
+    set_if_provided(
+        config,
+        "amr_weak_evidence_min_resolved_fraction",
+        getattr(args, "amr_weak_evidence_min_resolved_fraction", None),
+    )
+    set_if_provided(
+        config,
+        "amr_weak_evidence_review_label",
+        getattr(args, "amr_weak_evidence_review_label", None),
+    )
+    if bool(getattr(args, "no_hierarchy_global_amr_fallback_on_weak_evidence", False)):
+        config.hierarchy_global_amr_fallback_on_weak_evidence = False
+    set_if_provided(
+        config,
+        "hierarchy_global_amr_fallback_min_resistant_probability",
+        getattr(args, "hierarchy_global_amr_fallback_min_resistant_probability", None),
+    )
+    set_if_provided(
+        config,
+        "amr_evidence_guard_label_columns",
+        getattr(args, "amr_evidence_guard_label_columns", None),
+    )
+
+
+def add_low_support_review_args(parser: argparse.ArgumentParser) -> None:
+    group = parser.add_argument_group("Low-support review reporting")
+    group.add_argument(
+        "--no_low_support_review",
+        action="store_true",
+        help=(
+            "Disable query-time low-support review labels. By default, rare-class "
+            "predictions are reported as low_support_review_required instead of "
+            "merging rare groups."
+        ),
+    )
+    group.add_argument(
+        "--low_support_review_min_class_count",
+        type=int,
+        default=None,
+        help=(
+            "Minimum training samples per class required for confident reporting at "
+            "query time. Classes below this threshold are flagged for manual review."
+        ),
+    )
+    group.add_argument(
+        "--low_support_review_label",
+        default=None,
+        help="Label reported when a prediction maps to a low-support training class.",
+    )
+
+
+def apply_low_support_review_overrides(config: NetworkParserConfig, args: argparse.Namespace) -> None:
+    if bool(getattr(args, "no_low_support_review", False)):
+        config.low_support_review_enabled = False
+    set_if_provided(
+        config,
+        "low_support_review_min_class_count",
+        getattr(args, "low_support_review_min_class_count", None),
+    )
+    set_if_provided(config, "low_support_review_label", getattr(args, "low_support_review_label", None))
+
+
+def add_performance_args(parser: argparse.ArgumentParser) -> None:
+    group = parser.add_argument_group("Performance controls")
+    group.add_argument(
+        "--no_query_parallel_samples",
+        action="store_true",
+        help="Disable parallel per-sample hierarchy query traversal.",
+    )
+    group.add_argument(
+        "--query_parallel_n_jobs",
+        type=int,
+        default=None,
+        help="Worker count for parallel query traversal. Defaults to --n_jobs when unset.",
+    )
+    group.add_argument(
+        "--no_hierarchy_parallel_fallback_training",
+        action="store_true",
+        help="Train hierarchy terminal fallback models sequentially instead of in parallel.",
+    )
+    group.add_argument(
+        "--no_level2_parallel_group_training",
+        action="store_true",
+        help="Train Level-2 group-specific models sequentially instead of in parallel.",
+    )
+    group.add_argument(
+        "--no_feature_panel_parallel_scoring",
+        action="store_true",
+        help="Score feature-panel candidate sizes sequentially instead of in parallel.",
+    )
+    group.add_argument(
+        "--association_test_batch_size",
+        type=int,
+        default=None,
+        help="Features dispatched per association-test parallel batch.",
+    )
+
+
+def apply_performance_overrides(config: NetworkParserConfig, args: argparse.Namespace) -> None:
+    if bool(getattr(args, "no_query_parallel_samples", False)):
+        config.query_parallel_samples = False
+    set_if_provided(config, "query_parallel_n_jobs", getattr(args, "query_parallel_n_jobs", None))
+    if bool(getattr(args, "no_hierarchy_parallel_fallback_training", False)):
+        config.hierarchy_parallel_fallback_training = False
+    if bool(getattr(args, "no_level2_parallel_group_training", False)):
+        config.level2_parallel_group_training = False
+    if bool(getattr(args, "no_feature_panel_parallel_scoring", False)):
+        config.feature_panel_parallel_scoring = False
+    set_if_provided(config, "association_test_batch_size", getattr(args, "association_test_batch_size", None))
 
 
 def add_rf_fdr_args(parser: argparse.ArgumentParser) -> None:
@@ -338,6 +525,9 @@ def build_run_parser(prog: Optional[str] = None, add_help: bool = True) -> argpa
     parser.add_argument("--ml_remove_empty_field_threshold", type=float, default=None, help="Optional empty-field removal threshold.")
 
     add_config_args(parser)
+    add_low_support_review_args(parser)
+    add_amr_evidence_guard_args(parser)
+    add_performance_args(parser)
     add_rf_fdr_args(parser)
     add_logging_args(parser)
     return parser
@@ -391,16 +581,58 @@ def build_train_two_level_parser(prog: Optional[str] = None, add_help: bool = Tr
         "--level2_drop_low_support_classes",
         action="store_true",
         help=(
-            "Exclude Level 2 classes with too few samples before Level 2 statistical "
-            "filtering and model screening. This is useful when singleton or very rare "
-            "phenotype classes make stratified cross-validation impossible."
+            "Force dropping of low-support classes before hierarchy-node and Level-2 "
+            "training. Enabled by default in the current architecture."
+        ),
+    )
+    parser.add_argument(
+        "--keep_low_support_classes",
+        action="store_true",
+        help=(
+            "Retain singleton or very rare classes during hierarchy-node and Level-2 "
+            "training instead of applying the default low-support class filter."
         ),
     )
     parser.add_argument(
         "--level2_min_class_count",
         type=int,
         default=None,
-        help="Minimum samples per Level 2 class when --level2_drop_low_support_classes is enabled.",
+        help="Minimum samples per class required when low-support class dropping is enabled.",
+    )
+    parser.add_argument(
+        "--no_hierarchy_global_lineage_fallback",
+        action="store_true",
+        help="Disable the global lineage fallback model trained for recursive hierarchy query mode.",
+    )
+    parser.add_argument(
+        "--hierarchy_global_lineage_fallback_label",
+        default=None,
+        help=(
+            "Metadata column for the global lineage fallback model. When unset, "
+            "NetworkParser resolves a lineage-like label from --hierarchy_labels."
+        ),
+    )
+    parser.add_argument(
+        "--no_hierarchy_global_lineage_low_confidence_fallback",
+        action="store_true",
+        help="Do not replace low-confidence branch lineage predictions with the global lineage model.",
+    )
+    parser.add_argument(
+        "--no_hierarchy_global_lineage_disagreement_fallback",
+        action="store_true",
+        help=(
+            "Do not replace branch lineage predictions when the global lineage model "
+            "disagrees and has stronger support."
+        ),
+    )
+    parser.add_argument(
+        "--hierarchy_global_lineage_fallback_min_support_delta",
+        type=float,
+        default=None,
+        help=(
+            "Minimum support advantage required before a disagreeing global lineage "
+            "prediction overrides a branch prediction."
+        ),
     )
     parser.add_argument(
         "--level2_train_binary_global_fallback",
@@ -438,8 +670,24 @@ def build_train_two_level_parser(prog: Optional[str] = None, add_help: bool = Tr
         default=None,
         help="Comma-separated values interpreted as susceptible for the binary Level 2 fallback.",
     )
+    parser.add_argument(
+        "--bundle_output",
+        default=None,
+        help=(
+            "Optional output path for the automatically created .npb model bundle. "
+            "Default: <output_dir>/networkparser_model_bundle.npb."
+        ),
+    )
+    parser.add_argument(
+        "--no_model_bundle",
+        action="store_true",
+        help="Do not automatically create networkparser_model_bundle.npb after training.",
+    )
 
     add_config_args(parser)
+    add_low_support_review_args(parser)
+    add_amr_evidence_guard_args(parser)
+    add_performance_args(parser)
     add_rf_fdr_args(parser)
     add_logging_args(parser)
     return parser
@@ -517,9 +765,135 @@ def build_query_parser(prog: Optional[str] = None, add_help: bool = True) -> arg
     )
 
     add_config_args(parser)
+    add_low_support_review_args(parser)
+    add_amr_evidence_guard_args(parser)
+    add_performance_args(parser)
     add_logging_args(parser)
     return parser
 
+
+def build_evaluate_parser(prog: Optional[str] = None, add_help: bool = True) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog=prog,
+        description=(
+            "Evaluate saved NetworkParser query predictions against labelled metadata. "
+            "This is evaluation-only and does not rerun feature filtering, model training, "
+            "decision-tree construction, or bootstrap confidence scoring."
+        ),
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        add_help=add_help,
+    )
+    parser.add_argument("--predictions", required=True, help="Path to query_predictions.csv or another saved prediction table.")
+    parser.add_argument("--meta", required=True, help="Path to metadata file containing the true labels.")
+    parser.add_argument("--output_dir", required=True, help="Output directory for evaluation artifacts.")
+    parser.add_argument("--label", default=None, help="Single metadata label column to evaluate.")
+    parser.add_argument(
+        "--hierarchy_labels",
+        nargs="+",
+        default=None,
+        help="Ordered metadata label columns to evaluate, for example: Lineage Resistance_Profile AMR_binary",
+    )
+    parser.add_argument(
+        "--global_level2_label",
+        default=None,
+        help=(
+            "Optional truth label for standard two-level global fallback evaluation. "
+            "When supplied with --hierarchy_labels, it replaces the second requested "
+            "truth label during evaluation only."
+        ),
+    )
+    parser.add_argument(
+        "--predicted_column",
+        default=None,
+        help="Optional explicit prediction column when evaluating a single label.",
+    )
+    parser.add_argument(
+        "--sample_id_column",
+        default=None,
+        help="Optional sample-id column in metadata. If omitted, common sample-id column names are auto-detected.",
+    )
+    parser.add_argument(
+        "--skip_missing_prediction_levels",
+        action="store_true",
+        help="Skip a requested hierarchy level if the expected prediction column is absent.",
+    )
+    add_logging_args(parser)
+    return parser
+
+
+def build_cross_validate_parser(prog: Optional[str] = None, add_help: bool = True) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog=prog,
+        description=(
+            "Run leakage-aware repeated cross-validation for one supervised label. "
+            "Each fold performs feature filtering, feature-panel selection, and model training "
+            "inside the training split only."
+        ),
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        add_help=add_help,
+    )
+    parser.add_argument("--genomic", required=True, help="Training genomic input file or directory.")
+    parser.add_argument("--meta", required=True, help="Metadata file containing the supervised label.")
+    parser.add_argument("--label", required=True, help="Metadata label column to cross-validate.")
+    parser.add_argument("--output_dir", required=True, help="Output directory for repeated cross-validation artifacts.")
+    parser.add_argument("--ref_fasta", default=None, help="Optional reference FASTA/GenBank context for VCF-oriented workflows.")
+    parser.add_argument("--algorithm", default=None, help="Optional fixed downstream algorithm. Leave unset to use the normal selector pathway.")
+    parser.add_argument("--n_repeats", type=int, default=3, help="Number of repeated CV rounds.")
+    parser.add_argument("--n_splits", type=int, default=5, help="Requested stratified folds per repeat.")
+    parser.add_argument("--random_state", type=int, default=None, help="Random seed for repeat/fold generation.")
+    add_rf_fdr_args(parser)
+    add_config_args(parser)
+    add_performance_args(parser)
+    add_logging_args(parser)
+    return parser
+
+
+def build_bundle_parser(prog: Optional[str] = None, add_help: bool = True) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog=prog,
+        description=(
+            "Package a trained NetworkParser registry into a portable .npb model bundle. "
+            "This is a deployment/inference artifact and does not rerun feature filtering, "
+            "model selection, tree construction, or bootstrap confidence scoring."
+        ),
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        add_help=add_help,
+    )
+    parser.add_argument(
+        "--registry",
+        required=True,
+        help="Path to two_level_model_registry.json or hierarchical_model_registry.json from training.",
+    )
+    parser.add_argument(
+        "--output",
+        "--output_bundle",
+        dest="output",
+        default=None,
+        help=(
+            "Output .npb path. If omitted, networkparser_model_bundle.npb is written "
+            "next to the registry."
+        ),
+    )
+    parser.add_argument(
+        "--no_model_payloads",
+        action="store_true",
+        help=(
+            "Do not embed trained model objects. Usually leave this off; without embedded "
+            "models the bundle is not fully portable for query inference."
+        ),
+    )
+    parser.add_argument(
+        "--no_feature_manifests",
+        action="store_true",
+        help="Do not embed selected-feature manifests/context tables.",
+    )
+    parser.add_argument(
+        "--no_ranked_feature_tables",
+        action="store_true",
+        help="Do not embed ranked feature-result tables used for supporting-marker ranking.",
+    )
+    add_logging_args(parser)
+    return parser
 
 def build_top_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -539,6 +913,14 @@ def build_top_parser() -> argparse.ArgumentParser:
     )
     train_two.set_defaults(command="train-two-level")
 
+    bundle = subparsers.add_parser(
+        "bundle",
+        help="Package a trained registry into a portable .npb model bundle.",
+        parents=[build_bundle_parser(add_help=False)],
+        add_help=True,
+    )
+    bundle.set_defaults(command="bundle")
+
     query = subparsers.add_parser(
         "query",
         help="Run user-facing prediction on new strain/sample input.",
@@ -546,6 +928,23 @@ def build_top_parser() -> argparse.ArgumentParser:
         add_help=True,
     )
     query.set_defaults(command="query")
+
+    evaluate = subparsers.add_parser(
+        "evaluate",
+        help="Evaluate saved query predictions against labelled metadata.",
+        parents=[build_evaluate_parser(add_help=False)],
+        add_help=True,
+    )
+    evaluate.set_defaults(command="evaluate")
+
+    cross_validate = subparsers.add_parser(
+        "cross-validate",
+        aliases=["cross_validation"],
+        help="Run leakage-aware repeated cross-validation for one supervised label.",
+        parents=[build_cross_validate_parser(add_help=False)],
+        add_help=True,
+    )
+    cross_validate.set_defaults(command="cross-validate")
     return parser
 
 
@@ -599,6 +998,49 @@ def run_single_label(args: argparse.Namespace) -> Dict[str, Any]:
     )
 
 
+def _build_training_bundle(
+    *,
+    args: argparse.Namespace,
+    registry_path: Path,
+) -> Optional[Path]:
+    """Create the default portable .npb bundle after successful training."""
+    if bool(getattr(args, "no_model_bundle", False)):
+        LOGGER.info("Skipping automatic model bundle creation because --no_model_bundle was supplied.")
+        return None
+
+    registry_path = Path(registry_path)
+    if not registry_path.exists():
+        raise FileNotFoundError(
+            f"Training registry was expected but not found, so the model bundle cannot be created: {registry_path}"
+        )
+
+    output_path = (
+        Path(args.bundle_output)
+        if getattr(args, "bundle_output", None)
+        else Path(args.output_dir) / "networkparser_model_bundle.npb"
+    )
+
+    try:
+        from network_parser.model_bundle import build_bundle_from_registry
+    except Exception:  # pragma: no cover - supports direct source-tree execution
+        from model_bundle import build_bundle_from_registry  # type: ignore
+
+    LOGGER.info(
+        "Creating NetworkParser model bundle after training | registry=%s | output=%s",
+        registry_path,
+        output_path,
+    )
+    build_bundle_from_registry(
+        registry_path=registry_path,
+        output_path=output_path,
+        include_model_payloads=True,
+        include_feature_manifests=True,
+        include_ranked_feature_tables=True,
+    )
+    LOGGER.info("Automatic NetworkParser model bundle complete | output=%s", output_path)
+    return output_path
+
+
 def run_train_two_level(args: argparse.Namespace) -> Dict[str, Any]:
     config = load_config(args.config)
     config = apply_common_overrides(config, args)
@@ -610,8 +1052,13 @@ def run_train_two_level(args: argparse.Namespace) -> Dict[str, Any]:
 
     hierarchy_labels = getattr(args, "hierarchy_labels", None)
     if hierarchy_labels:
+        if getattr(args, "global_level2_label", None):
+            LOGGER.warning(
+                "Ignoring --global_level2_label in recursive hierarchy mode. "
+                "Use a terminal hierarchy label such as AMR_binary directly in --hierarchy_labels."
+            )
         LOGGER.info("Starting NetworkParser multi-level hierarchy training")
-        return protocol.train_hierarchy(
+        registry = protocol.train_hierarchy(
             genomic_path=args.genomic,
             meta_path=args.meta,
             hierarchy_labels=list(hierarchy_labels),
@@ -620,6 +1067,11 @@ def run_train_two_level(args: argparse.Namespace) -> Dict[str, Any]:
             algorithm=args.algorithm,
             min_samples_per_node=args.min_level2_samples_per_group,
         )
+        _build_training_bundle(
+            args=args,
+            registry_path=Path(args.output_dir) / "hierarchical_model_registry.json",
+        )
+        return registry
 
     if not args.level1_label or not args.level2_label:
         raise ValueError(
@@ -628,7 +1080,7 @@ def run_train_two_level(args: argparse.Namespace) -> Dict[str, Any]:
         )
 
     LOGGER.info("Starting NetworkParser two-level training")
-    return protocol.train(
+    registry = protocol.train(
         genomic_path=args.genomic,
         meta_path=args.meta,
         level1_label=args.level1_label,
@@ -640,6 +1092,147 @@ def run_train_two_level(args: argparse.Namespace) -> Dict[str, Any]:
         train_global_level2=not bool(args.no_global_level2),
         min_level2_samples_per_group=args.min_level2_samples_per_group,
     )
+    _build_training_bundle(
+        args=args,
+        registry_path=Path(args.output_dir) / "two_level_model_registry.json",
+    )
+    return registry
+
+
+def run_bundle(args: argparse.Namespace) -> Any:
+    registry_path = Path(args.registry)
+    output_path = Path(args.output) if args.output else registry_path.parent / "networkparser_model_bundle.npb"
+
+    try:
+        from network_parser.model_bundle import build_bundle_from_registry
+    except Exception:  # pragma: no cover - supports direct source-tree execution
+        from model_bundle import build_bundle_from_registry  # type: ignore
+
+    LOGGER.info(
+        "Starting NetworkParser bundle build | registry=%s | output=%s",
+        registry_path,
+        output_path,
+    )
+
+    bundle = build_bundle_from_registry(
+        registry_path=registry_path,
+        output_path=output_path,
+        include_model_payloads=not bool(getattr(args, "no_model_payloads", False)),
+        include_feature_manifests=not bool(getattr(args, "no_feature_manifests", False)),
+        include_ranked_feature_tables=not bool(getattr(args, "no_ranked_feature_tables", False)),
+    )
+
+    LOGGER.info(
+        "NetworkParser bundle complete | output=%s | embedded_models=%s | embedded_manifests=%s | required_features=%s",
+        output_path,
+        bundle.feature_space.get("n_embedded_models"),
+        bundle.feature_space.get("n_embedded_manifests"),
+        bundle.feature_space.get("required_feature_count"),
+    )
+    return bundle
+
+
+def _registry_candidates_for_bundle_dir(bundle_dir: Path) -> List[Path]:
+    """Return likely registry JSON paths inside one training output directory."""
+    return [
+        bundle_dir / "hierarchical_model_registry.json",
+        bundle_dir / "two_level_model_registry.json",
+    ]
+
+
+def _find_registry_for_bundle(path: Path) -> Tuple[Optional[Path], List[Path]]:
+    """Locate a registry JSON that can rebuild the requested bundle."""
+    checked: List[Path] = []
+    bundle_dir = path.parent
+    run_name = bundle_dir.name
+
+    search_dirs: List[Path] = []
+    if bundle_dir.exists():
+        search_dirs.append(bundle_dir)
+    else:
+        base_dir = bundle_dir.parent
+        if base_dir.exists():
+            prefix = run_name.rstrip("0123456789").rstrip("_") or run_name
+            for child in sorted(base_dir.iterdir()):
+                if not child.is_dir():
+                    continue
+                if child.name == run_name or child.name.startswith(prefix):
+                    search_dirs.append(child)
+
+    seen_dirs: set[str] = set()
+    for directory in search_dirs:
+        key = str(directory.resolve())
+        if key in seen_dirs:
+            continue
+        seen_dirs.add(key)
+        for candidate in _registry_candidates_for_bundle_dir(directory):
+            checked.append(candidate)
+            if candidate.exists():
+                if directory != bundle_dir:
+                    LOGGER.warning(
+                        "Requested bundle directory %s was not found. "
+                        "Using registry from %s instead.",
+                        bundle_dir,
+                        directory,
+                    )
+                return candidate, checked
+
+    return None, checked
+
+
+def _ensure_query_bundle_available(bundle_path: str | Path) -> Path:
+    """Return an existing bundle path, rebuilding from a nearby registry if possible."""
+    path = Path(bundle_path)
+    if path.exists():
+        return path
+
+    registry_path, checked = _find_registry_for_bundle(path)
+    if registry_path is None:
+        bundle_dir = path.parent
+        hint = ""
+        base_dir = bundle_dir.parent
+        if base_dir.exists():
+            siblings = sorted(
+                child.name
+                for child in base_dir.iterdir()
+                if child.is_dir()
+                and any(candidate.exists() for candidate in _registry_candidates_for_bundle_dir(child))
+            )
+            if siblings:
+                hint = (
+                    " Available trained run directories with registries: "
+                    + ", ".join(siblings)
+                    + "."
+                )
+        raise FileNotFoundError(
+            "Bundle not found and no nearby registry could be used to rebuild it. "
+            f"Expected bundle: {path}; checked registries: "
+            + ", ".join(str(candidate) for candidate in checked)
+            + hint
+            + " Retrain with `train-two-level` (bundle is created automatically), "
+            "run `network_parser bundle`, or query with --registry instead of --bundle."
+        )
+
+    try:
+        from network_parser.model_bundle import build_bundle_from_registry
+    except Exception:  # pragma: no cover - supports direct source-tree execution
+        from model_bundle import build_bundle_from_registry  # type: ignore
+
+    LOGGER.warning(
+        "Bundle not found at %s. Rebuilding it from nearby registry %s before query.",
+        path,
+        registry_path,
+    )
+    build_bundle_from_registry(
+        registry_path=registry_path,
+        output_path=path,
+        include_model_payloads=True,
+        include_feature_manifests=True,
+        include_ranked_feature_tables=True,
+    )
+    if not path.exists():
+        raise FileNotFoundError(f"Bundle rebuild completed but bundle is still missing: {path}")
+    return path
 
 
 def run_query(args: argparse.Namespace) -> Any:
@@ -654,6 +1247,7 @@ def run_query(args: argparse.Namespace) -> Any:
         config.fastq_clean_intermediates = True
     if bool(getattr(args, "fastq_no_auto_index_reference", False)):
         config.fastq_auto_index_reference = False
+    apply_performance_overrides(config, args)
     if hasattr(config, "__post_init__"):
         config.__post_init__()
 
@@ -673,7 +1267,8 @@ def run_query(args: argparse.Namespace) -> Any:
         )
 
     if bundle_path:
-        LOGGER.info("Starting NetworkParser bundled query workflow")
+        bundle_path = _ensure_query_bundle_available(bundle_path)
+        LOGGER.info("Starting NetworkParser bundled query workflow | bundle=%s", bundle_path)
         try:
             from network_parser.model_bundle import query_bundle
         except Exception:  # pragma: no cover - supports direct source-tree execution
@@ -704,6 +1299,154 @@ def run_query(args: argparse.Namespace) -> Any:
     )
 
 
+def _read_cli_table(path_value: str):
+    import pandas as pd
+
+    path = Path(path_value)
+    suffixes = "".join(path.suffixes).lower()
+    if suffixes.endswith(".tsv") or suffixes.endswith(".txt"):
+        return pd.read_csv(path, sep="\t")
+    return pd.read_csv(path)
+
+
+def _candidate_prediction_columns(level_index: int) -> List[str]:
+    idx = int(level_index)
+    candidates = [f"predicted_level{idx}"]
+    if idx == 1:
+        candidates.append("predicted_level1_identity")
+    if idx == 2:
+        candidates.append("predicted_level2_identity")
+    if idx == 1:
+        candidates.append("predicted_terminal_label")
+    return candidates
+
+
+def run_evaluate(args: argparse.Namespace) -> Dict[str, Any]:
+    import pandas as pd
+
+    try:
+        from network_parser.model_evaluation import evaluate_predictions, load_labels_from_metadata
+    except Exception:  # pragma: no cover - supports direct source-tree execution
+        from model_evaluation import evaluate_predictions, load_labels_from_metadata  # type: ignore
+
+    labels: List[str] = []
+    if getattr(args, "hierarchy_labels", None):
+        labels = [str(x) for x in args.hierarchy_labels]
+    elif getattr(args, "label", None):
+        labels = [str(args.label)]
+    else:
+        raise ValueError("evaluate requires either --label or --hierarchy_labels.")
+
+    global_level2_label = getattr(args, "global_level2_label", None)
+    if global_level2_label and len(labels) >= 2:
+        LOGGER.info(
+            "Using --global_level2_label=%s as the Level-2 truth label for evaluation.",
+            global_level2_label,
+        )
+        labels[1] = str(global_level2_label)
+
+    predictions = _read_cli_table(args.predictions)
+    if "sample_id" not in predictions.columns:
+        raise ValueError("Predictions table must contain a sample_id column.")
+
+    out_dir = Path(args.output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    results: Dict[str, Any] = {}
+    skipped: List[Dict[str, Any]] = []
+
+    for level_idx, label_column in enumerate(labels, start=1):
+        if len(labels) == 1 and getattr(args, "predicted_column", None):
+            pred_col = str(args.predicted_column)
+        else:
+            pred_col = next((c for c in _candidate_prediction_columns(level_idx) if c in predictions.columns), None)
+
+        if not pred_col:
+            message = {
+                "status": "skipped",
+                "label_column": label_column,
+                "reason": f"No prediction column found for requested level {level_idx}.",
+                "candidate_columns": _candidate_prediction_columns(level_idx),
+            }
+            if bool(getattr(args, "skip_missing_prediction_levels", False)):
+                skipped.append(message)
+                continue
+            raise ValueError(
+                f"No prediction column found for requested level {level_idx} ({label_column}). "
+                f"Tried: {', '.join(_candidate_prediction_columns(level_idx))}"
+            )
+
+        y_true = load_labels_from_metadata(
+            meta_path=args.meta,
+            label_column=label_column,
+            sample_id_column=getattr(args, "sample_id_column", None),
+        )
+        y_pred = pd.Series(
+            predictions[pred_col].astype(str).values,
+            index=predictions["sample_id"].astype(str).values,
+            name=pred_col,
+        )
+
+        level_name = f"level{level_idx}_{label_column}"
+        result = evaluate_predictions(
+            y_true=y_true,
+            y_pred=y_pred,
+            class_support_scores=None,
+            output_dir=out_dir / level_name,
+            level_name=level_name,
+        )
+        result["truth_label_column"] = label_column
+        result["prediction_column"] = pred_col
+        results[level_name] = result
+
+    summary = {
+        "status": "success" if results else "skipped",
+        "predictions": str(args.predictions),
+        "meta": str(args.meta),
+        "requested_label_columns": labels,
+        "evaluated_levels": list(results.keys()),
+        "skipped_levels": skipped,
+        "per_level": results,
+    }
+    with open(out_dir / "evaluation_summary.json", "w", encoding="utf-8") as handle:
+        json.dump(summary, handle, indent=2)
+        handle.write("\n")
+
+    LOGGER.info("Evaluation complete | levels=%d | output_dir=%s", len(results), out_dir)
+    return summary
+
+
+def run_cross_validate(args: argparse.Namespace) -> Dict[str, Any]:
+    try:
+        from network_parser.cross_validation import run_repeated_cv
+    except Exception:  # pragma: no cover - supports direct source-tree execution
+        from cross_validation import run_repeated_cv  # type: ignore
+
+    config = load_config(args.config)
+    config = apply_common_overrides(config, args)
+    if hasattr(config, "__post_init__"):
+        config.__post_init__()
+
+    LOGGER.info(
+        "Starting NetworkParser repeated cross-validation | label=%s | repeats=%d | folds=%d",
+        args.label,
+        int(args.n_repeats),
+        int(args.n_splits),
+    )
+    return run_repeated_cv(
+        genomic_path=args.genomic,
+        meta_path=args.meta,
+        label_column=args.label,
+        output_dir=args.output_dir,
+        config=config,
+        ref_fasta=args.ref_fasta,
+        n_repeats=int(args.n_repeats),
+        n_splits=int(args.n_splits),
+        algorithm=getattr(args, "algorithm", None),
+        random_state=getattr(args, "random_state", None),
+    )
+
+
 # -----------------------------------------------------------------------------
 # Main dispatcher
 # -----------------------------------------------------------------------------
@@ -731,8 +1474,14 @@ def main(argv: Optional[List[str]] = None) -> int:
             run_single_label(args)
         elif args.command == "train-two-level":
             run_train_two_level(args)
+        elif args.command == "bundle":
+            run_bundle(args)
         elif args.command == "query":
             run_query(args)
+        elif args.command == "evaluate":
+            run_evaluate(args)
+        elif args.command == "cross-validate":
+            run_cross_validate(args)
         else:
             raise ValueError(f"Unsupported command: {args.command}")
     except Exception as exc:

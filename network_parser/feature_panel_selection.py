@@ -41,12 +41,24 @@ from sklearn.preprocessing import StandardScaler
 logger = logging.getLogger(__name__)
 
 try:
-    from network_parser.utils import progress_iter
+    from joblib import Parallel, delayed
+except Exception:  # pragma: no cover
+    Parallel = None  # type: ignore
+    delayed = None  # type: ignore
+
+try:
+    from network_parser.utils import progress_iter, resolve_effective_n_jobs, should_run_parallel
 except Exception:  # pragma: no cover
     try:
-        from utils import progress_iter  # type: ignore
+        from utils import progress_iter, resolve_effective_n_jobs, should_run_parallel  # type: ignore
     except Exception:  # pragma: no cover
         progress_iter = lambda iterable, **kwargs: iterable  # type: ignore
+
+        def resolve_effective_n_jobs(config, *, override=None, minimum_tasks=1):  # type: ignore
+            return 1
+
+        def should_run_parallel(config, *, enabled_attr, n_tasks, min_tasks=2):  # type: ignore
+            return False
 
 
 # -----------------------------------------------------------------------------
@@ -708,29 +720,47 @@ def run_feature_panel_separability_check(
         _normalize_panel_classifier(getattr(config, "feature_panel_classifier", "lr")),
     )
 
-    panel_records: List[Dict[str, Any]] = []
-
-    for panel_size in progress_iter(
-        candidate_sizes,
-        desc=f"{stage_name} feature-panel scoring",
-        unit="panel",
-        leave=False,
-    ):
+    def _score_one_panel(panel_size: int) -> Optional[Dict[str, Any]]:
         feature_source = ranked_features if panel_size > len(scoring_ranked_features) else scoring_ranked_features
         panel_features = [feature for feature in feature_source[:panel_size] if feature in X_aligned.columns]
         if not panel_features:
-            continue
+            return None
 
         X_panel = X_aligned.loc[:, panel_features].copy()
         score_payload = _score_panel(X_panel=X_panel, y=y_aligned.loc[X_panel.index], config=config)
-        panel_records.append(
-            {
-                "stage_name": stage_name,
-                "n_features": int(X_panel.shape[1]),
-                "panel_size_requested": int(panel_size),
-                **score_payload,
-            }
+        return {
+            "stage_name": stage_name,
+            "n_features": int(X_panel.shape[1]),
+            "panel_size_requested": int(panel_size),
+            **score_payload,
+        }
+
+    panel_records: List[Dict[str, Any]] = []
+    use_parallel = (
+        Parallel is not None
+        and delayed is not None
+        and should_run_parallel(
+            config,
+            enabled_attr="feature_panel_parallel_scoring",
+            n_tasks=len(candidate_sizes),
         )
+    )
+    if use_parallel:
+        n_jobs = resolve_effective_n_jobs(config, minimum_tasks=len(candidate_sizes))
+        scored = Parallel(n_jobs=n_jobs, prefer="threads")(
+            delayed(_score_one_panel)(panel_size) for panel_size in candidate_sizes
+        )
+        panel_records = [record for record in scored if isinstance(record, dict)]
+    else:
+        for panel_size in progress_iter(
+            candidate_sizes,
+            desc=f"{stage_name} feature-panel scoring",
+            unit="panel",
+            leave=False,
+        ):
+            record = _score_one_panel(panel_size)
+            if isinstance(record, dict):
+                panel_records.append(record)
 
     panel_scores = pd.DataFrame(panel_records)
     panel_scores_path = out_dir / "panel_scores.csv"
