@@ -688,3 +688,36 @@ def load_config_file(config_path: Union[str, Path]) -> NetworkParserConfig:
 
     logger.info("Loaded config from %s", config_path)
     return config
+
+
+def resolve_effective_n_jobs(
+    config: Any,
+    *,
+    override: Optional[int] = None,
+    minimum_tasks: int = 1,
+) -> int:
+    """Resolve worker count for a parallel stage."""
+    if override is not None:
+        requested = int(override)
+    else:
+        requested = int(getattr(config, "n_jobs", -1))
+
+    if requested == 0:
+        return 1
+    if requested < 0:
+        cpu_count = max(1, int(os.cpu_count() or 1))
+        return cpu_count if minimum_tasks > 1 else 1
+    return max(1, requested)
+
+
+def should_run_parallel(
+    config: Any,
+    *,
+    enabled_attr: str,
+    n_tasks: int,
+    min_tasks: int = 2,
+) -> bool:
+    """Return True when a parallel code path should be used."""
+    if int(n_tasks) < int(min_tasks):
+        return False
+    return bool(getattr(config, enabled_attr, True))

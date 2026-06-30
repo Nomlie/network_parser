@@ -39,6 +39,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+from joblib import Parallel, delayed
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import LabelEncoder
 from statsmodels.stats.multitest import multipletests
@@ -59,6 +60,8 @@ try:
         log_flow_step,
         PipelineProgress,
         progress_iter,
+        resolve_effective_n_jobs,
+        should_run_parallel,
     )
 except Exception:  # pragma: no cover - supports running from source tree
     from config import NetworkParserConfig  # type: ignore
@@ -76,6 +79,8 @@ except Exception:  # pragma: no cover - supports running from source tree
         log_flow_step,
         PipelineProgress,
         progress_iter,
+        resolve_effective_n_jobs,
+        should_run_parallel,
     )
 
 try:
@@ -742,6 +747,34 @@ def align_two_labels(
     )
     return X_final, y1_final, y2_final
 
+def resolve_hierarchy_global_lineage_fallback_label(
+    hierarchy_labels: List[str],
+    config: NetworkParserConfig,
+) -> Optional[str]:
+    """Resolve which hierarchy label should receive a global lineage fallback model."""
+    explicit = getattr(config, "hierarchy_global_lineage_fallback_label", None)
+    if explicit is not None and str(explicit).strip():
+        return str(explicit).strip()
+
+    labels = [str(label).strip() for label in hierarchy_labels if str(label).strip()]
+    if not labels:
+        return None
+
+    preferred_tokens = ("lineage_clean", "lineage", "strain")
+    for label in labels:
+        norm = label.lower().replace(" ", "_").replace("-", "_")
+        if "supergroup" in norm:
+            continue
+        if any(token in norm for token in preferred_tokens):
+            return label
+
+    if len(labels) >= 3:
+        return labels[1]
+    if len(labels) == 2:
+        return labels[0]
+    return None
+
+
 def safe_hierarchy_token(value: Any, max_len: int = 80) -> str:
     """Return a filesystem-safe token for hierarchy node directories."""
     raw = str(value).strip() or "node"
@@ -1151,7 +1184,7 @@ def apply_level2_class_support_filter(
     features to decide which samples to retain.
     """
     output_dir = ensure_dir(Path(output_dir))
-    enabled = bool(getattr(config, "level2_drop_low_support_classes", False))
+    enabled = bool(getattr(config, "level2_drop_low_support_classes", True))
     min_count = int(getattr(config, "level2_min_class_count", 2))
 
     y_clean = pd.Series(y, index=y.index).astype(str).str.strip()
@@ -1244,8 +1277,96 @@ def apply_level2_class_support_filter(
         int(after_diag["feasible_selector_cv_splits"]),
     )
 
+    summary["excluded_classes"] = {
+        str(label): int(count) for label, count in drop_classes.items()
+    }
     write_json(summary, output_dir / "level2_class_support_filter_summary.json")
     return X1, y1, summary
+
+
+def build_label_training_support_policy(
+    labels_df: pd.DataFrame,
+    label_columns: List[str],
+    config: NetworkParserConfig,
+) -> Dict[str, Any]:
+    """Summarize cohort label support and which classes require manual review."""
+    min_train = int(getattr(config, "level2_min_class_count", 2))
+    drop_enabled = bool(getattr(config, "level2_drop_low_support_classes", True))
+    review_enabled = bool(getattr(config, "low_support_review_enabled", True))
+    review_min = int(getattr(config, "low_support_review_min_class_count", 10))
+    review_label = str(getattr(config, "low_support_review_label", "low_support_review_required"))
+    action_message = str(
+        getattr(
+            config,
+            "low_support_review_action_message",
+            (
+                "Manually review this sample or merge rare classes in metadata if that "
+                "grouping is biologically appropriate."
+            ),
+        )
+    )
+
+    per_label: Dict[str, Any] = {}
+    for label_col in label_columns:
+        col = str(label_col).strip()
+        if not col or col not in labels_df.columns:
+            continue
+
+        series = labels_df[col].astype(str).str.strip()
+        series = series.replace(
+            {
+                "": pd.NA,
+                "-": pd.NA,
+                "NA": pd.NA,
+                "N/A": pd.NA,
+                "None": pd.NA,
+                "nan": pd.NA,
+                "NaN": pd.NA,
+            }
+        ).dropna()
+        counts = series.value_counts(dropna=True)
+
+        classes: Dict[str, Any] = {}
+        for cls, cnt in counts.items():
+            label = str(cls).strip()
+            if not label:
+                continue
+            sample_count = int(cnt)
+            excluded = bool(drop_enabled and sample_count < min_train)
+            requires_review = bool(review_enabled and sample_count < review_min)
+            classes[label] = {
+                "training_sample_count": sample_count,
+                "excluded_from_training": excluded,
+                "requires_manual_review": requires_review,
+            }
+
+        per_label[col] = {
+            "label_column": col,
+            "min_class_count_for_training": int(min_train),
+            "min_class_count_for_confident_reporting": int(review_min),
+            "classes": classes,
+            "excluded_from_training": sorted(
+                label
+                for label, payload in classes.items()
+                if bool(payload.get("excluded_from_training"))
+            ),
+            "review_required_classes": sorted(
+                label
+                for label, payload in classes.items()
+                if bool(payload.get("requires_manual_review"))
+            ),
+        }
+
+    return {
+        "status": "active" if review_enabled else "disabled",
+        "review_label": review_label,
+        "recommended_action": action_message,
+        "policy_summary": (
+            "Classes below the confident-reporting threshold are emitted as "
+            f"'{review_label}' during query so rare labels are not over-called."
+        ),
+        "per_label": per_label,
+    }
 
 
 def _comma_set(value: Any) -> set:
@@ -1684,6 +1805,29 @@ class TwoLevelProtocol:
             target=terminal_fallbacks.get("target_label_column"),
         )
 
+        log_stage_start(logger, 5, "global hierarchy lineage fallback training")
+        global_lineage_fallback = self._train_hierarchy_global_lineage_fallback(
+            X=X,
+            labels_df=labels_df,
+            hierarchy_labels=labels,
+            output_dir=hierarchy_dir / "global_lineage_fallback",
+            feature_manifest_df=feature_manifest_df,
+            algorithm=algorithm,
+        )
+        log_stage_complete(
+            logger,
+            5,
+            "global hierarchy lineage fallback training",
+            status=global_lineage_fallback.get("status"),
+            target=global_lineage_fallback.get("target_label_column"),
+        )
+
+        label_training_support_policy = build_label_training_support_policy(
+            labels_df=labels_df,
+            label_columns=labels,
+            config=self.config,
+        )
+
         registry = {
             "protocol": "multi_level_hierarchy_protocol",
             "compatible_with": "NetworkParser hierarchical training registry",
@@ -1692,7 +1836,9 @@ class TwoLevelProtocol:
                 "n_levels": int(len(labels)),
                 "root": root_node,
                 "terminal_fallbacks": terminal_fallbacks,
+                "global_lineage_fallback": global_lineage_fallback,
             },
+            "label_training_support_policy": label_training_support_policy,
             "training_matrix": {
                 "aligned_matrix_csv": str(out / "aligned_hierarchy_matrix.csv"),
                 "aligned_labels_csv": str(out / "aligned_hierarchy_labels.csv"),
@@ -1798,18 +1944,14 @@ class TwoLevelProtocol:
             write_json(node_payload, node_dir / "node_summary.json")
             return node_payload
 
-        X_train = X_node
-        y_train = y_node
-        support_summary: Dict[str, Any] = {"status": "not_applied", "reason": "root_or_disabled"}
-        if level_index > 0:
-            X_train, y_train, support_summary = apply_level2_class_support_filter(
-                X=X_node,
-                y=y_node,
-                output_dir=node_dir,
-                config=self.config,
-                stage_name=stage_token,
-                requested_cv_splits=5,
-            )
+        X_train, y_train, support_summary = apply_level2_class_support_filter(
+            X=X_node,
+            y=y_node,
+            output_dir=node_dir,
+            config=self.config,
+            stage_name=stage_token,
+            requested_cv_splits=5,
+        )
 
         label_diag = label_distribution_diagnostics(y_train, requested_cv_splits=5)
         adaptive_min = adaptive_level2_min_samples(label_diag)
@@ -2185,20 +2327,63 @@ class TwoLevelProtocol:
                 "models": {},
             }
             parent_values = sorted([str(v) for v in labels_df[parent_label].dropna().astype(str).str.strip().unique() if str(v).strip()])
+            fallback_tasks = []
             for parent_value in parent_values:
                 idx = labels_df.index[labels_df[parent_label].astype(str).str.strip() == parent_value]
                 model_dir = output_dir / "by_parent_label" / safe_hierarchy_token(str(parent_label)) / safe_hierarchy_token(parent_value)
-                parent_block["models"][parent_value] = self._train_one_terminal_fallback_model(
-                    X=X.loc[X.index.intersection(idx)].copy(),
-                    y=labels_df.loc[idx, target_label],
-                    output_dir=model_dir,
+                fallback_tasks.append(
+                    {
+                        "parent_label": str(parent_label),
+                        "parent_value": str(parent_value),
+                        "X": X.loc[X.index.intersection(idx)].copy(),
+                        "y": labels_df.loc[idx, target_label],
+                        "model_dir": model_dir,
+                    }
+                )
+
+            def _train_parent_fallback_task(task: Dict[str, Any]) -> Tuple[str, str, Dict[str, Any]]:
+                model_payload = self._train_one_terminal_fallback_model(
+                    X=task["X"],
+                    y=task["y"],
+                    output_dir=task["model_dir"],
                     feature_manifest_df=feature_manifest_df,
                     algorithm=algorithm,
                     target_label_column=target_label,
                     fallback_scope="by_parent_label",
-                    conditioning_label_column=parent_label,
-                    conditioning_value=parent_value,
+                    conditioning_label_column=task["parent_label"],
+                    conditioning_value=task["parent_value"],
                 )
+                return str(task["parent_label"]), str(task["parent_value"]), model_payload
+
+            parallel_fallbacks = should_run_parallel(
+                self.config,
+                enabled_attr="hierarchy_parallel_fallback_training",
+                n_tasks=len(fallback_tasks),
+            )
+            if parallel_fallbacks:
+                n_jobs = resolve_effective_n_jobs(self.config, minimum_tasks=len(fallback_tasks))
+                logger.info(
+                    "Training %d parent-conditioned terminal fallbacks in parallel | n_jobs=%d",
+                    len(fallback_tasks),
+                    int(n_jobs),
+                )
+                trained_fallbacks = Parallel(n_jobs=n_jobs, prefer="threads")(
+                    delayed(_train_parent_fallback_task)(task) for task in fallback_tasks
+                )
+            else:
+                trained_fallbacks = [
+                    _train_parent_fallback_task(task)
+                    for task in progress_iter(
+                        fallback_tasks,
+                        desc="Terminal fallback training",
+                        unit="model",
+                        leave=False,
+                    )
+                ]
+
+            parent_block["models"] = {}
+            for _, parent_value, model_payload in trained_fallbacks:
+                parent_block["models"][parent_value] = model_payload
             payload["by_parent_label"][str(parent_label)] = parent_block
 
         payload["global"] = self._train_one_terminal_fallback_model(
@@ -2231,6 +2416,264 @@ class TwoLevelProtocol:
         )
         write_json(payload, output_dir / "terminal_fallbacks_summary.json")
         return payload
+
+    def _train_hierarchy_global_lineage_fallback(
+        self,
+        *,
+        X: pd.DataFrame,
+        labels_df: pd.DataFrame,
+        hierarchy_labels: List[str],
+        output_dir: Path,
+        feature_manifest_df: Optional[pd.DataFrame],
+        algorithm: Optional[str],
+    ) -> Dict[str, Any]:
+        """Train a global lineage model used when branch routing is weak or unavailable."""
+        output_dir = ensure_dir(Path(output_dir))
+        if not bool(getattr(self.config, "hierarchy_train_global_lineage_fallback", True)):
+            payload = {
+                "status": "skipped",
+                "reason": "disabled_by_config",
+                "target_label_column": None,
+                "features": [],
+                "model_file": None,
+                "feature_manifest": None,
+            }
+            write_json(payload, output_dir / "global_lineage_fallback_summary.json")
+            return payload
+
+        target_label = resolve_hierarchy_global_lineage_fallback_label(hierarchy_labels, self.config)
+        if not target_label or target_label not in labels_df.columns:
+            payload = {
+                "status": "skipped",
+                "reason": "lineage_fallback_label_unresolved",
+                "target_label_column": target_label,
+                "features": [],
+                "model_file": None,
+                "feature_manifest": None,
+            }
+            write_json(payload, output_dir / "global_lineage_fallback_summary.json")
+            return payload
+
+        y_lineage = labels_df[target_label].astype(str).str.strip()
+        y_lineage = y_lineage.replace({
+            "": pd.NA,
+            "-": pd.NA,
+            "NA": pd.NA,
+            "N/A": pd.NA,
+            "None": pd.NA,
+            "nan": pd.NA,
+            "NaN": pd.NA,
+        }).dropna()
+        common = X.index.intersection(y_lineage.index)
+        model_payload = self._train_one_terminal_fallback_model(
+            X=X.loc[common].copy(),
+            y=y_lineage.loc[common],
+            output_dir=output_dir,
+            feature_manifest_df=feature_manifest_df,
+            algorithm=algorithm,
+            target_label_column=target_label,
+            fallback_scope="global_lineage",
+            conditioning_label_column=None,
+            conditioning_value=None,
+        )
+        model_payload["fallback_type"] = "global_lineage_fallback"
+        model_payload["resolved_from_hierarchy_labels"] = list(hierarchy_labels)
+        write_json(model_payload, output_dir / "global_lineage_fallback_summary.json")
+        return model_payload
+
+    def _train_one_level2_group(
+        self,
+        *,
+        group_value: str,
+        X: pd.DataFrame,
+        y_level1: pd.Series,
+        y_level2: pd.Series,
+        level2_dir: Path,
+        feature_manifest_df: Optional[pd.DataFrame],
+        algorithm: Optional[str],
+        explicit_group_min_n: Optional[int],
+        global_level2_payload: Dict[str, Any],
+        global_binary_level2_payload: Dict[str, Any],
+    ) -> Tuple[str, Dict[str, Any]]:
+        """Train one Level-1-conditioned Level-2 model, if eligible."""
+        group_mask = y_level1.astype(str) == str(group_value)
+        group_samples = y_level1.index[group_mask]
+        X_group = X.loc[group_samples].copy()
+        y2_group = y_level2.loc[group_samples].copy()
+
+        safe_group_name = str(group_value).replace("/", "_").replace(" ", "_")
+        group_dir = ensure_dir(level2_dir / "by_level1_group" / safe_group_name)
+
+        raw_label_diag = label_distribution_diagnostics(y2_group, requested_cv_splits=5)
+        X_group_train, y2_group_train, group_class_support = apply_level2_class_support_filter(
+            X=X_group,
+            y=y2_group,
+            output_dir=group_dir,
+            config=self.config,
+            stage_name=f"level2_resistance_profile__{safe_group_name}",
+            requested_cv_splits=5,
+        )
+        label_diag = label_distribution_diagnostics(y2_group_train, requested_cv_splits=5)
+        adaptive_min_group_n = adaptive_level2_min_samples(label_diag)
+        group_summary: Dict[str, Any] = {
+            "level1_group": str(group_value),
+            "n_samples": int(X_group.shape[0]),
+            "n_training_samples": int(X_group_train.shape[0]),
+            "n_level2_classes": int(label_diag["n_classes"]),
+            "adaptive_min_training_samples": int(adaptive_min_group_n),
+            "adaptive_min_rule": "n_level2_classes * 2_samples_per_label",
+            "explicit_absolute_min_samples": explicit_group_min_n,
+            "level2_label_diagnostics_before_support_filter": raw_label_diag,
+            "level2_label_diagnostics": label_diag,
+            "level2_class_support_filter": group_class_support,
+        }
+
+        fallback_source = _successful_level2_fallback_source(global_level2_payload, global_binary_level2_payload)
+        fallback_available = fallback_source != "unavailable"
+
+        skip_reasons: List[str] = []
+        if label_diag["n_classes"] < 2:
+            skip_reasons.append("single_level2_class_within_group")
+        elif label_diag["min_class_count"] < 2:
+            skip_reasons.append("insufficient_per_label_support_for_stratified_cv")
+        elif X_group_train.shape[0] < adaptive_min_group_n:
+            skip_reasons.append("insufficient_samples_for_level2_label_structure")
+
+        if explicit_group_min_n is not None and X_group_train.shape[0] < explicit_group_min_n:
+            skip_reasons.append("below_user_requested_absolute_group_minimum")
+
+        # === SKIP DIAGNOSTICS ===
+        if skip_reasons:
+            # Always write a clear support table for reviewers. The JSON
+            # summary stays generic, while this TSV gives auditable detail.
+            support_table = group_class_support.get("class_support_table", {})
+            skip_table = pd.DataFrame({
+                "level2_class": list(support_table.keys()),
+                "sample_count": list(support_table.values()),
+                "meets_twofold_cv_minimum": [int(v) >= 2 for v in support_table.values()],
+            })
+
+            skip_table_path = group_dir / "level2_class_support_diagnostics.tsv"
+            skip_table.to_csv(skip_table_path, sep="\t", index=False)
+
+            logger.info(
+                "Group %s: skipping group-specific Level-2 model because %s | "
+                "training_samples=%d | adaptive_min_samples=%d | labels=%d | "
+                "min_class_count=%d | feasible_cv_splits=%d | wrote_diagnostics=%s",
+                str(group_value),
+                "+".join(skip_reasons),
+                int(X_group_train.shape[0]),
+                int(adaptive_min_group_n),
+                int(label_diag["n_classes"]),
+                int(label_diag["min_class_count"]),
+                int(label_diag["feasible_selector_cv_splits"]),
+                str(skip_table_path),
+            )
+
+            group_summary.update({
+                "status": "skipped",
+                "reason": "+".join(skip_reasons),
+                "level2_class_support_diagnostics_file": str(skip_table_path),
+                "level2_class_support_table": support_table,
+                "level2_source_for_prediction": fallback_source,
+            })
+
+            write_json(group_summary, group_dir / "group_summary.json")
+            return str(group_value), group_summary
+
+        group_filter: Optional[Dict[str, Any]] = None
+        X_group_filtered: Optional[pd.DataFrame] = None
+
+        try:
+            group_filter = run_configured_feature_filter(
+                X=X_group_train,
+                y=y2_group_train,
+                output_base_dir=group_dir,
+                config=self.config,
+                stage_name=f"level2_resistance_profile__{safe_group_name}",
+            )
+            group_filter = run_feature_panel_check_after_filter(
+                filter_result=group_filter,
+                y=y2_group_train,
+                output_base_dir=group_dir,
+                config=self.config,
+                stage_name=f"level2_resistance_profile__{safe_group_name}__model_matrix",
+            )
+            X_group_filtered = group_filter["filtered_matrix"]
+            group_manifest = write_selected_feature_manifest(
+                features=list(X_group_filtered.columns),
+                source_manifest=feature_manifest_df,
+                output_path=group_dir / "selected_feature_manifest.tsv",
+            )
+            group_model = train_model_safely(
+                X=X_group_filtered,
+                y=y2_group_train.loc[X_group_filtered.index],
+                output_dir=group_dir / "model",
+                config=self.config,
+                algorithm=algorithm,
+                model_name="level2_resistance_model",
+            )
+        except Exception as exc:
+            failure_reason = classify_ml_failure(exc)
+            matrix_for_diag = X_group_filtered if isinstance(X_group_filtered, pd.DataFrame) else X_group_train
+            labels_for_diag = y2_group_train.loc[matrix_for_diag.index] if isinstance(matrix_for_diag, pd.DataFrame) else y2_group_train
+            failure_diag = label_distribution_diagnostics(labels_for_diag, requested_cv_splits=5)
+            failure_diag.update(
+                {
+                    "failure_reason": failure_reason,
+                    "error": str(exc),
+                    "n_features_at_failure": int(matrix_for_diag.shape[1]) if isinstance(matrix_for_diag, pd.DataFrame) else None,
+                    "stage": "group_specific_level2_training",
+                }
+            )
+
+            logger.warning(
+                "Group %s: group-specific Level-2 model skipped because %s | "
+                "samples=%d | features=%s | classes=%d | min_class_count=%d | "
+                "feasible_cv_splits=%d | prediction_source=%s",
+                str(group_value),
+                failure_reason,
+                int(failure_diag["n_samples"]),
+                str(failure_diag.get("n_features_at_failure")),
+                int(failure_diag["n_classes"]),
+                int(failure_diag["min_class_count"]),
+                int(failure_diag["feasible_selector_cv_splits"]),
+                fallback_source,
+            )
+            logger.debug(
+                "Group %s: group-specific Level-2 training traceback",
+                str(group_value),
+                exc_info=True,
+            )
+            group_summary.update(
+                {
+                    "status": "skipped",
+                    "reason": failure_reason,
+                    "error": str(exc),
+                    "training_failure_diagnostics": failure_diag,
+                    "filter": group_filter.get("summary", {}) if isinstance(group_filter, dict) else {},
+                    "feature_panel_separability": group_filter.get("feature_panel_separability", {}) if isinstance(group_filter, dict) else {},
+                    "level2_source_for_prediction": fallback_source,
+                }
+            )
+            write_json(group_summary, group_dir / "group_summary.json")
+            return str(group_value), group_summary
+
+        group_summary.update(
+            {
+                "status": "success",
+                "filter": group_filter["summary"],
+                "feature_panel_separability": group_filter.get("feature_panel_separability", {}),
+                "model": group_model,
+                "features": list(X_group_filtered.columns),
+                "model_file": get_model_file(group_model),
+                "feature_manifest": group_manifest,
+                "level2_source_for_prediction": "level1_group_specific",
+            }
+        )
+        write_json(group_summary, group_dir / "group_summary.json")
+        
+        return str(group_value), group_summary
 
     def _summarise_hierarchy_node(self, node: Dict[str, Any]) -> Dict[str, Any]:
         """Return a compact node summary for reports without duplicating model payloads."""
@@ -2812,193 +3255,64 @@ class TwoLevelProtocol:
         # Level 2 per level-1 group: resistance prediction within placement
         # ------------------------------------------------------------------
         pipeline_progress.begin_stage("per-group Level-2 training")
-        subgroup_payload: Dict[str, Any] = {}
         group_values = sorted(y_level1.astype(str).unique())
-        for group_value in progress_iter(
-            group_values,
-            desc="Level-2 per-group training",
-            unit="group",
-            leave=False,
-        ):
-            group_mask = y_level1.astype(str) == str(group_value)
-            group_samples = y_level1.index[group_mask]
-            X_group = X.loc[group_samples].copy()
-            y2_group = y_level2.loc[group_samples].copy()
-
-            safe_group_name = str(group_value).replace("/", "_").replace(" ", "_")
-            group_dir = ensure_dir(level2_dir / "by_level1_group" / safe_group_name)
-
-            raw_label_diag = label_distribution_diagnostics(y2_group, requested_cv_splits=5)
-            X_group_train, y2_group_train, group_class_support = apply_level2_class_support_filter(
-                X=X_group,
-                y=y2_group,
-                output_dir=group_dir,
-                config=self.config,
-                stage_name=f"level2_resistance_profile__{safe_group_name}",
-                requested_cv_splits=5,
-            )
-            label_diag = label_distribution_diagnostics(y2_group_train, requested_cv_splits=5)
-            adaptive_min_group_n = adaptive_level2_min_samples(label_diag)
-            group_summary: Dict[str, Any] = {
-                "level1_group": str(group_value),
-                "n_samples": int(X_group.shape[0]),
-                "n_training_samples": int(X_group_train.shape[0]),
-                "n_level2_classes": int(label_diag["n_classes"]),
-                "adaptive_min_training_samples": int(adaptive_min_group_n),
-                "adaptive_min_rule": "n_level2_classes * 2_samples_per_label",
-                "explicit_absolute_min_samples": explicit_group_min_n,
-                "level2_label_diagnostics_before_support_filter": raw_label_diag,
-                "level2_label_diagnostics": label_diag,
-                "level2_class_support_filter": group_class_support,
+        group_tasks = [
+            {
+                "group_value": str(group_value),
+                "X": X,
+                "y_level1": y_level1,
+                "y_level2": y_level2,
+                "level2_dir": level2_dir,
+                "feature_manifest_df": feature_manifest_df,
+                "algorithm": algorithm,
+                "explicit_group_min_n": explicit_group_min_n,
+                "global_level2_payload": global_level2_payload,
+                "global_binary_level2_payload": global_binary_level2_payload,
             }
+            for group_value in group_values
+        ]
 
-            fallback_source = _successful_level2_fallback_source(global_level2_payload, global_binary_level2_payload)
-            fallback_available = fallback_source != "unavailable"
-
-            skip_reasons: List[str] = []
-            if label_diag["n_classes"] < 2:
-                skip_reasons.append("single_level2_class_within_group")
-            elif label_diag["min_class_count"] < 2:
-                skip_reasons.append("insufficient_per_label_support_for_stratified_cv")
-            elif X_group_train.shape[0] < adaptive_min_group_n:
-                skip_reasons.append("insufficient_samples_for_level2_label_structure")
-
-            if explicit_group_min_n is not None and X_group_train.shape[0] < explicit_group_min_n:
-                skip_reasons.append("below_user_requested_absolute_group_minimum")
-
-            # === SKIP DIAGNOSTICS ===
-            if skip_reasons:
-                # Always write a clear support table for reviewers. The JSON
-                # summary stays generic, while this TSV gives auditable detail.
-                support_table = group_class_support.get("class_support_table", {})
-                skip_table = pd.DataFrame({
-                    "level2_class": list(support_table.keys()),
-                    "sample_count": list(support_table.values()),
-                    "meets_twofold_cv_minimum": [int(v) >= 2 for v in support_table.values()],
-                })
-
-                skip_table_path = group_dir / "level2_class_support_diagnostics.tsv"
-                skip_table.to_csv(skip_table_path, sep="\t", index=False)
-
-                logger.info(
-                    "Group %s: skipping group-specific Level-2 model because %s | "
-                    "training_samples=%d | adaptive_min_samples=%d | labels=%d | "
-                    "min_class_count=%d | feasible_cv_splits=%d | wrote_diagnostics=%s",
-                    str(group_value),
-                    "+".join(skip_reasons),
-                    int(X_group_train.shape[0]),
-                    int(adaptive_min_group_n),
-                    int(label_diag["n_classes"]),
-                    int(label_diag["min_class_count"]),
-                    int(label_diag["feasible_selector_cv_splits"]),
-                    str(skip_table_path),
-                )
-
-                group_summary.update({
-                    "status": "skipped",
-                    "reason": "+".join(skip_reasons),
-                    "level2_class_support_diagnostics_file": str(skip_table_path),
-                    "level2_class_support_table": support_table,
-                    "level2_source_for_prediction": fallback_source,
-                })
-
-                write_json(group_summary, group_dir / "group_summary.json")
-                subgroup_payload[str(group_value)] = group_summary
-                continue
-
-            group_filter: Optional[Dict[str, Any]] = None
-            X_group_filtered: Optional[pd.DataFrame] = None
-
-            try:
-                group_filter = run_configured_feature_filter(
-                    X=X_group_train,
-                    y=y2_group_train,
-                    output_base_dir=group_dir,
-                    config=self.config,
-                    stage_name=f"level2_resistance_profile__{safe_group_name}",
-                )
-                group_filter = run_feature_panel_check_after_filter(
-                    filter_result=group_filter,
-                    y=y2_group_train,
-                    output_base_dir=group_dir,
-                    config=self.config,
-                    stage_name=f"level2_resistance_profile__{safe_group_name}__model_matrix",
-                )
-                X_group_filtered = group_filter["filtered_matrix"]
-                group_manifest = write_selected_feature_manifest(
-                    features=list(X_group_filtered.columns),
-                    source_manifest=feature_manifest_df,
-                    output_path=group_dir / "selected_feature_manifest.tsv",
-                )
-                group_model = train_model_safely(
-                    X=X_group_filtered,
-                    y=y2_group_train.loc[X_group_filtered.index],
-                    output_dir=group_dir / "model",
-                    config=self.config,
-                    algorithm=algorithm,
-                    model_name="level2_resistance_model",
-                )
-            except Exception as exc:
-                failure_reason = classify_ml_failure(exc)
-                matrix_for_diag = X_group_filtered if isinstance(X_group_filtered, pd.DataFrame) else X_group_train
-                labels_for_diag = y2_group_train.loc[matrix_for_diag.index] if isinstance(matrix_for_diag, pd.DataFrame) else y2_group_train
-                failure_diag = label_distribution_diagnostics(labels_for_diag, requested_cv_splits=5)
-                failure_diag.update(
-                    {
-                        "failure_reason": failure_reason,
-                        "error": str(exc),
-                        "n_features_at_failure": int(matrix_for_diag.shape[1]) if isinstance(matrix_for_diag, pd.DataFrame) else None,
-                        "stage": "group_specific_level2_training",
-                    }
-                )
-
-                logger.warning(
-                    "Group %s: group-specific Level-2 model skipped because %s | "
-                    "samples=%d | features=%s | classes=%d | min_class_count=%d | "
-                    "feasible_cv_splits=%d | prediction_source=%s",
-                    str(group_value),
-                    failure_reason,
-                    int(failure_diag["n_samples"]),
-                    str(failure_diag.get("n_features_at_failure")),
-                    int(failure_diag["n_classes"]),
-                    int(failure_diag["min_class_count"]),
-                    int(failure_diag["feasible_selector_cv_splits"]),
-                    fallback_source,
-                )
-                logger.debug(
-                    "Group %s: group-specific Level-2 training traceback",
-                    str(group_value),
-                    exc_info=True,
-                )
-                group_summary.update(
-                    {
-                        "status": "skipped",
-                        "reason": failure_reason,
-                        "error": str(exc),
-                        "training_failure_diagnostics": failure_diag,
-                        "filter": group_filter.get("summary", {}) if isinstance(group_filter, dict) else {},
-                        "feature_panel_separability": group_filter.get("feature_panel_separability", {}) if isinstance(group_filter, dict) else {},
-                        "level2_source_for_prediction": fallback_source,
-                    }
-                )
-                write_json(group_summary, group_dir / "group_summary.json")
-                subgroup_payload[str(group_value)] = group_summary
-                continue
-
-            group_summary.update(
-                {
-                    "status": "success",
-                    "filter": group_filter["summary"],
-                    "feature_panel_separability": group_filter.get("feature_panel_separability", {}),
-                    "model": group_model,
-                    "features": list(X_group_filtered.columns),
-                    "model_file": get_model_file(group_model),
-                    "feature_manifest": group_manifest,
-                    "level2_source_for_prediction": "level1_group_specific",
-                }
+        parallel_groups = should_run_parallel(
+            self.config,
+            enabled_attr="level2_parallel_group_training",
+            n_tasks=len(group_tasks),
+        )
+        if parallel_groups:
+            n_jobs = resolve_effective_n_jobs(self.config, minimum_tasks=len(group_tasks))
+            logger.info(
+                "Training %d Level-2 group models in parallel | n_jobs=%d",
+                len(group_tasks),
+                int(n_jobs),
             )
-            write_json(group_summary, group_dir / "group_summary.json")
-            subgroup_payload[str(group_value)] = group_summary
+            trained_groups = Parallel(n_jobs=n_jobs, prefer="threads")(
+                delayed(self._train_one_level2_group)(**task) for task in group_tasks
+            )
+        else:
+            trained_groups = [
+                self._train_one_level2_group(**task)
+                for task in progress_iter(
+                    group_tasks,
+                    desc="Level-2 per-group training",
+                    unit="group",
+                    leave=False,
+                )
+            ]
+
+        subgroup_payload: Dict[str, Any] = {
+            str(group_value): group_summary for group_value, group_summary in trained_groups
+        }
+
+        label_training_support_policy = build_label_training_support_policy(
+            labels_df=pd.DataFrame(
+                {
+                    str(level1_label): y_level1.astype(str),
+                    str(level2_label): y_level2.astype(str),
+                },
+                index=X.index,
+            ),
+            label_columns=[str(level1_label), str(level2_label)],
+            config=self.config,
+        )
 
         registry = {
             "protocol": "two_level_protocol",
@@ -3021,6 +3335,7 @@ class TwoLevelProtocol:
                 "global_binary_fallback": global_binary_level2_payload,
                 "by_level1_group": subgroup_payload,
             },
+            "label_training_support_policy": label_training_support_policy,
             "training_matrix": {
                 "aligned_matrix_csv": str(out / "aligned_two_level_matrix.csv"),
                 "aligned_labels_csv": str(out / "aligned_two_level_labels.csv"),
@@ -3109,7 +3424,7 @@ class TwoLevelProtocol:
                 {
                     "sample_id": sample_id,
                     "predicted_level1_identity": str(predicted_group),
-                    "predicted_level2_resistance_profile": str(level2_prediction),
+                    "predicted_level2_identity": str(level2_prediction),
                     "level2_model_source": level2_source,
                     "level2_target_label_column": registry.get("level2", {}).get("global_label_column") if level2_source == "global_fallback" else registry.get("level2", {}).get("label_column"),
                 }
@@ -3162,8 +3477,85 @@ def build_parser() -> argparse.ArgumentParser:
             "When unset, eligibility is adaptive and scales with the number of Level-2 labels."
         ),
     )
-    train.add_argument("--level2_drop_low_support_classes", action="store_true", help="Exclude Level 2 classes below the configured sample-count threshold before Level 2 training.")
-    train.add_argument("--level2_min_class_count", type=int, default=None, help="Minimum samples per Level 2 class when low-support class exclusion is enabled.")
+    train.add_argument(
+        "--level2_drop_low_support_classes",
+        action="store_true",
+        help=(
+            "Force dropping of low-support classes before hierarchy-node and Level-2 "
+            "training. Enabled by default in the current architecture."
+        ),
+    )
+    train.add_argument(
+        "--keep_low_support_classes",
+        action="store_true",
+        help=(
+            "Retain singleton or very rare classes during hierarchy-node and Level-2 "
+            "training instead of applying the default low-support class filter."
+        ),
+    )
+    train.add_argument(
+        "--level2_min_class_count",
+        type=int,
+        default=None,
+        help="Minimum samples per class required when low-support class dropping is enabled.",
+    )
+    train.add_argument(
+        "--no_low_support_review",
+        action="store_true",
+        help=(
+            "Disable query-time low-support review labels. By default, rare-class "
+            "predictions are reported as low_support_review_required."
+        ),
+    )
+    train.add_argument(
+        "--low_support_review_min_class_count",
+        type=int,
+        default=None,
+        help=(
+            "Minimum training samples per class required for confident reporting at "
+            "query time."
+        ),
+    )
+    train.add_argument(
+        "--low_support_review_label",
+        default=None,
+        help="Label reported when a prediction maps to a low-support training class.",
+    )
+    train.add_argument(
+        "--no_hierarchy_global_lineage_fallback",
+        action="store_true",
+        help="Disable the global lineage fallback model trained for recursive hierarchy query mode.",
+    )
+    train.add_argument(
+        "--hierarchy_global_lineage_fallback_label",
+        default=None,
+        help=(
+            "Metadata column for the global lineage fallback model. When unset, "
+            "NetworkParser resolves a lineage-like label from --hierarchy_labels."
+        ),
+    )
+    train.add_argument(
+        "--no_hierarchy_global_lineage_low_confidence_fallback",
+        action="store_true",
+        help="Do not replace low-confidence branch lineage predictions with the global lineage model.",
+    )
+    train.add_argument(
+        "--no_hierarchy_global_lineage_disagreement_fallback",
+        action="store_true",
+        help=(
+            "Do not replace branch lineage predictions when the global lineage model "
+            "disagrees and has stronger support."
+        ),
+    )
+    train.add_argument(
+        "--hierarchy_global_lineage_fallback_min_support_delta",
+        type=float,
+        default=None,
+        help=(
+            "Minimum support advantage required before a disagreeing global lineage "
+            "prediction overrides a branch prediction."
+        ),
+    )
     train.add_argument("--level2_train_binary_global_fallback", action="store_true", help="Train an additional resistant/susceptible global Level 2 fallback model across all lineages.")
     train.add_argument("--level2_binary_label_column", default=None, help="Metadata column containing resistant/susceptible labels for the binary fallback model.")
     train.add_argument("--level2_binary_label_mapping_file", default=None, help="CSV/TSV mapping file from detailed Level 2 labels to resistant/susceptible labels.")
@@ -3199,10 +3591,30 @@ def main(argv: Optional[List[str]] = None) -> int:
         config.n_jobs = int(args.n_jobs)
     if getattr(args, "global_level2_label", None) is not None:
         config.global_level2_label_column = args.global_level2_label
-    if bool(getattr(args, "level2_drop_low_support_classes", False)):
+    if bool(getattr(args, "keep_low_support_classes", False)):
+        config.level2_drop_low_support_classes = False
+    elif bool(getattr(args, "level2_drop_low_support_classes", False)):
         config.level2_drop_low_support_classes = True
     if getattr(args, "level2_min_class_count", None) is not None:
         config.level2_min_class_count = int(args.level2_min_class_count)
+    if bool(getattr(args, "no_low_support_review", False)):
+        config.low_support_review_enabled = False
+    if getattr(args, "low_support_review_min_class_count", None) is not None:
+        config.low_support_review_min_class_count = int(args.low_support_review_min_class_count)
+    if getattr(args, "low_support_review_label", None) is not None:
+        config.low_support_review_label = args.low_support_review_label
+    if bool(getattr(args, "no_hierarchy_global_lineage_fallback", False)):
+        config.hierarchy_train_global_lineage_fallback = False
+    if getattr(args, "hierarchy_global_lineage_fallback_label", None) is not None:
+        config.hierarchy_global_lineage_fallback_label = args.hierarchy_global_lineage_fallback_label
+    if bool(getattr(args, "no_hierarchy_global_lineage_low_confidence_fallback", False)):
+        config.hierarchy_global_lineage_fallback_on_low_confidence = False
+    if bool(getattr(args, "no_hierarchy_global_lineage_disagreement_fallback", False)):
+        config.hierarchy_global_lineage_fallback_on_disagreement = False
+    if getattr(args, "hierarchy_global_lineage_fallback_min_support_delta", None) is not None:
+        config.hierarchy_global_lineage_fallback_min_support_delta = float(
+            args.hierarchy_global_lineage_fallback_min_support_delta
+        )
     if bool(getattr(args, "level2_train_binary_global_fallback", False)):
         config.level2_train_binary_global_fallback = True
     if getattr(args, "level2_binary_label_column", None) is not None:

@@ -46,12 +46,15 @@ import json
 import logging
 import pickle
 import sys
+import threading
+from collections import defaultdict
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
+from joblib import Parallel, delayed
 
 try:
     from network_parser.config import NetworkParserConfig
@@ -61,7 +64,12 @@ try:
         encode_vcf_query_from_manifest,
         load_feature_manifest,
     )
-    from network_parser.utils import normalize_sample_id
+    from network_parser.utils import (
+        normalize_sample_id,
+        progress_iter,
+        resolve_effective_n_jobs,
+        should_run_parallel,
+    )
     from network_parser.fastq_processor import FastqProcessor
 except Exception:  # pragma: no cover - supports direct source-tree execution
     from config import NetworkParserConfig  # type: ignore
@@ -71,7 +79,12 @@ except Exception:  # pragma: no cover - supports direct source-tree execution
         encode_vcf_query_from_manifest,
         load_feature_manifest,
     )
-    from utils import normalize_sample_id  # type: ignore
+    from utils import (  # type: ignore
+        normalize_sample_id,
+        progress_iter,
+        resolve_effective_n_jobs,
+        should_run_parallel,
+    )
     from fastq_processor import FastqProcessor  # type: ignore
 
 
@@ -1024,6 +1037,193 @@ def summarize_feature_evidence_for_model(
     }
 
 
+def low_support_review_fields(
+    *,
+    label_column: str,
+    prediction: str,
+    policy: Dict[str, Any],
+    config: NetworkParserConfig,
+    prefix: str,
+) -> Tuple[str, Dict[str, Any]]:
+    """Replace rare-class predictions with a review-required endpoint when configured."""
+    if not bool(getattr(config, "low_support_review_enabled", True)):
+        return prediction, {}
+
+    candidate = str(prediction or "").strip()
+    if not candidate or candidate.lower() in {
+        "unavailable",
+        "low_support_review_required",
+        str(getattr(config, "low_support_review_label", "low_support_review_required")).lower(),
+    }:
+        return prediction, {}
+
+    per_label = policy.get("per_label", {}) if isinstance(policy, dict) else {}
+    block = per_label.get(str(label_column), {}) if isinstance(per_label, dict) else {}
+    classes = block.get("classes", {}) if isinstance(block, dict) else {}
+    class_info = classes.get(candidate)
+    if not isinstance(class_info, dict):
+        return prediction, {}
+
+    train_count = int(class_info.get("training_sample_count", 0))
+    train_min = int(block.get("min_class_count_for_training", getattr(config, "level2_min_class_count", 2)))
+    review_min = int(
+        block.get(
+            "min_class_count_for_confident_reporting",
+            getattr(config, "low_support_review_min_class_count", 10),
+        )
+    )
+    excluded = bool(class_info.get("excluded_from_training", False))
+    requires_review = bool(class_info.get("requires_manual_review", False))
+    if not excluded and not requires_review:
+        return prediction, {}
+
+    if excluded:
+        reason = (
+            f"Candidate label '{candidate}' was excluded from training because only "
+            f"{train_count} sample(s) were available (training minimum is {train_min})."
+        )
+    else:
+        reason = (
+            f"Candidate label '{candidate}' had only {train_count} training sample(s), "
+            f"below the confident-reporting threshold of {review_min}."
+        )
+
+    review_label = str(
+        policy.get(
+            "review_label",
+            getattr(config, "low_support_review_label", "low_support_review_required"),
+        )
+    )
+    action = str(
+        policy.get(
+            "recommended_action",
+            getattr(
+                config,
+                "low_support_review_action_message",
+                (
+                    "Manually review this sample or merge rare classes in metadata if that "
+                    "grouping is biologically appropriate."
+                ),
+            ),
+        )
+    )
+    return review_label, {
+        f"predicted_{prefix}": review_label,
+        f"{prefix}_candidate_prediction": candidate,
+        f"{prefix}_prediction_status": "low_support_review_required",
+        f"{prefix}_low_support_reason": reason,
+        f"{prefix}_recommended_action": action,
+        f"{prefix}_training_sample_count_for_candidate": train_count,
+        f"{prefix}_interpretation_confidence": "low_support_review_required",
+        f"{prefix}_confidence_note": (
+            f"{reason} {action}"
+        ).strip(),
+    }
+
+
+def resolve_amr_evidence_guard_label_columns(config: NetworkParserConfig) -> List[str]:
+    """Return metadata label columns that should receive AMR evidence guarding."""
+    configured = str(getattr(config, "amr_evidence_guard_label_columns", "") or "").strip()
+    if configured:
+        return [part.strip() for part in configured.split(",") if part.strip()]
+    binary_col = str(getattr(config, "level2_binary_label_column", "") or "").strip()
+    if binary_col:
+        return [binary_col]
+    return ["AMR_binary"]
+
+
+def amr_branch_evidence_is_weak(
+    *,
+    evidence: Dict[str, Any],
+    config: NetworkParserConfig,
+) -> Tuple[bool, str]:
+    """Detect when a branch AMR model lacks enough resolved marker evidence."""
+    resolved_fraction = float(evidence.get("resolved_feature_fraction", 0.0) or 0.0)
+    resolved_count = int(evidence.get("n_resolved_features", 0) or 0)
+    resolved_status = str(evidence.get("resolved_marker_evidence_status", "") or "").strip().lower()
+    min_fraction = float(getattr(config, "amr_weak_evidence_min_resolved_fraction", 0.15))
+
+    if resolved_count <= 0:
+        return True, "no resolved trained-marker states were available for the branch AMR model."
+    if resolved_status == "low_resolved_marker_evidence":
+        return (
+            True,
+            "branch AMR model resolved too few trained markers to support a confident susceptible call.",
+        )
+    if resolved_fraction < min_fraction:
+        return (
+            True,
+            (
+                f"only {resolved_fraction:.1%} of the branch AMR feature panel resolved "
+                f"(minimum for confident reporting is {min_fraction:.1%})."
+            ),
+        )
+    return False, ""
+
+
+def amr_weak_evidence_review_fields(
+    *,
+    label_column: str,
+    prediction: str,
+    evidence: Dict[str, Any],
+    config: NetworkParserConfig,
+    prefix: str,
+    escalation_source: Optional[str] = None,
+) -> Tuple[str, Dict[str, Any]]:
+    """Replace weak-evidence susceptible AMR calls with a review-required endpoint."""
+    if not bool(getattr(config, "amr_weak_evidence_review_enabled", True)):
+        return prediction, {}
+
+    candidate = str(prediction or "").strip()
+    review_label = str(
+        getattr(config, "amr_weak_evidence_review_label", "amr_evidence_review_required")
+    )
+    if (
+        not candidate
+        or candidate.lower() in {"unavailable", review_label.lower()}
+        or candidate.lower() != "susceptible"
+    ):
+        return prediction, {}
+
+    guard_columns = {col.lower() for col in resolve_amr_evidence_guard_label_columns(config)}
+    if str(label_column).strip().lower() not in guard_columns:
+        return prediction, {}
+
+    is_weak, weak_reason = amr_branch_evidence_is_weak(evidence=evidence, config=config)
+    if not is_weak:
+        return prediction, {}
+
+    action = str(
+        getattr(
+            config,
+            "amr_weak_evidence_review_action_message",
+            (
+                "Branch AMR prediction had insufficient resolved resistance-marker evidence. "
+                "Manually review the resistance phenotype or inspect marker coverage before "
+                "accepting a susceptible call."
+            ),
+        )
+    )
+    reason = (
+        f"Candidate susceptible call for '{label_column}' was blocked because {weak_reason}"
+    )
+    if escalation_source:
+        reason = (
+            f"{reason} A terminal AMR fallback model ({escalation_source}) was also checked "
+            "but did not provide a confident resistant override."
+        )
+
+    return review_label, {
+        f"predicted_{prefix}": review_label,
+        f"{prefix}_candidate_prediction": candidate,
+        f"{prefix}_prediction_status": "amr_evidence_review_required",
+        f"{prefix}_amr_evidence_reason": reason,
+        f"{prefix}_recommended_action": action,
+        f"{prefix}_interpretation_confidence": "amr_evidence_review_required",
+        f"{prefix}_confidence_note": f"{reason} {action}".strip(),
+    }
+
+
 def interpretation_confidence_for_level(
     *,
     support: Optional[float],
@@ -1157,6 +1357,331 @@ def decision_tree_path_explanation(payload: Any, X: pd.DataFrame) -> Dict[str, L
 class NetworkParserQueryEngine:
     """Apply saved two-level NetworkParser models to new samples."""
 
+    def _resolve_label_training_support_policy(self) -> Dict[str, Any]:
+        """Load saved label-support policy or rebuild it from aligned training labels."""
+        policy = self.registry.get("label_training_support_policy", {}) if isinstance(self.registry, dict) else {}
+        if isinstance(policy, dict) and policy.get("per_label"):
+            return policy
+
+        try:
+            from network_parser.two_level_protocol import build_label_training_support_policy
+        except Exception:  # pragma: no cover - supports direct source-tree execution
+            from two_level_protocol import build_label_training_support_policy  # type: ignore
+
+        training_matrix = (
+            self.registry.get("training_matrix", {}) if isinstance(self.registry, dict) else {}
+        )
+        labels_csv = (
+            training_matrix.get("aligned_labels_csv")
+            or training_matrix.get("aligned_hierarchy_labels_csv")
+            or training_matrix.get("aligned_two_level_labels_csv")
+        )
+        labels_path = resolve_path(labels_csv, self.registry_base) if labels_csv else None
+        if labels_path is None or not labels_path.exists():
+            return {}
+
+        labels_df = pd.read_csv(labels_path)
+        if "sample_id" in labels_df.columns:
+            labels_df = labels_df.set_index("sample_id")
+
+        label_columns: List[str] = []
+        hierarchy = self.registry.get("hierarchy", {}) if isinstance(self.registry, dict) else {}
+        if isinstance(hierarchy, dict) and hierarchy.get("label_columns"):
+            label_columns = [str(x) for x in hierarchy.get("label_columns", [])]
+        else:
+            level1 = self.registry.get("level1", {}) if isinstance(self.registry, dict) else {}
+            level2 = self.registry.get("level2", {}) if isinstance(self.registry, dict) else {}
+            level1_label = (
+                str(level1.get("label_column", "")).strip() if isinstance(level1, dict) else ""
+            )
+            level2_label = (
+                str(level2.get("label_column", "")).strip() if isinstance(level2, dict) else ""
+            )
+            rename_map: Dict[str, str] = {}
+            if level1_label and "level1_label" in labels_df.columns:
+                rename_map["level1_label"] = level1_label
+            if level2_label and "level2_label" in labels_df.columns:
+                rename_map["level2_label"] = level2_label
+            if rename_map:
+                labels_df = labels_df.rename(columns=rename_map)
+            if level1_label:
+                label_columns.append(level1_label)
+            if level2_label:
+                label_columns.append(level2_label)
+
+        if not label_columns:
+            return {}
+
+        return build_label_training_support_policy(
+            labels_df=labels_df,
+            label_columns=label_columns,
+            config=self.config,
+        )
+
+    def _apply_low_support_review(
+        self,
+        *,
+        label_column: str,
+        prediction: str,
+        prefix: str,
+        support_policy: Dict[str, Any],
+    ) -> Tuple[str, Dict[str, Any]]:
+        """Apply query-time low-support review policy to one hierarchical level."""
+        return low_support_review_fields(
+            label_column=label_column,
+            prediction=prediction,
+            policy=support_policy,
+            config=self.config,
+            prefix=prefix,
+        )
+
+    def _low_support_review_bundle(
+        self,
+        *,
+        label_column: str,
+        prediction: str,
+        prefix: str,
+        support_policy: Dict[str, Any],
+    ) -> Tuple[str, str, Dict[str, Any], Dict[str, Any]]:
+        """Return reported/routing predictions plus row and step review fields."""
+        candidate = str(prediction or "").strip()
+        final_pred, review_fields = self._apply_low_support_review(
+            label_column=label_column,
+            prediction=candidate,
+            prefix=prefix,
+            support_policy=support_policy,
+        )
+        if not review_fields:
+            return candidate, candidate, {}, {}
+
+        step_fields = {
+            "prediction": final_pred,
+            "candidate_prediction": review_fields.get(f"{prefix}_candidate_prediction"),
+            "prediction_status": review_fields.get(f"{prefix}_prediction_status"),
+            "low_support_reason": review_fields.get(f"{prefix}_low_support_reason"),
+            "recommended_action": review_fields.get(f"{prefix}_recommended_action"),
+        }
+        if f"{prefix}_interpretation_confidence" in review_fields:
+            step_fields["interpretation_confidence"] = review_fields[f"{prefix}_interpretation_confidence"]
+        if f"{prefix}_confidence_note" in review_fields:
+            step_fields["confidence_note"] = review_fields[f"{prefix}_confidence_note"]
+        return final_pred, candidate, review_fields, step_fields
+
+    def _predict_saved_terminal_fallback(
+        self,
+        *,
+        sample_id: str,
+        X_raw: pd.DataFrame,
+        fallback_payload: Dict[str, Any],
+        fallback_source: str,
+        alignment_by_node: Dict[str, Any],
+        max_markers: int,
+        raw_available_features: set,
+        sample_feature_metadata: Dict[str, Dict[str, Any]],
+        node_key: str,
+    ) -> Dict[str, Any]:
+        """Run one saved terminal-fallback model without mutating hierarchy steps."""
+        features, payload, ranked, importance = self._load_hierarchy_node_payload(fallback_payload)
+        X_node, alignment = align_to_training_features(X_raw.loc[[sample_id]], features)
+        alignment_by_node.setdefault(node_key, alignment)
+        pred, support, class_support = predict_labels_and_support(payload, X_node)
+        prediction = str(pred[0]) if pred else "unavailable"
+        support_value = support[0] if support else None
+        class_support_value = class_support[0] if class_support else {}
+        markers = supporting_markers_for_sample(
+            X_node.loc[sample_id],
+            ranked_features=ranked,
+            model_importance=importance,
+            max_markers=max_markers,
+            feature_metadata=sample_feature_metadata,
+            available_features=raw_available_features,
+        )
+        evidence = summarize_feature_evidence_for_model(
+            sample_values=X_node.loc[sample_id],
+            features=features,
+            feature_metadata=sample_feature_metadata,
+            available_features=raw_available_features,
+        )
+        confidence, confidence_note = interpretation_confidence_for_level(
+            support=support_value,
+            evidence=evidence,
+            n_supporting_markers=len(markers),
+        )
+        resistant_probability = None
+        if isinstance(class_support_value, dict):
+            for key, value in class_support_value.items():
+                if str(key).strip().lower() == "resistant":
+                    resistant_probability = float(value)
+                    break
+        return {
+            "prediction": prediction,
+            "support": support_value,
+            "class_support": class_support_value,
+            "resistant_probability": resistant_probability,
+            "interpretation_confidence": confidence,
+            "confidence_note": confidence_note,
+            "feature_evidence": evidence,
+            "supporting_markers": markers,
+            "fallback_source": fallback_source,
+        }
+
+    def _maybe_escalate_amr_with_terminal_fallback(
+        self,
+        *,
+        sample_id: str,
+        X_raw: pd.DataFrame,
+        hierarchy_steps: Sequence[Dict[str, Any]],
+        alignment_by_node: Dict[str, Any],
+        max_markers: int,
+        raw_available_features: set,
+        sample_feature_metadata: Dict[str, Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        """Try lineage/global terminal AMR fallbacks when branch evidence is weak."""
+        if not bool(getattr(self.config, "hierarchy_global_amr_fallback_on_weak_evidence", True)):
+            return None
+
+        fallback_payload, fallback_source = self._select_terminal_fallback_payload(hierarchy_steps)
+        if not isinstance(fallback_payload, dict):
+            return None
+
+        node_key = f"amr_evidence_escalation:{fallback_source}"
+        result = self._predict_saved_terminal_fallback(
+            sample_id=sample_id,
+            X_raw=X_raw,
+            fallback_payload=fallback_payload,
+            fallback_source=fallback_source,
+            alignment_by_node=alignment_by_node,
+            max_markers=max_markers,
+            raw_available_features=raw_available_features,
+            sample_feature_metadata=sample_feature_metadata,
+            node_key=node_key,
+        )
+        min_resistant_prob = float(
+            getattr(self.config, "hierarchy_global_amr_fallback_min_resistant_probability", 0.50)
+        )
+        resistant_probability = result.get("resistant_probability")
+        if str(result.get("prediction", "")).strip().lower() != "resistant":
+            return None
+        if resistant_probability is None or float(resistant_probability) < min_resistant_prob:
+            return None
+        return result
+
+    def _apply_amr_evidence_guard_bundle(
+        self,
+        *,
+        label_column: str,
+        prediction: str,
+        prefix: str,
+        evidence: Dict[str, Any],
+        sample_id: str,
+        X_raw: pd.DataFrame,
+        hierarchy_steps: List[Dict[str, Any]],
+        alignment_by_node: Dict[str, Any],
+        max_markers: int,
+        raw_available_features: set,
+        sample_feature_metadata: Dict[str, Dict[str, Any]],
+        support_value: Optional[float],
+        confidence: str,
+        confidence_note: str,
+    ) -> Tuple[str, str, Dict[str, Any], Dict[str, Any], Optional[float], str, str]:
+        """Escalate or review weak-evidence susceptible AMR branch predictions."""
+        candidate = str(prediction or "").strip()
+        reported = candidate
+        routing = candidate
+        review_fields: Dict[str, Any] = {}
+        step_fields: Dict[str, Any] = {}
+        final_support = support_value
+        final_confidence = confidence
+        final_confidence_note = confidence_note
+
+        guard_columns = {col.lower() for col in resolve_amr_evidence_guard_label_columns(self.config)}
+        if str(label_column).strip().lower() not in guard_columns:
+            return reported, routing, review_fields, step_fields, final_support, final_confidence, final_confidence_note
+
+        is_weak, _weak_reason = amr_branch_evidence_is_weak(evidence=evidence, config=self.config)
+        if not is_weak or candidate.lower() != "susceptible":
+            return reported, routing, review_fields, step_fields, final_support, final_confidence, final_confidence_note
+
+        escalation = self._maybe_escalate_amr_with_terminal_fallback(
+            sample_id=sample_id,
+            X_raw=X_raw,
+            hierarchy_steps=hierarchy_steps,
+            alignment_by_node=alignment_by_node,
+            max_markers=max_markers,
+            raw_available_features=raw_available_features,
+            sample_feature_metadata=sample_feature_metadata,
+        )
+        if isinstance(escalation, dict):
+            reported = str(escalation.get("prediction", reported))
+            routing = reported
+            final_support = escalation.get("support", final_support)
+            final_confidence = str(escalation.get("interpretation_confidence", final_confidence))
+            final_confidence_note = (
+                "Weak branch AMR evidence triggered terminal AMR fallback escalation "
+                f"({escalation.get('fallback_source')}). {escalation.get('confidence_note', '')}"
+            ).strip()
+            step_fields = {
+                "prediction": reported,
+                "candidate_prediction": candidate,
+                "prediction_status": "amr_terminal_fallback_escalation",
+                "amr_evidence_reason": (
+                    "Branch AMR model predicted susceptible with weak resolved-marker evidence; "
+                    f"terminal fallback '{escalation.get('fallback_source')}' predicted resistant."
+                ),
+                "recommended_action": "Inspect fallback supporting markers and confirm resistance phenotype.",
+                "interpretation_confidence": final_confidence,
+                "confidence_note": final_confidence_note,
+                "fallback_source": escalation.get("fallback_source"),
+                "fallback_resistant_probability": escalation.get("resistant_probability"),
+            }
+            review_fields = {
+                f"predicted_{prefix}": reported,
+                f"{prefix}_candidate_prediction": candidate,
+                f"{prefix}_prediction_status": "amr_terminal_fallback_escalation",
+                f"{prefix}_amr_evidence_reason": step_fields["amr_evidence_reason"],
+                f"{prefix}_recommended_action": step_fields["recommended_action"],
+                f"{prefix}_fallback_source": escalation.get("fallback_source"),
+                f"{prefix}_fallback_resistant_probability": escalation.get("resistant_probability"),
+                f"{prefix}_interpretation_confidence": final_confidence,
+                f"{prefix}_confidence_note": final_confidence_note,
+            }
+            return reported, routing, review_fields, step_fields, final_support, final_confidence, final_confidence_note
+
+        escalation_source = None
+        reported, review_fields = amr_weak_evidence_review_fields(
+            label_column=label_column,
+            prediction=candidate,
+            evidence=evidence,
+            config=self.config,
+            prefix=prefix,
+            escalation_source=escalation_source,
+        )
+        if review_fields:
+            routing = candidate
+            final_confidence = review_fields.get(f"{prefix}_interpretation_confidence", final_confidence)
+            final_confidence_note = review_fields.get(f"{prefix}_confidence_note", final_confidence_note)
+            step_fields = {
+                "prediction": reported,
+                "candidate_prediction": review_fields.get(f"{prefix}_candidate_prediction"),
+                "prediction_status": review_fields.get(f"{prefix}_prediction_status"),
+                "amr_evidence_reason": review_fields.get(f"{prefix}_amr_evidence_reason"),
+                "recommended_action": review_fields.get(f"{prefix}_recommended_action"),
+                "interpretation_confidence": final_confidence,
+                "confidence_note": final_confidence_note,
+            }
+        return reported, routing, review_fields, step_fields, final_support, final_confidence, final_confidence_note
+
+    def _init_query_caches(self) -> None:
+        """Initialize per-query payload caches shared by registry and bundled engines."""
+        self._hierarchy_payload_cache: Dict[
+            str, Tuple[List[str], Any, Optional[pd.DataFrame], Optional[pd.DataFrame]]
+        ] = {}
+        self._hierarchy_payload_cache_lock = threading.Lock()
+        self._level2_payload_cache: Dict[
+            str, Tuple[str, List[str], Any, Optional[pd.DataFrame], Optional[pd.DataFrame]]
+        ] = {}
+        self._level2_payload_cache_lock = threading.Lock()
+
     def __init__(self, registry_path: str, config: NetworkParserConfig):
         self.registry_path = Path(registry_path)
         if not self.registry_path.exists():
@@ -1164,14 +1689,21 @@ class NetworkParserQueryEngine:
         self.registry_base = self.registry_path.parent
         self.registry = load_json(self.registry_path)
         self.config = config
+        self._init_query_caches()
 
     def _load_hierarchy_node_payload(
         self,
         node: Dict[str, Any],
     ) -> Tuple[List[str], Any, Optional[pd.DataFrame], Optional[pd.DataFrame]]:
         """Load the saved model payload for one trainable hierarchy node."""
-        features = [str(f) for f in node.get("features", [])]
         model_path = resolve_path(node.get("model_file"), self.registry_base)
+        cache_key = str(model_path) if model_path is not None else str(id(node))
+        with self._hierarchy_payload_cache_lock:
+            cached = self._hierarchy_payload_cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+        features = [str(f) for f in node.get("features", [])]
         if not features:
             raise ValueError("Hierarchy node is marked trainable but has no selected features.")
         if model_path is None or not model_path.exists():
@@ -1179,7 +1711,10 @@ class NetworkParserQueryEngine:
         payload = load_pickle(model_path)
         ranked = read_ranked_feature_table(node.get("filter", {}), self.registry_base)
         model_importance = extract_model_importance(payload, features)
-        return features, payload, ranked, model_importance
+        result = (features, payload, ranked, model_importance)
+        with self._hierarchy_payload_cache_lock:
+            self._hierarchy_payload_cache[cache_key] = result
+        return result
 
     @staticmethod
     def _hierarchy_node_key(node: Dict[str, Any], path_tokens: Sequence[str]) -> str:
@@ -1187,6 +1722,757 @@ class NetworkParserQueryEngine:
         label = str(node.get("label_column", "label"))
         path_part = "/".join(str(p) for p in path_tokens if str(p)) or "root"
         return f"level_{level}:{label}:{path_part}"
+
+    @staticmethod
+    def _hierarchy_low_confidence_levels() -> frozenset:
+        return frozenset(
+            {
+                "low_confidence",
+                "low_to_moderate_confidence",
+            }
+        )
+
+    def _get_hierarchy_global_lineage_fallback(self) -> Optional[Dict[str, Any]]:
+        hierarchy = self.registry.get("hierarchy", {}) if isinstance(self.registry, dict) else {}
+        payload = hierarchy.get("global_lineage_fallback") if isinstance(hierarchy, dict) else None
+        if isinstance(payload, dict) and payload.get("status") == "success":
+            return payload
+        return None
+
+    def _global_lineage_fallback_label_column(self) -> Optional[str]:
+        payload = self._get_hierarchy_global_lineage_fallback()
+        if not isinstance(payload, dict):
+            return None
+        label = str(payload.get("target_label_column", "")).strip()
+        return label or None
+
+    def _should_use_global_lineage_fallback(
+        self,
+        *,
+        branch_status: str,
+        branch_confidence: str,
+        branch_prediction: str,
+        branch_support: Optional[float],
+        global_prediction: str,
+        global_support: Optional[float],
+    ) -> Tuple[bool, str]:
+        if branch_status != "success":
+            return True, "branch_node_unavailable"
+
+        if bool(getattr(self.config, "hierarchy_global_lineage_fallback_on_low_confidence", True)):
+            if branch_confidence in self._hierarchy_low_confidence_levels():
+                return True, "low_branch_confidence"
+
+        if bool(getattr(self.config, "hierarchy_global_lineage_fallback_on_disagreement", True)):
+            if (
+                branch_prediction
+                and global_prediction
+                and branch_prediction != global_prediction
+            ):
+                delta = float(
+                    getattr(self.config, "hierarchy_global_lineage_fallback_min_support_delta", 0.0)
+                )
+                if global_support is not None and (
+                    branch_support is None or global_support >= branch_support + delta
+                ):
+                    return True, "global_lineage_disagreement_recovery"
+
+        return False, ""
+
+    def _predict_global_lineage_fallback(
+        self,
+        *,
+        sample_id: str,
+        X_raw: pd.DataFrame,
+        fallback_payload: Dict[str, Any],
+        alignment_by_node: Dict[str, Any],
+        max_markers: int,
+        raw_available_features: set,
+        sample_feature_metadata: Dict[str, Dict[str, Any]],
+        node_key: str,
+    ) -> Dict[str, Any]:
+        features, payload, ranked, importance = self._load_hierarchy_node_payload(fallback_payload)
+        X_node, alignment = align_to_training_features(X_raw.loc[[sample_id]], features)
+        alignment_by_node.setdefault(node_key, alignment)
+        pred, support, class_support = predict_labels_and_support(payload, X_node)
+        prediction = str(pred[0]) if pred else "unavailable"
+        support_value = support[0] if support else None
+        class_support_value = class_support[0] if class_support else {}
+        tree_paths = decision_tree_path_explanation(payload, X_node)
+        markers = supporting_markers_for_sample(
+            X_node.loc[sample_id],
+            ranked_features=ranked,
+            model_importance=importance,
+            max_markers=max_markers,
+            feature_metadata=sample_feature_metadata,
+            available_features=raw_available_features,
+        )
+        evidence = summarize_feature_evidence_for_model(
+            sample_values=X_node.loc[sample_id],
+            features=features,
+            feature_metadata=sample_feature_metadata,
+            available_features=raw_available_features,
+        )
+        confidence, confidence_note = interpretation_confidence_for_level(
+            support=support_value,
+            evidence=evidence,
+            n_supporting_markers=len(markers),
+        )
+        return {
+            "prediction": prediction,
+            "support": support_value,
+            "class_support": class_support_value,
+            "interpretation_confidence": confidence,
+            "confidence_note": confidence_note,
+            "feature_evidence": evidence,
+            "supporting_markers": markers,
+            "decision_path": tree_paths.get(sample_id, []),
+        }
+
+    def _select_terminal_fallback_payload(
+        self,
+        hierarchy_steps: Sequence[Dict[str, Any]],
+    ) -> Tuple[Optional[Dict[str, Any]], str]:
+        """Return the best terminal fallback model for an incomplete hierarchy route.
+
+        Recursive hierarchy training may intentionally skip deeper branches when
+        a parent slice is too small or a label is not statistically separable.
+        Query mode should still be able to use the saved terminal endpoint
+        fallback rather than returning only ``unavailable`` for the downstream
+        endpoint.
+
+        Selection rule:
+        1. Prefer the deepest already predicted parent label with a successful
+           parent-conditioned fallback model.
+        2. Otherwise use the global terminal fallback, if available.
+        """
+        hierarchy = self.registry.get("hierarchy", {}) if isinstance(self.registry, dict) else {}
+        fallbacks = hierarchy.get("terminal_fallbacks", {}) if isinstance(hierarchy, dict) else {}
+        if not isinstance(fallbacks, dict) or fallbacks.get("status") != "success":
+            return None, "no_successful_terminal_fallbacks_in_registry"
+
+        by_parent = fallbacks.get("by_parent_label", {})
+        if isinstance(by_parent, dict):
+            # Walk from deepest completed step back to root. This allows a
+            # hierarchy such as Lineage -> Resistance_Profile -> AMR_binary to
+            # fall back by Resistance_Profile when available, or by Lineage when
+            # the profile node itself is unavailable.
+            for step in reversed(list(hierarchy_steps)):
+                label_column = str(step.get("label_column", "")).strip()
+                prediction = str(step.get("prediction", "")).strip()
+                if not label_column or not prediction or prediction.lower() == "unavailable":
+                    continue
+                block = by_parent.get(label_column)
+                if not isinstance(block, dict):
+                    continue
+                models = block.get("models", {})
+                if not isinstance(models, dict):
+                    continue
+                payload = models.get(prediction)
+                if isinstance(payload, dict) and payload.get("status") == "success":
+                    return payload, f"terminal_fallback_by_{label_column}"
+
+        global_payload = fallbacks.get("global")
+        if isinstance(global_payload, dict) and global_payload.get("status") == "success":
+            return global_payload, "global_terminal_fallback"
+
+        return None, "no_matching_terminal_fallback_model"
+
+    def _apply_terminal_fallback_prediction(
+        self,
+        *,
+        sample_id: str,
+        X_raw: pd.DataFrame,
+        raw_available_features: set,
+        sample_feature_metadata: Dict[str, Dict[str, Any]],
+        hierarchy_steps: List[Dict[str, Any]],
+        row: Dict[str, Any],
+        label_columns: Sequence[str],
+        alignment_by_node: Dict[str, Any],
+        max_markers: int,
+        trigger_reason: str,
+        support_policy: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[bool, Optional[str], Optional[int], str, str]:
+        """Predict the terminal endpoint using a saved fallback model.
+
+        Returns
+        -------
+        used, terminal_label, terminal_level, terminal_status, terminal_reason
+        """
+        fallback_payload, fallback_source = self._select_terminal_fallback_payload(hierarchy_steps)
+        if not isinstance(fallback_payload, dict):
+            return (
+                False,
+                None,
+                None,
+                "stopped",
+                f"{trigger_reason}; terminal_fallback_unavailable: {fallback_source}",
+            )
+
+        target_label = str(fallback_payload.get("target_label_column", "")).strip()
+        if not target_label:
+            return (
+                False,
+                None,
+                None,
+                "stopped",
+                f"{trigger_reason}; terminal_fallback_missing_target_label",
+            )
+
+        try:
+            target_level = list(label_columns).index(target_label) + 1
+        except ValueError:
+            target_level = len(label_columns) if label_columns else None
+
+        prefix = f"level{target_level}" if target_level is not None else "terminal"
+        node_key = f"terminal_fallback:{fallback_source}:{target_label}"
+
+        features, payload, ranked, importance = self._load_hierarchy_node_payload(fallback_payload)
+        X_node, alignment = align_to_training_features(X_raw.loc[[sample_id]], features)
+        alignment_by_node.setdefault(node_key, alignment)
+        pred, support, class_support = predict_labels_and_support(payload, X_node)
+        prediction = str(pred[0]) if pred else "unavailable"
+        support_value = support[0] if support else None
+        class_support_value = class_support[0] if class_support else {}
+        tree_paths = decision_tree_path_explanation(payload, X_node)
+
+        markers = supporting_markers_for_sample(
+            X_node.loc[sample_id],
+            ranked_features=ranked,
+            model_importance=importance,
+            max_markers=max_markers,
+            feature_metadata=sample_feature_metadata,
+            available_features=raw_available_features,
+        )
+        evidence = summarize_feature_evidence_for_model(
+            sample_values=X_node.loc[sample_id],
+            features=features,
+            feature_metadata=sample_feature_metadata,
+            available_features=raw_available_features,
+        )
+        confidence, confidence_note = interpretation_confidence_for_level(
+            support=support_value,
+            evidence=evidence,
+            n_supporting_markers=len(markers),
+        )
+        decision_path = tree_paths.get(sample_id, [])
+
+        review_policy = support_policy if isinstance(support_policy, dict) else {}
+        reported, _routing, review_row, review_step = self._low_support_review_bundle(
+            label_column=target_label,
+            prediction=prediction,
+            prefix=prefix,
+            support_policy=review_policy,
+        )
+        prediction = reported
+        if review_row:
+            confidence = review_row.get(f"{prefix}_interpretation_confidence", confidence)
+            confidence_note = review_row.get(f"{prefix}_confidence_note", confidence_note)
+
+        step = {
+            "level_number": target_level,
+            "label_column": target_label,
+            "prediction": prediction,
+            "support": support_value,
+            "class_support": class_support_value,
+            "node_status": "terminal_fallback",
+            "node_key": node_key,
+            "fallback_source": fallback_source,
+            "fallback_trigger_reason": trigger_reason,
+            "interpretation_confidence": confidence,
+            "confidence_note": confidence_note,
+            "feature_evidence": evidence,
+            "supporting_markers": markers,
+            "decision_path": decision_path,
+        }
+        step.update(review_step)
+        hierarchy_steps.append(step)
+
+        row.update(
+            {
+                f"{prefix}_label_column": target_label,
+                f"predicted_{prefix}": prediction,
+                f"{prefix}_support": support_value,
+                f"{prefix}_node_status": "terminal_fallback",
+                f"{prefix}_fallback_source": fallback_source,
+                f"{prefix}_fallback_trigger_reason": trigger_reason,
+                f"{prefix}_interpretation_confidence": confidence,
+                f"{prefix}_confidence_note": confidence_note,
+                f"{prefix}_n_supporting_markers": int(len(markers)),
+                **flatten_feature_evidence(prefix, evidence),
+            }
+        )
+        row.update(review_row)
+
+        return (
+            True,
+            prediction,
+            int(target_level) if target_level is not None else None,
+            "fallback_complete",
+            f"{trigger_reason}; used_{fallback_source}",
+        )
+
+    def _traverse_hierarchy_sample(
+        self,
+        *,
+        sample_id: str,
+        X_raw: pd.DataFrame,
+        root: Dict[str, Any],
+        label_columns: List[str],
+        raw_available_features: set,
+        sample_feature_metadata: Dict[str, Dict[str, Any]],
+        sample_mapping_quality: Dict[str, Any],
+        query_input_type: str,
+        max_markers: int,
+        support_policy: Dict[str, Any],
+    ) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+        """Traverse the hierarchy for one query sample."""
+        alignment_by_node: Dict[str, Any] = {}
+        sample_id = normalize_sample_id(sample_id)
+        current = root
+        path_tokens: List[str] = []
+        hierarchy_steps: List[Dict[str, Any]] = []
+        row: Dict[str, Any] = {"sample_id": sample_id}
+        terminal_status = "complete"
+        terminal_reason = "traversed_to_terminal_node"
+        terminal_label: Optional[str] = None
+        terminal_level: Optional[int] = None
+        guard = 0
+
+        while isinstance(current, dict) and current and guard < 100:
+            guard += 1
+            status = str(current.get("status", ""))
+            level_number = int(current.get("level_number", guard) or guard)
+            label_column = str(current.get("label_column", f"level_{level_number}"))
+            node_key = self._hierarchy_node_key(current, path_tokens)
+            prefix = f"level{level_number}"
+
+            if status == "constant":
+                prediction = str(current.get("constant_label", "unavailable"))
+                terminal_label = prediction
+                terminal_level = level_number
+                step = {
+                    "level_number": level_number,
+                    "label_column": label_column,
+                    "prediction": prediction,
+                    "support": 1.0,
+                    "class_support": {prediction: 1.0},
+                    "node_status": status,
+                    "node_key": node_key,
+                    "interpretation_confidence": "deterministic_branch",
+                    "confidence_note": "This hierarchy branch had one observed child during training, so no model was fitted at this node.",
+                    "feature_evidence": {},
+                    "supporting_markers": [],
+                    "decision_path": [],
+                }
+                hierarchy_steps.append(step)
+                row.update(
+                    {
+                        f"{prefix}_label_column": label_column,
+                        f"predicted_{prefix}": prediction,
+                        f"{prefix}_support": 1.0,
+                        f"{prefix}_node_status": status,
+                        f"{prefix}_interpretation_confidence": "deterministic_branch",
+                        f"{prefix}_n_supporting_markers": 0,
+                    }
+                )
+                path_tokens.append(prediction)
+                children = current.get("children", {})
+                next_node = children.get(prediction) if isinstance(children, dict) else None
+                if isinstance(next_node, dict):
+                    current = next_node
+                    continue
+                terminal_reason = "constant_terminal_branch"
+                break
+
+            if status != "success":
+                lineage_fb = self._get_hierarchy_global_lineage_fallback()
+                lineage_label = self._global_lineage_fallback_label_column()
+                if (
+                    isinstance(lineage_fb, dict)
+                    and lineage_label
+                    and label_column == lineage_label
+                ):
+                    fb_node_key = f"global_lineage_fallback:{label_column}:{node_key}"
+                    global_result = self._predict_global_lineage_fallback(
+                        sample_id=sample_id,
+                        X_raw=X_raw,
+                        fallback_payload=lineage_fb,
+                        alignment_by_node=alignment_by_node,
+                        max_markers=max_markers,
+                        raw_available_features=raw_available_features,
+                        sample_feature_metadata=sample_feature_metadata,
+                        node_key=fb_node_key,
+                    )
+                    prediction = str(global_result.get("prediction", "unavailable"))
+                    terminal_label = prediction
+                    terminal_level = level_number
+                    trigger_reason = (
+                        f"{current.get('reason', 'hierarchy_node_not_trainable')}; "
+                        "global_lineage_fallback_for_unavailable_branch"
+                    )
+                    step = {
+                        "level_number": level_number,
+                        "label_column": label_column,
+                        "prediction": prediction,
+                        "support": global_result.get("support"),
+                        "class_support": global_result.get("class_support", {}),
+                        "node_status": "global_lineage_fallback",
+                        "node_key": fb_node_key,
+                        "fallback_trigger_reason": trigger_reason,
+                        "interpretation_confidence": global_result.get("interpretation_confidence"),
+                        "confidence_note": global_result.get("confidence_note"),
+                        "feature_evidence": global_result.get("feature_evidence", {}),
+                        "supporting_markers": global_result.get("supporting_markers", []),
+                        "decision_path": global_result.get("decision_path", []),
+                    }
+                    row_update = {
+                        f"{prefix}_label_column": label_column,
+                        f"predicted_{prefix}": prediction,
+                        f"{prefix}_support": global_result.get("support"),
+                        f"{prefix}_node_status": "global_lineage_fallback",
+                        f"{prefix}_fallback_trigger_reason": trigger_reason,
+                        f"{prefix}_interpretation_confidence": global_result.get(
+                            "interpretation_confidence"
+                        ),
+                        f"{prefix}_confidence_note": global_result.get("confidence_note"),
+                        f"{prefix}_n_supporting_markers": int(
+                            len(global_result.get("supporting_markers", []))
+                        ),
+                        **flatten_feature_evidence(
+                            prefix, global_result.get("feature_evidence", {})
+                        ),
+                    }
+                    reported, routing, review_row, review_step = self._low_support_review_bundle(
+                        label_column=label_column,
+                        prediction=prediction,
+                        prefix=prefix,
+                        support_policy=support_policy,
+                    )
+                    step.update(review_step)
+                    row_update.update(review_row)
+                    if review_row:
+                        row_update[f"predicted_{prefix}"] = reported
+                    hierarchy_steps.append(step)
+                    row.update(row_update)
+                    terminal_label = reported
+                    path_tokens.append(routing)
+                    children = current.get("children", {})
+                    next_node = children.get(routing) if isinstance(children, dict) else None
+                    if isinstance(next_node, dict):
+                        current = next_node
+                        continue
+
+                    terminal_reason = "no_child_node_after_global_lineage_fallback"
+                    if level_number < len(label_columns):
+                        used_fallback, fb_label, fb_level, fb_status, fb_reason = (
+                            self._apply_terminal_fallback_prediction(
+                                sample_id=sample_id,
+                                X_raw=X_raw,
+                                raw_available_features=raw_available_features,
+                                sample_feature_metadata=sample_feature_metadata,
+                                hierarchy_steps=hierarchy_steps,
+                                row=row,
+                                label_columns=label_columns,
+                                alignment_by_node=alignment_by_node,
+                                max_markers=max_markers,
+                                trigger_reason=terminal_reason,
+                                support_policy=support_policy,
+                            )
+                        )
+                        if used_fallback:
+                            terminal_label = fb_label
+                            terminal_level = fb_level
+                            terminal_status = fb_status
+                            terminal_reason = fb_reason
+                    break
+
+                terminal_status = "stopped"
+                terminal_reason = str(current.get("reason", "hierarchy_node_not_trainable"))
+                terminal_level = level_number
+                step = {
+                    "level_number": level_number,
+                    "label_column": label_column,
+                    "prediction": "unavailable",
+                    "support": None,
+                    "class_support": {},
+                    "node_status": status or "unavailable",
+                    "node_key": node_key,
+                    "interpretation_confidence": "unavailable",
+                    "confidence_note": terminal_reason,
+                    "feature_evidence": {},
+                    "supporting_markers": [],
+                    "decision_path": [],
+                }
+                hierarchy_steps.append(step)
+                row.update(
+                    {
+                        f"{prefix}_label_column": label_column,
+                        f"predicted_{prefix}": "unavailable",
+                        f"{prefix}_support": None,
+                        f"{prefix}_node_status": status or "unavailable",
+                        f"{prefix}_interpretation_confidence": "unavailable",
+                        f"{prefix}_n_supporting_markers": 0,
+                    }
+                )
+
+                used_fallback, fb_label, fb_level, fb_status, fb_reason = self._apply_terminal_fallback_prediction(
+                    sample_id=sample_id,
+                    X_raw=X_raw,
+                    raw_available_features=raw_available_features,
+                    sample_feature_metadata=sample_feature_metadata,
+                    hierarchy_steps=hierarchy_steps,
+                    row=row,
+                    label_columns=label_columns,
+                    alignment_by_node=alignment_by_node,
+                    max_markers=max_markers,
+                    trigger_reason=terminal_reason,
+                    support_policy=support_policy,
+                )
+                if used_fallback:
+                    terminal_label = fb_label
+                    terminal_level = fb_level
+                    terminal_status = fb_status
+                    terminal_reason = fb_reason
+                break
+
+            features, payload, ranked, importance = self._load_hierarchy_node_payload(current)
+            X_node, alignment = align_to_training_features(X_raw.loc[[sample_id]], features)
+            alignment_by_node.setdefault(node_key, alignment)
+            pred, support, class_support = predict_labels_and_support(payload, X_node)
+            prediction = str(pred[0]) if pred else "unavailable"
+            support_value = support[0] if support else None
+            class_support_value = class_support[0] if class_support else {}
+            tree_paths = decision_tree_path_explanation(payload, X_node)
+
+            markers = supporting_markers_for_sample(
+                X_node.loc[sample_id],
+                ranked_features=ranked,
+                model_importance=importance,
+                max_markers=max_markers,
+                feature_metadata=sample_feature_metadata,
+                available_features=raw_available_features,
+            )
+            evidence = summarize_feature_evidence_for_model(
+                sample_values=X_node.loc[sample_id],
+                features=features,
+                feature_metadata=sample_feature_metadata,
+                available_features=raw_available_features,
+            )
+            confidence, confidence_note = interpretation_confidence_for_level(
+                support=support_value,
+                evidence=evidence,
+                n_supporting_markers=len(markers),
+            )
+            decision_path = tree_paths.get(sample_id, [])
+
+            node_status = status
+            fallback_trigger_reason: Optional[str] = None
+            lineage_fb = self._get_hierarchy_global_lineage_fallback()
+            lineage_label = self._global_lineage_fallback_label_column()
+            if (
+                isinstance(lineage_fb, dict)
+                and lineage_label
+                and label_column == lineage_label
+            ):
+                fb_node_key = f"global_lineage_fallback:{label_column}:{node_key}"
+                global_result = self._predict_global_lineage_fallback(
+                    sample_id=sample_id,
+                    X_raw=X_raw,
+                    fallback_payload=lineage_fb,
+                    alignment_by_node=alignment_by_node,
+                    max_markers=max_markers,
+                    raw_available_features=raw_available_features,
+                    sample_feature_metadata=sample_feature_metadata,
+                    node_key=fb_node_key,
+                )
+                use_global, trigger = self._should_use_global_lineage_fallback(
+                    branch_status=status,
+                    branch_confidence=confidence,
+                    branch_prediction=prediction,
+                    branch_support=support_value,
+                    global_prediction=str(global_result.get("prediction", "")),
+                    global_support=global_result.get("support"),
+                )
+                if use_global:
+                    prediction = str(global_result.get("prediction", prediction))
+                    support_value = global_result.get("support", support_value)
+                    class_support_value = global_result.get("class_support", class_support_value)
+                    confidence = str(
+                        global_result.get("interpretation_confidence", confidence)
+                    )
+                    confidence_note = (
+                        f"Global lineage fallback used ({trigger}). "
+                        f"{global_result.get('confidence_note', '')}"
+                    ).strip()
+                    evidence = global_result.get("feature_evidence", evidence)
+                    markers = global_result.get("supporting_markers", markers)
+                    decision_path = global_result.get("decision_path", decision_path)
+                    node_status = "global_lineage_fallback"
+                    fallback_trigger_reason = trigger
+                    node_key = fb_node_key
+
+            step = {
+                "level_number": level_number,
+                "label_column": label_column,
+                "prediction": prediction,
+                "support": support_value,
+                "class_support": class_support_value,
+                "node_status": node_status,
+                "node_key": node_key,
+                "interpretation_confidence": confidence,
+                "confidence_note": confidence_note,
+                "feature_evidence": evidence,
+                "supporting_markers": markers,
+                "decision_path": decision_path,
+            }
+            if fallback_trigger_reason:
+                step["fallback_trigger_reason"] = fallback_trigger_reason
+
+            row_update = {
+                f"{prefix}_label_column": label_column,
+                f"predicted_{prefix}": prediction,
+                f"{prefix}_support": support_value,
+                f"{prefix}_node_status": node_status,
+                f"{prefix}_interpretation_confidence": confidence,
+                f"{prefix}_confidence_note": confidence_note,
+                f"{prefix}_n_supporting_markers": int(len(markers)),
+                **flatten_feature_evidence(prefix, evidence),
+            }
+            if fallback_trigger_reason:
+                row_update[f"{prefix}_fallback_trigger_reason"] = fallback_trigger_reason
+
+            reported, routing, review_row, review_step = self._low_support_review_bundle(
+                label_column=label_column,
+                prediction=prediction,
+                prefix=prefix,
+                support_policy=support_policy,
+            )
+            step.update(review_step)
+            row_update.update(review_row)
+            if review_row:
+                row_update[f"predicted_{prefix}"] = reported
+                step["prediction"] = reported
+                step["support"] = support_value
+            if not review_row:
+                (
+                    amr_reported,
+                    amr_routing,
+                    amr_review_row,
+                    amr_review_step,
+                    amr_support,
+                    amr_confidence,
+                    amr_confidence_note,
+                ) = self._apply_amr_evidence_guard_bundle(
+                    label_column=label_column,
+                    prediction=reported,
+                    prefix=prefix,
+                    evidence=evidence,
+                    sample_id=sample_id,
+                    X_raw=X_raw,
+                    hierarchy_steps=hierarchy_steps,
+                    alignment_by_node=alignment_by_node,
+                    max_markers=max_markers,
+                    raw_available_features=raw_available_features,
+                    sample_feature_metadata=sample_feature_metadata,
+                    support_value=support_value,
+                    confidence=confidence,
+                    confidence_note=confidence_note,
+                )
+                if amr_review_row:
+                    reported = amr_reported
+                    routing = amr_routing
+                    support_value = amr_support
+                    confidence = amr_confidence
+                    confidence_note = amr_confidence_note
+                    step.update(amr_review_step)
+                    step["prediction"] = reported
+                    step["support"] = support_value
+                    step["interpretation_confidence"] = confidence
+                    step["confidence_note"] = confidence_note
+                    row_update.update(amr_review_row)
+                    row_update[f"predicted_{prefix}"] = reported
+                    row_update[f"{prefix}_support"] = support_value
+                    row_update[f"{prefix}_interpretation_confidence"] = confidence
+                    row_update[f"{prefix}_confidence_note"] = confidence_note
+            hierarchy_steps.append(step)
+            row.update(row_update)
+
+            terminal_label = reported
+            terminal_level = level_number
+            path_tokens.append(routing)
+            children = current.get("children", {})
+            next_node = children.get(routing) if isinstance(children, dict) else None
+            if isinstance(next_node, dict):
+                current = next_node
+                continue
+
+            terminal_reason = "no_child_node_for_predicted_label"
+            if level_number < len(label_columns):
+                used_fallback, fb_label, fb_level, fb_status, fb_reason = self._apply_terminal_fallback_prediction(
+                    sample_id=sample_id,
+                    X_raw=X_raw,
+                    raw_available_features=raw_available_features,
+                    sample_feature_metadata=sample_feature_metadata,
+                    hierarchy_steps=hierarchy_steps,
+                    row=row,
+                    label_columns=label_columns,
+                    alignment_by_node=alignment_by_node,
+                    max_markers=max_markers,
+                    trigger_reason=terminal_reason,
+                    support_policy=support_policy,
+                )
+                if used_fallback:
+                    terminal_label = fb_label
+                    terminal_level = fb_level
+                    terminal_status = fb_status
+                    terminal_reason = fb_reason
+            break
+
+        if guard >= 100:
+            terminal_status = "stopped"
+            terminal_reason = "hierarchy_traversal_guard_exceeded"
+
+        predicted_path = " / ".join(
+            f"{step.get('label_column')}={step.get('prediction')}"
+            for step in hierarchy_steps
+            if step.get("prediction") not in {None, ""}
+        )
+        row.update(
+            {
+                "predicted_hierarchy_path": predicted_path,
+                "predicted_terminal_label": terminal_label,
+                "predicted_terminal_level": terminal_level,
+                "hierarchy_terminal_status": terminal_status,
+                "hierarchy_terminal_reason": terminal_reason,
+                "query_marker_recovery_status": sample_mapping_quality.get("marker_recovery_status"),
+                "query_marker_recovery_reason": sample_mapping_quality.get("marker_recovery_reason"),
+                "query_active_marker_evidence_status": sample_mapping_quality.get("active_marker_evidence_status"),
+                "query_active_marker_evidence_reason": sample_mapping_quality.get("active_marker_evidence_reason"),
+                "query_unique_mapped_fraction": sample_mapping_quality.get("unique_mapped_fraction"),
+                "query_active_feature_fraction": sample_mapping_quality.get("active_feature_fraction"),
+                "query_n_encoded_active_features": sample_mapping_quality.get("n_encoded_active_features"),
+                "query_n_resolved_features": sample_mapping_quality.get("n_resolved_features"),
+                "query_resolved_feature_fraction": sample_mapping_quality.get("resolved_feature_fraction"),
+                "query_n_resolved_baseline_features": sample_mapping_quality.get("n_resolved_baseline_features"),
+                "query_resolved_baseline_feature_fraction": sample_mapping_quality.get("resolved_baseline_feature_fraction"),
+                "query_resolved_marker_evidence_status": sample_mapping_quality.get("resolved_marker_evidence_status"),
+                "query_resolved_marker_evidence_reason": sample_mapping_quality.get("resolved_marker_evidence_reason"),
+                "query_n_unresolved_or_missing_calls": sample_mapping_quality.get("n_unresolved_or_missing_context_calls", sample_mapping_quality.get("n_unresolved_or_missing_calls")),
+                "query_n_multi_hit_calls": sample_mapping_quality.get("n_multi_hit_calls"),
+                "query_n_ambiguous_base_calls": sample_mapping_quality.get("n_ambiguous_base_calls"),
+                "query_n_non_training_allele_calls": sample_mapping_quality.get("n_non_training_allele_calls"),
+            }
+        )
+        report_sample = {
+            **row,
+            "hierarchy_steps": hierarchy_steps,
+            "fasta_mapping_quality": sample_mapping_quality if query_input_type == "fasta" else {},
+            "vcf_mapping_quality": sample_mapping_quality if query_input_type in {"vcf", "fastq"} else {},
+            "raw_sequence_mapping_quality": sample_mapping_quality,
+        }
+
+        return row, report_sample, alignment_by_node
 
     def _query_hierarchy(
         self,
@@ -1222,216 +2508,61 @@ class NetworkParserQueryEngine:
                 if isinstance(item, dict) and item.get("sample_id") is not None:
                     raw_sample_quality[normalize_sample_id(str(item.get("sample_id")))] = item
 
+        sample_ids = [normalize_sample_id(str(sample_id)) for sample_id in X_raw.index.astype(str)]
+        support_policy = self._resolve_label_training_support_policy()
+
+        def _dispatch_one(sample_id: str) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+            return self._traverse_hierarchy_sample(
+                sample_id=sample_id,
+                X_raw=X_raw,
+                root=root,
+                label_columns=label_columns,
+                raw_available_features=raw_available_features,
+                sample_feature_metadata=raw_feature_metadata.get(sample_id, {}),
+                sample_mapping_quality=raw_sample_quality.get(sample_id, {}),
+                query_input_type=query_input_type,
+                max_markers=max_markers,
+                support_policy=support_policy,
+            )
+
+        parallel_samples = should_run_parallel(
+            self.config,
+            enabled_attr="query_parallel_samples",
+            n_tasks=len(sample_ids),
+        )
+        if parallel_samples:
+            n_jobs = resolve_effective_n_jobs(
+                self.config,
+                override=getattr(self.config, "query_parallel_n_jobs", None),
+                minimum_tasks=len(sample_ids),
+            )
+            logger.info(
+                "Running hierarchy query for %d samples in parallel | n_jobs=%d",
+                len(sample_ids),
+                int(n_jobs),
+            )
+            traversed = Parallel(n_jobs=n_jobs, prefer="threads")(
+                delayed(_dispatch_one)(sample_id) for sample_id in sample_ids
+            )
+        else:
+            traversed = [
+                _dispatch_one(sample_id)
+                for sample_id in progress_iter(
+                    sample_ids,
+                    desc="Hierarchy query samples",
+                    unit="sample",
+                    leave=False,
+                )
+            ]
+
         rows: List[Dict[str, Any]] = []
         report_samples: List[Dict[str, Any]] = []
         alignment_by_node: Dict[str, Any] = {}
-
-        for sample_id in X_raw.index.astype(str):
-            sample_id = normalize_sample_id(sample_id)
-            sample_feature_metadata = raw_feature_metadata.get(sample_id, {})
-            sample_mapping_quality = raw_sample_quality.get(sample_id, {})
-            current = root
-            path_tokens: List[str] = []
-            hierarchy_steps: List[Dict[str, Any]] = []
-            row: Dict[str, Any] = {"sample_id": sample_id}
-            terminal_status = "complete"
-            terminal_reason = "traversed_to_terminal_node"
-            terminal_label: Optional[str] = None
-            terminal_level: Optional[int] = None
-            guard = 0
-
-            while isinstance(current, dict) and current and guard < 100:
-                guard += 1
-                status = str(current.get("status", ""))
-                level_number = int(current.get("level_number", guard) or guard)
-                label_column = str(current.get("label_column", f"level_{level_number}"))
-                node_key = self._hierarchy_node_key(current, path_tokens)
-                prefix = f"level{level_number}"
-
-                if status == "constant":
-                    prediction = str(current.get("constant_label", "unavailable"))
-                    terminal_label = prediction
-                    terminal_level = level_number
-                    step = {
-                        "level_number": level_number,
-                        "label_column": label_column,
-                        "prediction": prediction,
-                        "support": 1.0,
-                        "class_support": {prediction: 1.0},
-                        "node_status": status,
-                        "node_key": node_key,
-                        "interpretation_confidence": "deterministic_branch",
-                        "confidence_note": "This hierarchy branch had one observed child during training, so no model was fitted at this node.",
-                        "feature_evidence": {},
-                        "supporting_markers": [],
-                        "decision_path": [],
-                    }
-                    hierarchy_steps.append(step)
-                    row.update(
-                        {
-                            f"{prefix}_label_column": label_column,
-                            f"predicted_{prefix}": prediction,
-                            f"{prefix}_support": 1.0,
-                            f"{prefix}_node_status": status,
-                            f"{prefix}_interpretation_confidence": "deterministic_branch",
-                            f"{prefix}_n_supporting_markers": 0,
-                        }
-                    )
-                    path_tokens.append(prediction)
-                    children = current.get("children", {})
-                    next_node = children.get(prediction) if isinstance(children, dict) else None
-                    if isinstance(next_node, dict):
-                        current = next_node
-                        continue
-                    terminal_reason = "constant_terminal_branch"
-                    break
-
-                if status != "success":
-                    terminal_status = "stopped"
-                    terminal_reason = str(current.get("reason", "hierarchy_node_not_trainable"))
-                    terminal_level = level_number
-                    step = {
-                        "level_number": level_number,
-                        "label_column": label_column,
-                        "prediction": "unavailable",
-                        "support": None,
-                        "class_support": {},
-                        "node_status": status or "unavailable",
-                        "node_key": node_key,
-                        "interpretation_confidence": "unavailable",
-                        "confidence_note": terminal_reason,
-                        "feature_evidence": {},
-                        "supporting_markers": [],
-                        "decision_path": [],
-                    }
-                    hierarchy_steps.append(step)
-                    row.update(
-                        {
-                            f"{prefix}_label_column": label_column,
-                            f"predicted_{prefix}": "unavailable",
-                            f"{prefix}_support": None,
-                            f"{prefix}_node_status": status or "unavailable",
-                            f"{prefix}_interpretation_confidence": "unavailable",
-                            f"{prefix}_n_supporting_markers": 0,
-                        }
-                    )
-                    break
-
-                features, payload, ranked, importance = self._load_hierarchy_node_payload(current)
-                X_node, alignment = align_to_training_features(X_raw.loc[[sample_id]], features)
-                alignment_by_node.setdefault(node_key, alignment)
-                pred, support, class_support = predict_labels_and_support(payload, X_node)
-                prediction = str(pred[0]) if pred else "unavailable"
-                support_value = support[0] if support else None
-                class_support_value = class_support[0] if class_support else {}
-                tree_paths = decision_tree_path_explanation(payload, X_node)
-
-                markers = supporting_markers_for_sample(
-                    X_node.loc[sample_id],
-                    ranked_features=ranked,
-                    model_importance=importance,
-                    max_markers=max_markers,
-                    feature_metadata=sample_feature_metadata,
-                    available_features=raw_available_features,
-                )
-                evidence = summarize_feature_evidence_for_model(
-                    sample_values=X_node.loc[sample_id],
-                    features=features,
-                    feature_metadata=sample_feature_metadata,
-                    available_features=raw_available_features,
-                )
-                confidence, confidence_note = interpretation_confidence_for_level(
-                    support=support_value,
-                    evidence=evidence,
-                    n_supporting_markers=len(markers),
-                )
-                decision_path = tree_paths.get(sample_id, [])
-
-                step = {
-                    "level_number": level_number,
-                    "label_column": label_column,
-                    "prediction": prediction,
-                    "support": support_value,
-                    "class_support": class_support_value,
-                    "node_status": status,
-                    "node_key": node_key,
-                    "interpretation_confidence": confidence,
-                    "confidence_note": confidence_note,
-                    "feature_evidence": evidence,
-                    "supporting_markers": markers,
-                    "decision_path": decision_path,
-                }
-                hierarchy_steps.append(step)
-
-                row.update(
-                    {
-                        f"{prefix}_label_column": label_column,
-                        f"predicted_{prefix}": prediction,
-                        f"{prefix}_support": support_value,
-                        f"{prefix}_node_status": status,
-                        f"{prefix}_interpretation_confidence": confidence,
-                        f"{prefix}_confidence_note": confidence_note,
-                        f"{prefix}_n_supporting_markers": int(len(markers)),
-                        **flatten_feature_evidence(prefix, evidence),
-                    }
-                )
-
-                terminal_label = prediction
-                terminal_level = level_number
-                path_tokens.append(prediction)
-                children = current.get("children", {})
-                next_node = children.get(prediction) if isinstance(children, dict) else None
-                if isinstance(next_node, dict):
-                    current = next_node
-                    continue
-                terminal_reason = "no_child_node_for_predicted_label"
-                break
-
-            if guard >= 100:
-                terminal_status = "stopped"
-                terminal_reason = "hierarchy_traversal_guard_exceeded"
-
-            predicted_path = " / ".join(
-                f"{step.get('label_column')}={step.get('prediction')}"
-                for step in hierarchy_steps
-                if step.get("prediction") not in {None, ""}
-            )
-            row.update(
-                {
-                    "predicted_hierarchy_path": predicted_path,
-                    "predicted_terminal_label": terminal_label,
-                    "predicted_terminal_level": terminal_level,
-                    "hierarchy_terminal_status": terminal_status,
-                    "hierarchy_terminal_reason": terminal_reason,
-                    "query_marker_recovery_status": sample_mapping_quality.get("marker_recovery_status"),
-                    "query_marker_recovery_reason": sample_mapping_quality.get("marker_recovery_reason"),
-                    "query_active_marker_evidence_status": sample_mapping_quality.get("active_marker_evidence_status"),
-                    "query_active_marker_evidence_reason": sample_mapping_quality.get("active_marker_evidence_reason"),
-                    "query_unique_mapped_fraction": sample_mapping_quality.get("unique_mapped_fraction"),
-                    "query_active_feature_fraction": sample_mapping_quality.get("active_feature_fraction"),
-                    "query_n_encoded_active_features": sample_mapping_quality.get("n_encoded_active_features"),
-                    "query_n_resolved_features": sample_mapping_quality.get("n_resolved_features"),
-                    "query_resolved_feature_fraction": sample_mapping_quality.get("resolved_feature_fraction"),
-                    "query_n_resolved_baseline_features": sample_mapping_quality.get("n_resolved_baseline_features"),
-                    "query_resolved_baseline_feature_fraction": sample_mapping_quality.get("resolved_baseline_feature_fraction"),
-                    "query_resolved_marker_evidence_status": sample_mapping_quality.get("resolved_marker_evidence_status"),
-                    "query_resolved_marker_evidence_reason": sample_mapping_quality.get("resolved_marker_evidence_reason"),
-                    "query_n_unresolved_or_missing_calls": sample_mapping_quality.get("n_unresolved_or_missing_context_calls", sample_mapping_quality.get("n_unresolved_or_missing_calls")),
-                    "query_n_multi_hit_calls": sample_mapping_quality.get("n_multi_hit_calls"),
-                    "query_n_ambiguous_base_calls": sample_mapping_quality.get("n_ambiguous_base_calls"),
-                    "query_n_non_training_allele_calls": sample_mapping_quality.get("n_non_training_allele_calls"),
-                }
-            )
+        for row, report_sample, sample_alignment in traversed:
             rows.append(row)
-            report_samples.append(
-                {
-                    **row,
-                    "hierarchy_steps": hierarchy_steps,
-                    "fasta_mapping_quality": sample_mapping_quality if query_input_type == "fasta" else {},
-                    "vcf_mapping_quality": sample_mapping_quality if query_input_type in {"vcf", "fastq"} else {},
-                    "raw_sequence_mapping_quality": sample_mapping_quality,
-                }
-            )
+            report_samples.append(report_sample)
+            for key, value in sample_alignment.items():
+                alignment_by_node.setdefault(key, value)
 
         predictions = pd.DataFrame(rows)
         predictions_path = output_dir / "query_predictions.csv"
@@ -1520,6 +2651,12 @@ class NetworkParserQueryEngine:
         return features, payload, ranked, model_importance
 
     def _select_level2_payload(self, predicted_level1: str) -> Tuple[str, List[str], Any, Optional[pd.DataFrame], Optional[pd.DataFrame]]:
+        cache_key = str(predicted_level1)
+        with self._level2_payload_cache_lock:
+            cached = self._level2_payload_cache.get(cache_key)
+            if cached is not None:
+                return cached
+
         level2 = self.registry.get("level2", {})
         by_group = level2.get("by_level1_group", {}) if isinstance(level2, dict) else {}
         group_payload = by_group.get(str(predicted_level1), {}) if isinstance(by_group, dict) else {}
@@ -1543,7 +2680,10 @@ class NetworkParserQueryEngine:
         payload = load_pickle(model_path)
         ranked = read_ranked_feature_table(selected.get("filter", {}), self.registry_base)
         model_importance = extract_model_importance(payload, features)
-        return source, features, payload, ranked, model_importance
+        result = (source, features, payload, ranked, model_importance)
+        with self._level2_payload_cache_lock:
+            self._level2_payload_cache[cache_key] = result
+        return result
 
     def query(
         self,
@@ -1713,112 +2853,158 @@ class NetworkParserQueryEngine:
         X_l1, l1_alignment = align_to_training_features(X_raw, level1_features)
         l1_pred, l1_support, l1_class_support = predict_labels_and_support(level1_payload, X_l1)
         l1_tree_paths = decision_tree_path_explanation(level1_payload, X_l1)
+        support_policy = self._resolve_label_training_support_policy()
+        level1_label_column = str(self.registry.get("level1", {}).get("label_column", "level1")).strip()
 
-        rows: List[Dict[str, Any]] = []
-        report_samples: List[Dict[str, Any]] = []
+        sample_ids = list(X_l1.index.astype(str))
+        groups: Dict[str, List[Tuple[int, str]]] = defaultdict(list)
+        for idx, sample_id in enumerate(sample_ids):
+            groups[str(l1_pred[idx])].append((idx, sample_id))
+
+        rows_by_sample_id: Dict[str, Dict[str, Any]] = {}
+        report_by_sample_id: Dict[str, Dict[str, Any]] = {}
         alignment_by_level2_source: Dict[str, Any] = {}
 
-        for idx, sample_id in enumerate(X_l1.index.astype(str)):
-            predicted_l1 = str(l1_pred[idx])
-            level2_source, l2_features, l2_payload, l2_ranked, l2_importance = self._select_level2_payload(predicted_l1)
-            X_l2, l2_alignment = align_to_training_features(X_raw.loc[[sample_id]], l2_features)
+        logger.info(
+            "Running two-level query with batched Level-2 inference | samples=%d | level1_groups=%d",
+            len(sample_ids),
+            len(groups),
+        )
+
+        for predicted_l1, members in groups.items():
+            level2_source, l2_features, l2_payload, l2_ranked, l2_importance = self._select_level2_payload(
+                predicted_l1
+            )
+            member_sample_ids = [sample_id for _, sample_id in members]
+            X_l2, l2_alignment = align_to_training_features(X_raw.loc[member_sample_ids], l2_features)
             alignment_by_level2_source.setdefault(level2_source, l2_alignment)
 
             l2_pred, l2_support, l2_class_support = predict_labels_and_support(l2_payload, X_l2)
             l2_tree_paths = decision_tree_path_explanation(l2_payload, X_l2)
-
-            sample_feature_metadata = raw_feature_metadata.get(sample_id, {})
-            sample_mapping_quality = raw_sample_quality.get(sample_id, {})
-            l1_markers = supporting_markers_for_sample(
-                X_l1.loc[sample_id],
-                ranked_features=level1_ranked,
-                model_importance=level1_importance,
-                max_markers=max_markers,
-                feature_metadata=sample_feature_metadata,
-                available_features=raw_available_features,
-            )
-            l2_markers = supporting_markers_for_sample(
-                X_l2.loc[sample_id],
-                ranked_features=l2_ranked,
-                model_importance=l2_importance,
-                max_markers=max_markers,
-                feature_metadata=sample_feature_metadata,
-                available_features=raw_available_features,
+            level2_target_label_column = (
+                self.registry.get("level2", {}).get("global_label_column")
+                if level2_source == "global_fallback"
+                else self.registry.get("level2", {}).get("label_column")
             )
 
-            # Model-specific query evidence.  This is intentionally separate
-            # from union-level FASTA/VCF recovery so we can diagnose whether
-            # Level 1 or the selected Level 2 model received active marker
-            # evidence.
-            l1_evidence = summarize_feature_evidence_for_model(
-                sample_values=X_l1.loc[sample_id],
-                features=level1_features,
-                feature_metadata=sample_feature_metadata,
-                available_features=raw_available_features,
-            )
-            l2_evidence = summarize_feature_evidence_for_model(
-                sample_values=X_l2.loc[sample_id],
-                features=l2_features,
-                feature_metadata=sample_feature_metadata,
-                available_features=raw_available_features,
-            )
+            for local_idx, (global_idx, sample_id) in enumerate(members):
+                sample_feature_metadata = raw_feature_metadata.get(sample_id, {})
+                sample_mapping_quality = raw_sample_quality.get(sample_id, {})
+                l1_markers = supporting_markers_for_sample(
+                    X_l1.loc[sample_id],
+                    ranked_features=level1_ranked,
+                    model_importance=level1_importance,
+                    max_markers=max_markers,
+                    feature_metadata=sample_feature_metadata,
+                    available_features=raw_available_features,
+                )
+                l2_markers = supporting_markers_for_sample(
+                    X_l2.loc[sample_id],
+                    ranked_features=l2_ranked,
+                    model_importance=l2_importance,
+                    max_markers=max_markers,
+                    feature_metadata=sample_feature_metadata,
+                    available_features=raw_available_features,
+                )
 
-            l1_confidence, l1_confidence_note = interpretation_confidence_for_level(
-                support=l1_support[idx],
-                evidence=l1_evidence,
-                n_supporting_markers=len(l1_markers),
-            )
-            l2_confidence, l2_confidence_note = interpretation_confidence_for_level(
-                support=l2_support[0],
-                evidence=l2_evidence,
-                n_supporting_markers=len(l2_markers),
-            )
+                l1_evidence = summarize_feature_evidence_for_model(
+                    sample_values=X_l1.loc[sample_id],
+                    features=level1_features,
+                    feature_metadata=sample_feature_metadata,
+                    available_features=raw_available_features,
+                )
+                l2_evidence = summarize_feature_evidence_for_model(
+                    sample_values=X_l2.loc[sample_id],
+                    features=l2_features,
+                    feature_metadata=sample_feature_metadata,
+                    available_features=raw_available_features,
+                )
 
-            row = {
-                "sample_id": sample_id,
-                "predicted_level1_identity": predicted_l1,
-                "level1_support": l1_support[idx],
-                "predicted_level2_resistance_profile": str(l2_pred[0]),
-                "level2_support": l2_support[0],
-                "level2_model_source": level2_source,
-                "level2_target_label_column": (
-                    self.registry.get("level2", {}).get("global_label_column")
-                    if level2_source == "global_fallback"
-                    else self.registry.get("level2", {}).get("label_column")
-                ),
-                "n_level1_supporting_markers": int(len(l1_markers)),
-                "n_level2_supporting_markers": int(len(l2_markers)),
-                "level1_interpretation_confidence": l1_confidence,
-                "level1_confidence_note": l1_confidence_note,
-                "level2_interpretation_confidence": l2_confidence,
-                "level2_confidence_note": l2_confidence_note,
-                **flatten_feature_evidence("level1", l1_evidence),
-                **flatten_feature_evidence("level2", l2_evidence),
-                "query_marker_recovery_status": sample_mapping_quality.get("marker_recovery_status"),
-                "query_marker_recovery_reason": sample_mapping_quality.get("marker_recovery_reason"),
-                "query_active_marker_evidence_status": sample_mapping_quality.get("active_marker_evidence_status"),
-                "query_active_marker_evidence_reason": sample_mapping_quality.get("active_marker_evidence_reason"),
-                "query_unique_mapped_fraction": sample_mapping_quality.get("unique_mapped_fraction"),
-                "query_active_feature_fraction": sample_mapping_quality.get("active_feature_fraction"),
-                "query_n_encoded_active_features": sample_mapping_quality.get("n_encoded_active_features"),
-                "query_n_resolved_features": sample_mapping_quality.get("n_resolved_features"),
-                "query_resolved_feature_fraction": sample_mapping_quality.get("resolved_feature_fraction"),
-                "query_n_resolved_baseline_features": sample_mapping_quality.get("n_resolved_baseline_features"),
-                "query_resolved_baseline_feature_fraction": sample_mapping_quality.get("resolved_baseline_feature_fraction"),
-                "query_resolved_marker_evidence_status": sample_mapping_quality.get("resolved_marker_evidence_status"),
-                "query_resolved_marker_evidence_reason": sample_mapping_quality.get("resolved_marker_evidence_reason"),
-                "query_n_unresolved_or_missing_calls": sample_mapping_quality.get("n_unresolved_or_missing_context_calls", sample_mapping_quality.get("n_unresolved_or_missing_calls")),
-                "query_n_multi_hit_calls": sample_mapping_quality.get("n_multi_hit_calls"),
-                "query_n_ambiguous_base_calls": sample_mapping_quality.get("n_ambiguous_base_calls"),
-                "query_n_non_training_allele_calls": sample_mapping_quality.get("n_non_training_allele_calls"),
-            }
-            rows.append(row)
+                l1_confidence, l1_confidence_note = interpretation_confidence_for_level(
+                    support=l1_support[global_idx],
+                    evidence=l1_evidence,
+                    n_supporting_markers=len(l1_markers),
+                )
+                l2_confidence, l2_confidence_note = interpretation_confidence_for_level(
+                    support=l2_support[local_idx],
+                    evidence=l2_evidence,
+                    n_supporting_markers=len(l2_markers),
+                )
 
-            report_samples.append(
-                {
+                l1_reported, l1_routing, l1_review_row, _l1_review_step = self._low_support_review_bundle(
+                    label_column=level1_label_column,
+                    prediction=str(predicted_l1),
+                    prefix="level1_identity",
+                    support_policy=support_policy,
+                )
+                if l1_review_row:
+                    l1_confidence = l1_review_row.get("level1_identity_interpretation_confidence", l1_confidence)
+                    l1_confidence_note = l1_review_row.get("level1_identity_confidence_note", l1_confidence_note)
+
+                l2_candidate = str(l2_pred[local_idx])
+                l2_label_column = str(level2_target_label_column or self.registry.get("level2", {}).get("label_column", "level2")).strip()
+                l2_reported, _l2_routing, l2_review_row, _l2_review_step = self._low_support_review_bundle(
+                    label_column=l2_label_column,
+                    prediction=l2_candidate,
+                    prefix="level2_identity",
+                    support_policy=support_policy,
+                )
+                if l2_review_row:
+                    l2_confidence = l2_review_row.get("level2_identity_interpretation_confidence", l2_confidence)
+                    l2_confidence_note = l2_review_row.get("level2_identity_confidence_note", l2_confidence_note)
+
+                row = {
+                    "sample_id": sample_id,
+                    "predicted_level1_identity": l1_reported,
+                    "level1_support": l1_support[global_idx],
+                    "predicted_level2_identity": l2_reported,
+                    "level2_support": l2_support[local_idx],
+                    "level2_model_source": level2_source,
+                    "level2_target_label_column": level2_target_label_column,
+                    "n_level1_supporting_markers": int(len(l1_markers)),
+                    "n_level2_supporting_markers": int(len(l2_markers)),
+                    "level1_interpretation_confidence": l1_confidence,
+                    "level1_confidence_note": l1_confidence_note,
+                    "level2_interpretation_confidence": l2_confidence,
+                    "level2_confidence_note": l2_confidence_note,
+                    **flatten_feature_evidence("level1", l1_evidence),
+                    **flatten_feature_evidence("level2", l2_evidence),
+                    "query_marker_recovery_status": sample_mapping_quality.get("marker_recovery_status"),
+                    "query_marker_recovery_reason": sample_mapping_quality.get("marker_recovery_reason"),
+                    "query_active_marker_evidence_status": sample_mapping_quality.get("active_marker_evidence_status"),
+                    "query_active_marker_evidence_reason": sample_mapping_quality.get("active_marker_evidence_reason"),
+                    "query_unique_mapped_fraction": sample_mapping_quality.get("unique_mapped_fraction"),
+                    "query_active_feature_fraction": sample_mapping_quality.get("active_feature_fraction"),
+                    "query_n_encoded_active_features": sample_mapping_quality.get("n_encoded_active_features"),
+                    "query_n_resolved_features": sample_mapping_quality.get("n_resolved_features"),
+                    "query_resolved_feature_fraction": sample_mapping_quality.get("resolved_feature_fraction"),
+                    "query_n_resolved_baseline_features": sample_mapping_quality.get("n_resolved_baseline_features"),
+                    "query_resolved_baseline_feature_fraction": sample_mapping_quality.get(
+                        "resolved_baseline_feature_fraction"
+                    ),
+                    "query_resolved_marker_evidence_status": sample_mapping_quality.get(
+                        "resolved_marker_evidence_status"
+                    ),
+                    "query_resolved_marker_evidence_reason": sample_mapping_quality.get(
+                        "resolved_marker_evidence_reason"
+                    ),
+                    "query_n_unresolved_or_missing_calls": sample_mapping_quality.get(
+                        "n_unresolved_or_missing_context_calls",
+                        sample_mapping_quality.get("n_unresolved_or_missing_calls"),
+                    ),
+                    "query_n_multi_hit_calls": sample_mapping_quality.get("n_multi_hit_calls"),
+                    "query_n_ambiguous_base_calls": sample_mapping_quality.get("n_ambiguous_base_calls"),
+                    "query_n_non_training_allele_calls": sample_mapping_quality.get("n_non_training_allele_calls"),
+                    **l1_review_row,
+                    **l2_review_row,
+                }
+                rows_by_sample_id[sample_id] = row
+                report_by_sample_id[sample_id] = {
                     **row,
-                    "level1_class_support": l1_class_support[idx],
-                    "level2_class_support": l2_class_support[0],
+                    "level1_routing_identity": l1_routing,
+                    "level2_routing_identity": _l2_routing,
+                    "level1_class_support": l1_class_support[global_idx],
+                    "level2_class_support": l2_class_support[local_idx],
                     "level1_feature_evidence": l1_evidence,
                     "level2_feature_evidence": l2_evidence,
                     "level1_supporting_markers": l1_markers,
@@ -1829,7 +3015,9 @@ class NetworkParserQueryEngine:
                     "level1_decision_path": l1_tree_paths.get(sample_id, []),
                     "level2_decision_path": l2_tree_paths.get(sample_id, []),
                 }
-            )
+
+        rows = [rows_by_sample_id[sample_id] for sample_id in sample_ids]
+        report_samples = [report_by_sample_id[sample_id] for sample_id in sample_ids]
 
         predictions = pd.DataFrame(rows)
         predictions_path = out / "query_predictions.csv"
@@ -1917,6 +3105,10 @@ def write_compact_predictions(predictions: pd.DataFrame, path: Path) -> None:
         "hierarchy_terminal_reason",
         "predicted_level1",
         "level1_label_column",
+        "level1_prediction_status",
+        "level1_candidate_prediction",
+        "level1_recommended_action",
+        "level1_low_support_reason",
         "level1_support",
         "level1_interpretation_confidence",
         "level1_n_supporting_markers",
@@ -1928,6 +3120,19 @@ def write_compact_predictions(predictions: pd.DataFrame, path: Path) -> None:
         "level1_nonbaseline_evidence_status",
         "predicted_level2",
         "level2_label_column",
+        "level2_prediction_status",
+        "level2_candidate_prediction",
+        "level2_recommended_action",
+        "level2_low_support_reason",
+        "level3_prediction_status",
+        "level3_candidate_prediction",
+        "level3_amr_evidence_reason",
+        "level3_recommended_action",
+        "level3_fallback_resistant_probability",
+        "level2_identity_prediction_status",
+        "level2_identity_candidate_prediction",
+        "level2_identity_recommended_action",
+        "level2_identity_low_support_reason",
         "predicted_level1_identity",
         "level1_support",
         "level1_interpretation_confidence",
@@ -1939,7 +3144,15 @@ def write_compact_predictions(predictions: pd.DataFrame, path: Path) -> None:
         "level1_n_active_features",
         "level1_resolved_marker_evidence_status",
         "level1_nonbaseline_evidence_status",
-        "predicted_level2_resistance_profile",
+        "level1_prediction_status",
+        "level1_candidate_prediction",
+        "level1_recommended_action",
+        "level1_low_support_reason",
+        "level1_identity_prediction_status",
+        "level1_identity_candidate_prediction",
+        "level1_identity_recommended_action",
+        "level1_identity_low_support_reason",
+        "predicted_level2_identity",
         "level2_support",
         "level2_model_source",
         "level2_interpretation_confidence",
@@ -1983,7 +3196,7 @@ def build_query_route_audit(
                 "level1_interpretation_confidence": sample.get("level1_interpretation_confidence"),
                 "level1_resolved_marker_evidence_status": sample.get("level1_resolved_marker_evidence_status"),
                 "level1_nonbaseline_evidence_status": sample.get("level1_nonbaseline_evidence_status"),
-                "predicted_level2_resistance_profile": sample.get("predicted_level2_resistance_profile"),
+                "predicted_level2_identity": sample.get("predicted_level2_identity"),
                 "level2_support": sample.get("level2_support"),
                 "level2_model_source": sample.get("level2_model_source"),
                 "level2_target_label_column": sample.get("level2_target_label_column"),
@@ -2263,7 +3476,7 @@ def write_readable_html_report(report: Dict[str, Any], path: Path) -> None:
             + _html_kv("Nonbaseline features", sample.get("level1_n_active_features"))
             + "</div>"
             "<div><h3>Level 2</h3>"
-            + _html_kv("Prediction", sample.get("predicted_level2_resistance_profile"))
+            + _html_kv("Prediction", sample.get("predicted_level2_identity"))
             + _html_kv("Support", sample.get("level2_support"))
             + _html_kv("Model source", sample.get("level2_model_source"))
             + _html_kv("Interpretation confidence", sample.get("level2_interpretation_confidence"))
@@ -2403,7 +3616,7 @@ def write_text_report(report: Dict[str, Any], path: Path) -> None:
 
         lines.append("")
         lines.append("Level 2 — resistance profile")
-        lines.append(f"  Prediction: {sample.get('predicted_level2_resistance_profile')}")
+        lines.append(f"  Prediction: {sample.get('predicted_level2_identity')}")
         if sample.get("level2_support") is not None:
             lines.append(f"  Support: {float(sample.get('level2_support')):.4f}")
         lines.append(f"  Model source: {sample.get('level2_model_source')}")

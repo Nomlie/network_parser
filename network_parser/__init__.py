@@ -16,7 +16,18 @@ from .network_parser import (
     normalize_labels,
 )
 from .utils import normalize_sample_id
-from .model_evaluation import evaluate_predictions, load_labels_from_metadata
+from .cross_validation import run_repeated_cv
+from .model_evaluation import (
+    evaluate_predictions,
+    evaluate_prediction_table,
+    evaluate_hierarchy_prediction_table,
+    evaluate_hierarchy_branch_diagnostics,
+    load_predictions_from_table,
+    load_labels_from_metadata,
+    resolve_run_artifact_dir,
+    normalize_run_artifact_dir,
+    run_networkparser_evaluation,
+)
 
 try:
     from .decision_tree_branch import DecisionTreeBranch
@@ -59,7 +70,15 @@ __all__ = [
     "normalize_sample_id",
     "normalize_labels",
     "evaluate_predictions",
+    "evaluate_prediction_table",
+    "evaluate_hierarchy_prediction_table",
+    "evaluate_hierarchy_branch_diagnostics",
+    "load_predictions_from_table",
     "load_labels_from_metadata",
+    "resolve_run_artifact_dir",
+    "normalize_run_artifact_dir",
+    "run_networkparser_evaluation",
+    "run_repeated_cv",
     "TwoLevelProtocol",
     "NetworkParserQueryEngine",
     "encode_raw_sequence_query",

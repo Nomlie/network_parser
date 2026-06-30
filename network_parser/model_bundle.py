@@ -262,6 +262,54 @@ def iter_model_file_slots(registry: Dict[str, Any]) -> Iterator[Tuple[List[Any],
         root = hierarchy.get("root", {}) if isinstance(hierarchy, dict) else {}
         if isinstance(root, dict):
             yield from _iter_hierarchy_model_slots(root, ["hierarchy", "root"])
+        global_lineage_fallback = (
+            hierarchy.get("global_lineage_fallback", {}) if isinstance(hierarchy, dict) else {}
+        )
+        if isinstance(global_lineage_fallback, dict) and global_lineage_fallback.get("model_file"):
+            yield (
+                ["hierarchy", "global_lineage_fallback", "model_file"],
+                "hierarchy.global_lineage_fallback",
+                global_lineage_fallback,
+            )
+        terminal_fallbacks = (
+            hierarchy.get("terminal_fallbacks", {}) if isinstance(hierarchy, dict) else {}
+        )
+        if isinstance(terminal_fallbacks, dict):
+            by_parent = terminal_fallbacks.get("by_parent_label", {})
+            if isinstance(by_parent, dict):
+                for parent_label, block in by_parent.items():
+                    if not isinstance(block, dict):
+                        continue
+                    models = block.get("models", {})
+                    if not isinstance(models, dict):
+                        continue
+                    for parent_value, payload in models.items():
+                        if isinstance(payload, dict) and payload.get("model_file"):
+                            model_id = (
+                                "hierarchy.terminal_fallback."
+                                f"{_safe_token(str(parent_label), 40)}."
+                                f"{_safe_token(str(parent_value), 40)}"
+                            )
+                            yield (
+                                [
+                                    "hierarchy",
+                                    "terminal_fallbacks",
+                                    "by_parent_label",
+                                    str(parent_label),
+                                    "models",
+                                    str(parent_value),
+                                    "model_file",
+                                ],
+                                model_id,
+                                payload,
+                            )
+            global_terminal = terminal_fallbacks.get("global", {})
+            if isinstance(global_terminal, dict) and global_terminal.get("model_file"):
+                yield (
+                    ["hierarchy", "terminal_fallbacks", "global", "model_file"],
+                    "hierarchy.terminal_fallback.global",
+                    global_terminal,
+                )
 
     level1 = registry.get("level1", {}) if isinstance(registry, dict) else {}
     if isinstance(level1, dict):
@@ -299,6 +347,16 @@ def iter_manifest_slots(registry: Dict[str, Any]) -> Iterator[Tuple[List[Any], s
         root = hierarchy.get("root", {}) if isinstance(hierarchy, dict) else {}
         if isinstance(root, dict):
             yield from _iter_hierarchy_manifest_slots(root, ["hierarchy", "root"])
+        global_lineage_fallback = (
+            hierarchy.get("global_lineage_fallback", {}) if isinstance(hierarchy, dict) else {}
+        )
+        if isinstance(global_lineage_fallback, dict):
+            manifest = global_lineage_fallback.get("feature_manifest", {})
+            if isinstance(manifest, dict) and manifest.get("manifest_file"):
+                yield (
+                    ["hierarchy", "global_lineage_fallback", "feature_manifest", "manifest_file"],
+                    "hierarchy.global_lineage_fallback.feature_manifest",
+                )
 
     level1 = registry.get("level1", {}) if isinstance(registry, dict) else {}
     if isinstance(level1, dict):
@@ -717,6 +775,7 @@ class BundledNetworkParserQueryEngine(NetworkParserQueryEngine):
         self.registry_base = Path(runtime["runtime_dir"])
         self.registry = runtime["registry"]
         self.config = config
+        self._init_query_caches()
 
     def _payload_from_registry_section(self, section: Dict[str, Any], level_name: str) -> Any:
         model_id = section.get("bundle_model_id") if isinstance(section, dict) else None
