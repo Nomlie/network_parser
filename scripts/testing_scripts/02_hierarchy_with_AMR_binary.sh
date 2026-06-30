@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/00_config.sh"
 
-RUN_NAME="Hierarchy_with_AMR_binary"
+RUN_NAME="Hierarchy_with_AMR_binary_01"
 RUN_DIR="${BASE_OUT}/${RUN_NAME}"
 
 mkdir -p "${RUN_DIR}" "${RUN_DIR}/query" "${RUN_DIR}/evaluate"

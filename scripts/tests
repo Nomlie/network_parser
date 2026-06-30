@@ -260,5 +260,19 @@ python -m network_parser.cli cross-validate \
 --n_jobs 8
 
 python -m network_parser.cli bundle \
---registry /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_VCFs/chi2_fdr/Two_levels_with_global_AMR_binary_fallback/two_level_model_registry.json \
---output /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_VCFs/chi2_fdr/Two_levels_with_global_AMR_binary_fallback/networkparser_model_bundle.npb
+--registry /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_VCFs/chi2_fdr/Hierarchy_with_AMR_binary/hierarchical_model_registry.json \
+--output /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_VCFs/chi2_fdr/Hierarchy_with_AMR_binary/networkparser_model_bundle.npb
+
+scp -R /Users/nmfuphicsir.co.za/Downloads/CHPC_NP_Testing nmfuphi@scp.chpc.ac.za:/mnt/lustre/users/nmfuphi/testing_network_parser
+
+rsync -avh --progress \
+/Users/nmfuphicsir.co.za/Downloads/CHPC_NP_Testing/ \
+nmfuphi@lengau.chpc.ac.za:/mnt/lustre/users/nmfuphi/testing_network_parser/
+
+latexmk -pdf /Users/nmfuphicsir.co.za/Documents/pHDProject/Manuscript/Introduction_article_section.tex
+
+cd /Users/nmfuphicsir.co.za/Documents/pHDProject/Manuscript/
+pdflatex NetworkParser_manuscript.tex
+bibtex NetworkParser_manuscript
+pdflatex NetworkParser_manuscript.tex
+pdflatex NetworkParser_manuscript.tex
