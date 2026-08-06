@@ -269,10 +269,108 @@ rsync -avh --progress \
 /Users/nmfuphicsir.co.za/Downloads/CHPC_NP_Testing/ \
 nmfuphi@lengau.chpc.ac.za:/mnt/lustre/users/nmfuphi/testing_network_parser/
 
-latexmk -pdf /Users/nmfuphicsir.co.za/Documents/pHDProject/Manuscript/Introduction_article_section.tex
+latexmk -pdf /Users/nmfuphicsir.co.za/Documents/pHDProject/Manuscript/NetworkParser_manuscript.tex
 
 cd /Users/nmfuphicsir.co.za/Documents/pHDProject/Manuscript/
 pdflatex NetworkParser_manuscript.tex
-bibtex NetworkParser_manuscript
+biber NetworkParser_manuscript
 pdflatex NetworkParser_manuscript.tex
 pdflatex NetworkParser_manuscript.tex
+
+pdflatex NetworkParser_manuscript.tex
+biber NetworkParser_manuscript
+pdflatex NetworkParser_manuscript.tex
+pdflatex NetworkParser_manuscript.tex
+
+cd /Users/nmfuphicsir.co.za/Documents/pHDProject/Manuscript/Thesis
+pdflatex main.tex
+biblatex main
+pdflatex main.tex
+pdflatex main.tex
+
+pandoc /Users/nmfuphicsir.co.za/Documents/pHDProject/Manuscript/NetworkParser_manuscript.tex \
+  --bibliography=references.bib \
+  --citeproc \
+  -o manuscript.docx
+
+
+cd /Users/nmfuphicsir.co.za/Documents/pHDProject/Thesis
+pdflatex Introduction.tex
+biber Introduction
+pdflatex Introduction.tex
+pdflatex Introduction.tex
+
+
+python -m network_parser.cli cross-validate \
+--genomic /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/subset_valid_hierarchy/train \
+--meta /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/metadata/AFRO_dataset_meta_with_test_hierarchy.csv \
+--label Lineage_clean \
+--output_dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/chi2_fdr/Two_levels_with_global_AMR_binary_fallback_01/validate_cv/level1_Lineage_clean \
+--central_feature_filter_method chi2_fdr \
+--n_repeats 3 \
+--n_splits 5 \
+--n_jobs 4
+
+python -m network_parser.cli cross-validate \
+  --genomic /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/subset_valid_hierarchy/train \
+  --meta /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/metadata/AFRO_dataset_meta_with_test_hierarchy.csv \
+  --label Resistance_Profile_Collapsed \
+  --output_dir /Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/chi2_fdr/cv_resistance_profile \
+  --central_feature_filter_method chi2_fdr \
+  --n_repeats 3 \
+  --n_splits 5 \
+  --n_jobs 4
+
+
+/Users/nmfuphicsir.co.za/Documents/pHDProject/Results/ALL_VCFs/chi2_fdr/Hierarchy_with_AMR_binary/
+
+
+ pandoc NetworkParser_manuscript.tex \
+  --from=latex \
+  --to=docx \
+  --standalone \
+  --number-sections \
+  --toc \
+  --citeproc \
+  --bibliography=References.bib \
+  -o NetworkParser_manuscript.docx
+
+
+RUN=/Users/nmfuphicsir.co.za/Documents/pHDProject/Results/All_VCFs/chi2_fdr/Hierarchy_with_resistance_profiles_01
+TEST=/Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/subset_valid_hierarchy.backup_20260720_before_resplit/test
+CFG=.../network_parser/scripts/testing_scripts/afro_vcf_config.json
+REF=.../VCF_2_Matrix/ref/H37Rv.gbk
+
+python -m network_parser.cli query \
+  --config "$CFG" --genomic "$TEST" --bundle "$RUN/networkparser_model_bundle.npb" \
+  --ref_fasta "$REF" --query_input_type vcf \
+  --no_amr_weak_evidence_review \
+  --output_dir "$RUN/query_warn" --n_jobs 8
+
+python -m network_parser.cli evaluate \
+  --predictions "$RUN/query_warn/query_predictions.csv" \
+  --meta "$RUN/evaluate_rerun/holdout_evaluation_metadata.csv" \
+  --hierarchy_labels Lineage_Supergroup Lineage_clean Resistance_Profile_Collapsed \
+  --output_dir "$RUN/evaluate_warn"
+
+  2026-07-23 17:53:18,159 | WARNING | network_parser.query_engine | Some trained features were missing or non-callable in the query input. They are encoded as NaN (not biological zero) unless fill_missing_as_zero=True. Interpret prediction support with caution.
+
+
+
+export CLUSTER="nmfuphi@scp.chpc.ac.za"
+
+export LOCAL_DATA="/Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB"
+export LOCAL_SPLIT="${LOCAL_DATA}/subset_valid_hierarchy"
+export LOCAL_META="${LOCAL_DATA}/metadata"
+export LOCAL_REF="/Users/nmfuphicsir.co.za/Documents/pHDProject/Code/VCF_2_Matrix/ref/H37Rv.gbk"
+export LOCAL_CODE="/Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser"
+
+export REMOTE_DATA="/mnt/lustre/users/nmfuphi/phDproject/Data"
+export REMOTE_RESULTS="/mnt/lustre/users/nmfuphi/phDproject/Results"
+export REMOTE_CODE="/home/nmfuphi/network_parser"
+
+
+export CLUSTER="nmfuphi@lengau.chpc.ac.za"   # your host
+rsync -avh --progress \
+  /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/scripts/testing_scripts_cluster/ \
+  "${CLUSTER}:/home/nmfuphi/network_parser/scripts/testing_scripts_cluster/"

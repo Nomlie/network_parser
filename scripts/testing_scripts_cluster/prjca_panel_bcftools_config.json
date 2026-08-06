@@ -1,0 +1,21 @@
+{
+  "_comment": "PRJCA FASTQ query: panel-restricted bcftools call (trained sites only), AFRO-matched variants-only semantics.",
+  "min_gq_per_sample": 0,
+  "assume_absent_variant_is_reference": true,
+  "fastq_emit_gvcf": false,
+  "fastq_gvcf_min_dp": 10,
+  "fastq_min_mapping_quality": 20,
+  "fastq_auto_index_reference": true,
+  "fastq_clean_intermediates": false,
+  "fastq_max_parallel_samples": 1,
+  "fastq_multi_lane_policy": "fail",
+  "fastq_ploidy": 1,
+  "fastq_call_mode": "panel_bcftools",
+  "fastq_panel_min_depth": 10,
+  "fastq_panel_min_majority_fraction": 0.7,
+  "fastq_panel_min_base_quality": 20,
+  "fastq_panel_emit_reference_sites": false,
+  "min_feature_recovery_fraction": 0.5,
+  "min_callable_fraction": 0.5,
+  "enforce_query_callability_gates": true
+}

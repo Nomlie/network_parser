@@ -1,0 +1,10 @@
+{
+  "_comment": "Light phenotype seed experiment: AFRO VCF callability + optional known-marker seed for AMR/profile panels.",
+  "min_gq_per_sample": 0,
+  "assume_absent_variant_is_reference": true,
+  "seed_known_markers": true,
+  "known_markers_path": "/Users/nmfuphicsir.co.za/Documents/pHDProject/Data/AFRO_TB/metadata/resistance_catalogue.tsv",
+  "seed_known_markers_mode": "force_include",
+  "seed_known_markers_stage_substrings": "amr,resistance,pheno,profile,resistant,susceptible",
+  "seed_known_markers_max": null
+}
