@@ -11,6 +11,7 @@ import pandas as pd
 # Shared helpers (dataset-level, not bound to any particular model class)
 # =============================================================================
 
+
 def _order_preserving_label_map(y_str: np.ndarray) -> Tuple[List[str], np.ndarray]:
     """
     Preserve first-seen order of y string labels.
@@ -41,10 +42,7 @@ def _drop_singletons(X: np.ndarray, y_idx: np.ndarray) -> Tuple[np.ndarray, np.n
 
 
 def _safe_split(
-    X: np.ndarray,
-    y_idx: np.ndarray,
-    test_size: float = 0.2,
-    random_state: int = 42
+    X: np.ndarray, y_idx: np.ndarray, test_size: float = 0.2, random_state: int = 42
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Avoid dropping singleton classes during split.
@@ -52,6 +50,7 @@ def _safe_split(
     Else try stratified split; fallback to non-stratified.
     """
     from sklearn.model_selection import train_test_split
+
     uniq, cnts = np.unique(y_idx, return_counts=True)
     if uniq.size < 2 or np.any(cnts < 2):
         # Train on all and evaluate on the same set to preserve classes.
@@ -66,7 +65,9 @@ def _safe_split(
         )
 
 
-def _set_classes_from_estimator(self_obj: Any, estimator: Any, titles: List[str]) -> None:
+def _set_classes_from_estimator(
+    self_obj: Any, estimator: Any, titles: List[str]
+) -> None:
     """
     After fit, set self.classes_ to the actually trained classes in string form,
     using estimator.classes_ (indices) mapped through titles (strings).
@@ -78,7 +79,9 @@ def _set_classes_from_estimator(self_obj: Any, estimator: Any, titles: List[str]
         self_obj.classes_ = np.array(titles, dtype=object)
 
 
-def _proba_to_predictions(proba: np.ndarray, titles_like: Union[List[str], np.ndarray]) -> Dict[str, float]:
+def _proba_to_predictions(
+    proba: np.ndarray, titles_like: Union[List[str], np.ndarray]
+) -> Dict[str, float]:
     """
     Map a probability vector to {class_name: prob} safely.
     """
@@ -147,6 +150,7 @@ def _normalize_markers_common(feature_titles: List[str], markers: Any) -> dict:
 # Base class: MLearn (common functionality for categorical models)
 # =============================================================================
 
+
 class MLearn:
     """
     Base class for ML models on categorical marker matrices.
@@ -162,14 +166,16 @@ class MLearn:
     def __init__(
         self,
         model: str,
-        marker_style: str = "plain",    # Marker title style: plain (default) like 'marker_1' or combined (one-hot) like 'marker_1=0'
+        marker_style: str = "plain",  # Marker title style: plain (default) like 'marker_1' or combined (one-hot) like 'marker_1=0'
         categorical: bool = True,
         min_coverage_warn: float = 0.2,
-        raise_on_low_coverage: bool = False
+        raise_on_low_coverage: bool = False,
     ) -> None:
         self.model = model
-        self.processor = None   # Placeholder for a class creating matrix from row data
-        self.qualifiers = {}    # Researved member for other application-specific variables
+        self.processor = None  # Placeholder for a class creating matrix from row data
+        self.qualifiers: Dict[
+            str, Any
+        ] = {}  # Reserved for other application-specific variables.
         self.marker_style = marker_style
         self.categorical = bool(categorical)
         self.min_coverage_warn = float(min_coverage_warn)
@@ -177,13 +183,19 @@ class MLearn:
         self.interpretability_top_n = 25
 
         # Filled by train()
-        self.titles: List[str] = []                  # class titles (original labels, ordered)
-        self.pipeline: Any = None                    # sklearn pipeline
-        self.classes_: np.ndarray | None = None      # estimator.classes_ mapped to titles
-        self.training_metrics: dict | None = None    # accuracy, report, confusion matrix
-        self.feature_titles: List[str] | None = None # original marker names (pre-encoding)
-        self.feature_values: dict[str, list[str]]    # Dictionary of feature values per feature: self.feature_values["yp1108ms45"] -> ["128", "145", "nd", ""]
-        self._norm_feature_map: Dict[str, str] | None = None  # normalized_name -> canonical training name
+        self.titles: List[str] = []  # class titles (original labels, ordered)
+        self.pipeline: Any = None  # sklearn pipeline
+        self.classes_: np.ndarray | None = None  # estimator.classes_ mapped to titles
+        self.training_metrics: dict | None = None  # accuracy, report, confusion matrix
+        self.feature_titles: List[
+            str
+        ] | None = None  # original marker names (pre-encoding)
+        # Most models store values per feature; the legacy MBCS probe stores a
+        # flat list instead. Keep this compatibility field explicitly dynamic.
+        self.feature_values: Any = {}
+        self._norm_feature_map: Dict[
+            str, str
+        ] | None = None  # normalized_name -> canonical training name
 
     # -------------------------- name & symbol helpers -------------------------
 
@@ -231,21 +243,23 @@ class MLearn:
 
     # -------------------------- training helpers ------------------------------
 
-    def _prepare_X_df(self, X_use: np.ndarray, feature_titles: List[str]) -> pd.DataFrame:
+    def _prepare_X_df(
+        self, X_use: np.ndarray, feature_titles: List[str]
+    ) -> pd.DataFrame:
         """
         Convert X_use to DataFrame, normalizing symbols so that missing-like values
         ("", "nd", "nan") become "".
         """
         # Build DataFrame and ensure everything is a string
         X_df = pd.DataFrame(X_use, columns=feature_titles).astype(str)
-    
+
         # Element-wise normalization using column-wise Series.map
         # (avoids both DataFrame.applymap and DataFrame.map)
         for col in X_df.columns:
             X_df[col] = X_df[col].map(self._normalize_symbol_str)
-    
+
         return X_df.astype(str)
-        
+
     # -------------------------- generic accessors -----------------------------
 
     def get_feature_titles(self) -> List[str] | None:
@@ -318,20 +332,22 @@ class MLearn:
         score_map: Dict[str, float],
         top_n: int = 25,
         absolute: bool = True,
-    ) -> List[Dict[str, float]]:
+    ) -> List[Dict[str, Any]]:
         """Convert a feature->score mapping into a sorted compact list."""
-        items = []
+        items: List[Dict[str, Any]] = []
         for feat, score in score_map.items():
-            items.append({
-                "feature": str(feat),
-                "score": float(score),
-                "abs_score": float(abs(score)),
-            })
+            items.append(
+                {
+                    "feature": str(feat),
+                    "score": float(score),
+                    "abs_score": float(abs(score)),
+                }
+            )
 
         if absolute:
-            items.sort(key=lambda d: d["abs_score"], reverse=True)
+            items.sort(key=lambda d: float(d["abs_score"]), reverse=True)
         else:
-            items.sort(key=lambda d: d["score"], reverse=True)
+            items.sort(key=lambda d: float(d["score"]), reverse=True)
 
         return items[: int(top_n)]
 
@@ -347,14 +363,28 @@ class MLearn:
         feature_names = self._safe_get_feature_names_after_preprocessing()
         coef = np.asarray(clf.coef_, dtype=float)
 
-        class_titles = list(self.classes_) if getattr(self, "classes_", None) is not None else list(self.titles)
+        class_titles = (
+            list(self.classes_)
+            if getattr(self, "classes_", None) is not None
+            else list(self.titles)
+        )
 
         if coef.ndim == 2 and coef.shape[0] == 1:
             raw = coef[0]
-            aggregated = self._aggregate_onehot_importance_by_base_feature(feature_names, raw)
+            aggregated = self._aggregate_onehot_importance_by_base_feature(
+                feature_names, raw
+            )
 
-            positive = self._top_items({k: v for k, v in aggregated.items() if v > 0}, top_n=top_n, absolute=False)
-            negative = self._top_items({k: v for k, v in aggregated.items() if v < 0}, top_n=top_n, absolute=False)
+            positive = self._top_items(
+                {k: v for k, v in aggregated.items() if v > 0},
+                top_n=top_n,
+                absolute=False,
+            )
+            negative = self._top_items(
+                {k: v for k, v in aggregated.items() if v < 0},
+                top_n=top_n,
+                absolute=False,
+            )
             overall = self._top_items(aggregated, top_n=top_n, absolute=True)
 
             return {
@@ -370,7 +400,9 @@ class MLearn:
         for i in range(coef.shape[0]):
             class_name = str(class_titles[i]) if i < len(class_titles) else f"class_{i}"
             raw = coef[i]
-            aggregated = self._aggregate_onehot_importance_by_base_feature(feature_names, raw)
+            aggregated = self._aggregate_onehot_importance_by_base_feature(
+                feature_names, raw
+            )
 
             class_payload[class_name] = {
                 "top_positive_features": self._top_items(
@@ -409,7 +441,9 @@ class MLearn:
         feature_names = self._safe_get_feature_names_after_preprocessing()
         raw_importances = np.asarray(clf.feature_importances_, dtype=float)
 
-        aggregated = self._aggregate_onehot_importance_by_base_feature(feature_names, raw_importances)
+        aggregated = self._aggregate_onehot_importance_by_base_feature(
+            feature_names, raw_importances
+        )
         top_features = self._top_items(aggregated, top_n=top_n, absolute=False)
 
         payload: Dict[str, Any] = {
@@ -423,58 +457,66 @@ class MLearn:
                 if hasattr(est, "feature_importances_"):
                     est_imp = np.asarray(est.feature_importances_, dtype=float)
                     per_tree_maps.append(
-                        self._aggregate_onehot_importance_by_base_feature(feature_names, est_imp)
+                        self._aggregate_onehot_importance_by_base_feature(
+                            feature_names, est_imp
+                        )
                     )
 
             if per_tree_maps:
-                keys = set()
+                keys: set[str] = set()
                 for m in per_tree_maps:
                     keys.update(m.keys())
 
-                stability_rows = []
+                stability_rows: List[Dict[str, Any]] = []
                 for feat in keys:
-                    vals = np.asarray([m.get(feat, 0.0) for m in per_tree_maps], dtype=float)
-                    stability_rows.append({
-                        "feature": str(feat),
-                        "mean_importance": float(np.mean(vals)),
-                        "std_importance": float(np.std(vals)),
-                        "nonzero_fraction": float(np.mean(vals > 0)),
-                    })
+                    vals = np.asarray(
+                        [m.get(feat, 0.0) for m in per_tree_maps], dtype=float
+                    )
+                    stability_rows.append(
+                        {
+                            "feature": str(feat),
+                            "mean_importance": float(np.mean(vals)),
+                            "std_importance": float(np.std(vals)),
+                            "nonzero_fraction": float(np.mean(vals > 0)),
+                        }
+                    )
 
-                stability_rows.sort(key=lambda d: d["mean_importance"], reverse=True)
+                stability_rows.sort(
+                    key=lambda d: float(d["mean_importance"]), reverse=True
+                )
                 payload["stability_summary"] = stability_rows[:top_n]
 
         return payload
-        
+
     def get_grouped_feature_values(self, flg_integers: bool = False):
         """
         Return feature values grouped by locus.
-    
+
         If flg_integers=False:
             Simply return self.feature_values as-is (dict expected).
-    
+
         If flg_integers=True:
             Convert values to integers *per locus* and drop values
             that cannot be converted.
-    
+
         Returns
         -------
         dict
             { locus_name : sorted_list_of_values }
             If feature_values was a flat list instead of dict → {"*": [...]}
         """
-    
+
         fv = getattr(self, "feature_values", None)
         if fv is None:
             return {}
-    
+
         # ------------------------------------------------------
         # Case 1 — already a dictionary of lists per locus
         # ------------------------------------------------------
         if isinstance(fv, dict):
             if not flg_integers:
                 return fv
-    
+
             grouped = {}
             for locus, vals in fv.items():
                 int_list = []
@@ -485,15 +527,15 @@ class MLearn:
                     except Exception:
                         # ignore non-numeric values
                         continue
-    
+
                 if int_list:
                     grouped[locus] = sorted(set(int_list))
                 else:
                     # keep empty lists as empty groups
                     grouped[locus] = []
-    
+
             return grouped
-    
+
         # ------------------------------------------------------
         # Case 2 — flat list of values (rare case)
         # Turn into one group named "*"
@@ -501,7 +543,7 @@ class MLearn:
         elif isinstance(fv, (list, tuple, set)):
             if not flg_integers:
                 return {"*": list(fv)}
-    
+
             int_list = []
             for v in fv:
                 try:
@@ -509,16 +551,20 @@ class MLearn:
                     int_list.append(iv)
                 except Exception:
                     continue
-    
+
             return {"*": sorted(set(int_list))}
-    
+
         # ------------------------------------------------------
         # Unknown structure → attempt best-effort fallback
         # ------------------------------------------------------
         else:
             if not flg_integers:
-                return {"*": list(fv)} if isinstance(fv, (list, tuple, set)) else {"*": [fv]}
-    
+                return (
+                    {"*": list(fv)}
+                    if isinstance(fv, (list, tuple, set))
+                    else {"*": [fv]}
+                )
+
             int_list = []
             try:
                 for v in fv:
@@ -530,31 +576,30 @@ class MLearn:
                 return {"*": sorted(set(int_list))}
             except Exception:
                 return {}
-            
 
     def get_all_feature_values(self, flg_integers: bool = False):
         """
         Combine all unique values across self.feature_values into one list.
-    
+
         Parameters
         ----------
         flg_integers : bool
             If True:
                 - attempt to convert each value to int
                 - discard values that cannot be converted (e.g. 'nd', '', None)
-    
+
         Returns
         -------
         list
             A sorted list of unique values.
         """
-    
+
         fv = getattr(self, "feature_values", None)
         if fv is None:
             return []
-    
+
         all_vals = set()
-    
+
         # ------------------------------------------------------
         # CASE 1: dictionary of lists {'marker': [values...]}
         # ------------------------------------------------------
@@ -562,21 +607,21 @@ class MLearn:
             for vals in fv.values():
                 for v in vals:
                     all_vals.add(v)
-    
+
         # ------------------------------------------------------
         # CASE 2: flat list of values
         # ------------------------------------------------------
         elif isinstance(fv, (list, tuple, set)):
             for v in fv:
                 all_vals.add(v)
-    
+
         else:
             # Unknown format → best effort fallback
             try:
                 return sorted(list(set(fv)))
             except Exception:
                 return []
-    
+
         # ------------------------------------------------------
         # If integers requested, attempt numeric conversion
         # ------------------------------------------------------
@@ -591,17 +636,16 @@ class MLearn:
                     # silently skip values that cannot convert
                     continue
             return sorted(int_vals)
-    
+
         # ------------------------------------------------------
         # Otherwise return as strings (sorted lexicographically)
         # ------------------------------------------------------
         return sorted(map(str, all_vals))
-    
+
     # -------------------------- generic identify ------------------------------
 
     def identify(
-        self,
-        markers: Any
+        self, markers: Any
     ) -> Dict[str, Union[List[List[Union[str, float]]], List[float], float]]:
         """
         Generic identify() for categorical models using OneHotEncoder-based pipelines
@@ -655,9 +699,11 @@ class MLearn:
 
         coverage = filled / max(1, len(self.feature_titles))
         if coverage < self.min_coverage_warn:
-            msg = (f"⚠️ {self.model}.identify(): low feature coverage: matched {filled} / "
-                   f"{len(self.feature_titles)} ({coverage:.1%}). "
-                   f"Most columns will be treated as unknown → near-prior probabilities.")
+            msg = (
+                f"⚠️ {self.model}.identify(): low feature coverage: matched {filled} / "
+                f"{len(self.feature_titles)} ({coverage:.1%}). "
+                f"Most columns will be treated as unknown → near-prior probabilities."
+            )
             if self.raise_on_low_coverage:
                 raise ValueError(msg)
             else:
@@ -679,8 +725,7 @@ class MLearn:
     # COMBINED (ONE-HOT 'marker=value') MARKER STYLE IDENTIFICATION
     # ==================================================
     def identify_combined(
-        self,
-        markers: Any
+        self, markers: Any
     ) -> Dict[str, Union[List[List[Union[str, float]]], List[float], float]]:
         """
         Identification for models trained in 'combined' (one-hot) marker style.
@@ -754,10 +799,12 @@ class MLearn:
 
         coverage = len(seen_base_markers) / max(1, len(all_base_markers))
         if coverage < self.min_coverage_warn:
-            msg = (f"⚠️ {self.model}.identify(): low feature coverage (combined mode): "
-                   f"matched {len(seen_base_markers)} / {len(all_base_markers)} "
-                   f"base markers ({coverage:.1%}). "
-                   f"Most columns will be treated as absent → near-prior probabilities.")
+            msg = (
+                f"⚠️ {self.model}.identify(): low feature coverage (combined mode): "
+                f"matched {len(seen_base_markers)} / {len(all_base_markers)} "
+                f"base markers ({coverage:.1%}). "
+                f"Most columns will be treated as absent → near-prior probabilities."
+            )
             if self.raise_on_low_coverage:
                 raise ValueError(msg)
             else:
@@ -775,11 +822,11 @@ class MLearn:
         )
         predictions = _proba_to_predictions(proba, titles)
         return self.format_output(predictions)
+
     # -------------------------- output formatting -----------------------------
 
     def format_output(
-        self,
-        predictions: Dict[Any, float]
+        self, predictions: Dict[Any, float]
     ) -> Dict[str, Union[List[List[Union[str, float]]], List[float], float]]:
         """
         Format predictions dict {label: prob} into:
@@ -787,6 +834,7 @@ class MLearn:
           - simple “odd-ratios” for top vs others
           - normalized entropy of the distribution
         """
+
         def get_odd_value(val: float) -> float:
             return val / (1 - val) if val != 1 else 10.0
 
@@ -798,21 +846,24 @@ class MLearn:
                 return 0.0
             arr = np.array(values, dtype=float)
             probs = arr / arr.sum()
-            return float(-np.sum(probs * np.log2(probs)) / np.log2(n))
+            entropy_sum = float(np.sum(probs * np.log2(probs)))
+            return -entropy_sum / float(np.log2(n))
 
         # Sort predictions by probability descending
-        items_sorted = sorted(
-            [list(item) for item in predictions.items()],
-            key=lambda ls: ls[1],
-            reverse=True
+        items_sorted: List[List[Union[str, float]]] = sorted(
+            [[str(label), float(prob)] for label, prob in predictions.items()],
+            key=lambda ls: float(ls[1]),
+            reverse=True,
         )
-        values = [item[1] for item in items_sorted]
+        values = [float(item[1]) for item in items_sorted]
         best_odd = get_odd_value(values[0])
-        odds = [1.0] + [best_odd - get_odd_value(values[i]) for i in range(1, len(values))]
+        odds = [1.0] + [
+            best_odd - get_odd_value(values[i]) for i in range(1, len(values))
+        ]
         return {
             "predictions": items_sorted,
             "odd-ratios": odds,
-            "entropy": get_entropy(values)
+            "entropy": get_entropy(values),
         }
 
     # -------------------------- generic predict_proba -------------------------
@@ -832,13 +883,16 @@ class MLearn:
             raise RuntimeError("Model not trained yet.")
         clf = self.pipeline.named_steps.get("clf", None)
         if clf is None or not hasattr(clf, "predict_proba"):
-            raise RuntimeError("Classifier in the pipeline does not support predict_proba().")
+            raise RuntimeError(
+                "Classifier in the pipeline does not support predict_proba()."
+            )
         return self.pipeline.predict_proba(X_df_or_array)
 
 
 # =============================================================================
 # MLP Class (Multilayer Perceptron model)
 # =============================================================================
+
 
 class MLP(MLearn):
     """
@@ -847,7 +901,7 @@ class MLP(MLearn):
 
     def __init__(
         self,
-        marker_style: str = "plain",    # Marker title style: plain (default) like 'marker_1' or combined (one-hot) like 'marker_1=0'
+        marker_style: str = "plain",  # Marker title style: plain (default) like 'marker_1' or combined (one-hot) like 'marker_1=0'
         hidden_layer_sizes: Union[tuple, list] = (100,),
         activation: str = "relu",
         solver: str = "adam",
@@ -860,13 +914,12 @@ class MLP(MLearn):
         random_state: int = 42,
         categorical: bool = True,
         min_coverage_warn: float = 0.2,
-        raise_on_low_coverage: bool = False
+        raise_on_low_coverage: bool = False,
     ) -> None:
         try:
             # Just to ensure sklearn is installed
             from sklearn.model_selection import train_test_split  # noqa
-            from sklearn.pipeline import Pipeline                 # noqa
-            from sklearn.metrics import accuracy_score, classification_report, confusion_matrix  # noqa
+            from sklearn.pipeline import Pipeline  # noqa
         except ModuleNotFoundError as e:
             print(f"❌ Missing required module: {e.name}")
             print("➡️  Please install scikit-learn using: pip install scikit-learn")
@@ -880,7 +933,7 @@ class MLP(MLearn):
             marker_style=marker_style,
             categorical=categorical,
             min_coverage_warn=min_coverage_warn,
-            raise_on_low_coverage=raise_on_low_coverage
+            raise_on_low_coverage=raise_on_low_coverage,
         )
 
         self.hidden_layer_sizes = (
@@ -907,7 +960,7 @@ class MLP(MLearn):
         y: np.ndarray,
         feature_titles: List[str] | None = None,
         test_size: float = 0.2,
-        drop_singletons: bool = True
+        drop_singletons: bool = True,
     ) -> "MLP":
         """
         Dispatching train method for MLP.
@@ -939,7 +992,11 @@ class MLP(MLearn):
         from sklearn.compose import ColumnTransformer
         from sklearn.preprocessing import OneHotEncoder
         from sklearn.neural_network import MLPClassifier
-        from sklearn.metrics import accuracy_score, classification_report, confusion_matrix as _cm
+        from sklearn.metrics import (
+            accuracy_score,
+            classification_report,
+            confusion_matrix as _cm,
+        )
         from sklearn.pipeline import Pipeline as _P
 
         # --- Validate feature name length ---
@@ -978,7 +1035,6 @@ class MLP(MLearn):
         # --- DataFrame of normalized symbols ---
         X_df = self._prepare_X_df(X_use, self.feature_titles)
 
-
         # --- Collect unique values per marker (no duplicates) ---
         # X_df is already normalized ("" / nd / nan -> ""), so we take it as ground truth.
         self.feature_values = {
@@ -991,7 +1047,7 @@ class MLP(MLearn):
             X_df.values, y_use, test_size, self.random_state
         )
         X_train_df = pd.DataFrame(X_train_arr, columns=self.feature_titles).astype(str)
-        X_test_df  = pd.DataFrame(X_test_arr,  columns=self.feature_titles).astype(str)
+        X_test_df = pd.DataFrame(X_test_arr, columns=self.feature_titles).astype(str)
 
         # --- Preprocessor ---
         if self.categorical:
@@ -1010,7 +1066,6 @@ class MLP(MLearn):
             pre = "passthrough"
 
         # --- MLP classifier ---
-        from sklearn.neural_network import MLPClassifier
         mlp = MLPClassifier(
             hidden_layer_sizes=self.hidden_layer_sizes,
             activation=self.activation,
@@ -1058,7 +1113,7 @@ class MLP(MLearn):
         y: np.ndarray,
         feature_titles: List[str] | None = None,
         test_size: float = 0.2,
-        drop_singletons: bool = True
+        drop_singletons: bool = True,
     ) -> "MLP":
         """
         Train an MLP in 'combined' (one-hot) marker style.
@@ -1072,7 +1127,11 @@ class MLP(MLearn):
         This mode is for backward compatibility with older 'combined' models.
         """
         from sklearn.neural_network import MLPClassifier
-        from sklearn.metrics import accuracy_score, classification_report, confusion_matrix as _cm
+        from sklearn.metrics import (
+            accuracy_score,
+            classification_report,
+            confusion_matrix as _cm,
+        )
         from sklearn.pipeline import Pipeline as _P
 
         # --- Validate feature name length ---
@@ -1100,7 +1159,6 @@ class MLP(MLearn):
         # --- DataFrame of encoded features (numeric one-hot) ---
         X_df = pd.DataFrame(X_use, columns=self.feature_titles)
 
-
         # --- Collect unique values per marker from one-hot representation ---
         feature_values: dict[str, list[str]] = {}
 
@@ -1118,14 +1176,16 @@ class MLP(MLearn):
             feature_values.setdefault(marker, []).append(str(value))
 
         # Deduplicate + sort
-        self.feature_values = {m: sorted(set(vals)) for m, vals in feature_values.items()}
+        self.feature_values = {
+            m: sorted(set(vals)) for m, vals in feature_values.items()
+        }
 
         # --- Safe train/test split ---
         X_train_arr, X_test_arr, y_train, y_test = _safe_split(
             X_df.values, y_use, test_size, self.random_state
         )
         X_train_df = pd.DataFrame(X_train_arr, columns=self.feature_titles)
-        X_test_df  = pd.DataFrame(X_test_arr,  columns=self.feature_titles)
+        X_test_df = pd.DataFrame(X_test_arr, columns=self.feature_titles)
 
         # --- No extra preprocessing: data is already encoded ---
         pre = "passthrough"
@@ -1169,9 +1229,11 @@ class MLP(MLearn):
         }
         return self
 
+
 # =============================================================================
 # RF Class (Random Forest)
 # =============================================================================
+
 
 class RF(MLearn):
     """
@@ -1180,7 +1242,7 @@ class RF(MLearn):
 
     def __init__(
         self,
-        marker_style: str = "plain",    # Marker title style: plain (default) like 'marker_1' or combined (one-hot) like 'marker_1=0'
+        marker_style: str = "plain",  # Marker title style: plain (default) like 'marker_1' or combined (one-hot) like 'marker_1=0'
         n_estimators: int = 300,
         max_depth: Union[int, None] = None,
         max_features: Union[str, int, float, None] = "sqrt",
@@ -1193,12 +1255,11 @@ class RF(MLearn):
         n_jobs: int = -1,
         categorical: bool = True,
         min_coverage_warn: float = 0.2,
-        raise_on_low_coverage: bool = False
+        raise_on_low_coverage: bool = False,
     ) -> None:
         try:
             from sklearn.model_selection import train_test_split  # noqa
-            from sklearn.pipeline import Pipeline                 # noqa
-            from sklearn.metrics import accuracy_score, classification_report, confusion_matrix  # noqa
+            from sklearn.pipeline import Pipeline  # noqa
         except ModuleNotFoundError as e:
             print(f"❌ Missing required module: {e.name}")
             print("➡️  Please install scikit-learn using: pip install scikit-learn")
@@ -1212,7 +1273,7 @@ class RF(MLearn):
             marker_style=marker_style,
             categorical=categorical,
             min_coverage_warn=min_coverage_warn,
-            raise_on_low_coverage=raise_on_low_coverage
+            raise_on_low_coverage=raise_on_low_coverage,
         )
 
         self.n_estimators = n_estimators
@@ -1235,7 +1296,7 @@ class RF(MLearn):
         y: np.ndarray,
         feature_titles: List[str] | None = None,
         test_size: float = 0.2,
-        drop_singletons: bool = True
+        drop_singletons: bool = True,
     ) -> "RF":
         """
         Dispatching train method for Random Forest.
@@ -1267,7 +1328,11 @@ class RF(MLearn):
         from sklearn.compose import ColumnTransformer
         from sklearn.preprocessing import OneHotEncoder
         from sklearn.ensemble import RandomForestClassifier
-        from sklearn.metrics import accuracy_score, classification_report, confusion_matrix as _cm
+        from sklearn.metrics import (
+            accuracy_score,
+            classification_report,
+            confusion_matrix as _cm,
+        )
         from sklearn.pipeline import Pipeline as _P
 
         # Validate feature length
@@ -1302,7 +1367,6 @@ class RF(MLearn):
         # DataFrame with normalized symbols
         X_df = self._prepare_X_df(X_use, self.feature_titles)
 
-
         # --- Collect unique values per marker (no duplicates) ---
         # X_df is already normalized ("" / nd / nan -> ""), so we take it as ground truth.
         self.feature_values = {
@@ -1315,7 +1379,7 @@ class RF(MLearn):
             X_df.values, y_use, test_size, self.random_state
         )
         X_train_df = pd.DataFrame(X_train_arr, columns=self.feature_titles).astype(str)
-        X_test_df  = pd.DataFrame(X_test_arr,  columns=self.feature_titles).astype(str)
+        X_test_df = pd.DataFrame(X_test_arr, columns=self.feature_titles).astype(str)
 
         # Preprocessor: internal OneHotEncoder if categorical
         if self.categorical:
@@ -1382,7 +1446,7 @@ class RF(MLearn):
         y: np.ndarray,
         feature_titles: List[str] | None = None,
         test_size: float = 0.2,
-        drop_singletons: bool = True
+        drop_singletons: bool = True,
     ) -> "RF":
         """
         Train a Random Forest in 'combined' (one-hot) marker style.
@@ -1396,7 +1460,11 @@ class RF(MLearn):
         This mode is for backward compatibility with older 'combined' models.
         """
         from sklearn.ensemble import RandomForestClassifier
-        from sklearn.metrics import accuracy_score, classification_report, confusion_matrix as _cm
+        from sklearn.metrics import (
+            accuracy_score,
+            classification_report,
+            confusion_matrix as _cm,
+        )
         from sklearn.pipeline import Pipeline as _P
 
         # Validate feature length
@@ -1422,7 +1490,6 @@ class RF(MLearn):
         # DataFrame of encoded features (numeric one-hot)
         X_df = pd.DataFrame(X_use, columns=self.feature_titles)
 
-
         # --- Collect unique values per marker from one-hot representation ---
         feature_values: dict[str, list[str]] = {}
 
@@ -1440,14 +1507,16 @@ class RF(MLearn):
             feature_values.setdefault(marker, []).append(str(value))
 
         # Deduplicate + sort
-        self.feature_values = {m: sorted(set(vals)) for m, vals in feature_values.items()}
+        self.feature_values = {
+            m: sorted(set(vals)) for m, vals in feature_values.items()
+        }
 
         # Split
         X_train_arr, X_test_arr, y_train, y_test = _safe_split(
             X_df.values, y_use, test_size, self.random_state
         )
         X_train_df = pd.DataFrame(X_train_arr, columns=self.feature_titles)
-        X_test_df  = pd.DataFrame(X_test_arr,  columns=self.feature_titles)
+        X_test_df = pd.DataFrame(X_test_arr, columns=self.feature_titles)
 
         # No extra preprocessing: data is already encoded
         pre = "passthrough"
@@ -1490,9 +1559,11 @@ class RF(MLearn):
         }
         return self
 
+
 # =============================================================================
 # XGBoost Class (Extreme Gradient Boosting)
 # =============================================================================
+
 
 class XGBoost(MLearn):
     """
@@ -1505,7 +1576,7 @@ class XGBoost(MLearn):
 
     def __init__(
         self,
-        marker_style: str = "plain",   # "plain" (default) or "combined"
+        marker_style: str = "plain",  # "plain" (default) or "combined"
         n_estimators: int = 600,
         learning_rate: float = 0.05,
         max_depth: int = 6,
@@ -1525,14 +1596,13 @@ class XGBoost(MLearn):
         min_coverage_warn: float = 0.2,
         raise_on_low_coverage: bool = False,
         # xgboost verbosity
-        verbosity: int = 0
+        verbosity: int = 0,
     ) -> None:
         # NOTE: xgboost is not part of sklearn; it must be installed separately.
         try:
             import xgboost  # noqa
             from sklearn.model_selection import train_test_split  # noqa
             from sklearn.pipeline import Pipeline  # noqa
-            from sklearn.metrics import accuracy_score, classification_report, confusion_matrix  # noqa
         except ModuleNotFoundError as e:
             missing = e.name
             print(f"❌ Missing required module: {missing}")
@@ -1550,7 +1620,7 @@ class XGBoost(MLearn):
             marker_style=marker_style,
             categorical=categorical,
             min_coverage_warn=min_coverage_warn,
-            raise_on_low_coverage=raise_on_low_coverage
+            raise_on_low_coverage=raise_on_low_coverage,
         )
 
         self.n_estimators = int(n_estimators)
@@ -1562,7 +1632,9 @@ class XGBoost(MLearn):
         self.reg_alpha = float(reg_alpha)
         self.min_child_weight = float(min_child_weight)
         self.gamma = float(gamma)
-        self.scale_pos_weight = scale_pos_weight if scale_pos_weight is None else float(scale_pos_weight)
+        self.scale_pos_weight = (
+            scale_pos_weight if scale_pos_weight is None else float(scale_pos_weight)
+        )
         self.random_state = int(random_state)
         self.n_jobs = int(n_jobs)
         self.verbosity = int(verbosity)
@@ -1576,7 +1648,7 @@ class XGBoost(MLearn):
         y: np.ndarray,
         feature_titles: List[str] | None = None,
         test_size: float = 0.2,
-        drop_singletons: bool = True
+        drop_singletons: bool = True,
     ) -> "XGBoost":
         """
         Dispatching train method for XGBoost.
@@ -1604,7 +1676,11 @@ class XGBoost(MLearn):
         # =========================
         from sklearn.compose import ColumnTransformer
         from sklearn.preprocessing import OneHotEncoder
-        from sklearn.metrics import accuracy_score, classification_report, confusion_matrix as _cm
+        from sklearn.metrics import (
+            accuracy_score,
+            classification_report,
+            confusion_matrix as _cm,
+        )
         from sklearn.pipeline import Pipeline as _P
 
         from xgboost import XGBClassifier
@@ -1652,7 +1728,7 @@ class XGBoost(MLearn):
             X_df.values, y_use, test_size, self.random_state
         )
         X_train_df = pd.DataFrame(X_train_arr, columns=self.feature_titles).astype(str)
-        X_test_df  = pd.DataFrame(X_test_arr,  columns=self.feature_titles).astype(str)
+        X_test_df = pd.DataFrame(X_test_arr, columns=self.feature_titles).astype(str)
 
         # Preprocessor
         if self.categorical:
@@ -1736,7 +1812,7 @@ class XGBoost(MLearn):
         y: np.ndarray,
         feature_titles: List[str] | None = None,
         test_size: float = 0.2,
-        drop_singletons: bool = True
+        drop_singletons: bool = True,
     ) -> "XGBoost":
         """
         Train XGBoost in 'combined' (one-hot) marker style.
@@ -1746,7 +1822,11 @@ class XGBoost(MLearn):
           - feature_titles are 'marker=value' names
           - No extra OneHotEncoder; features are used as-is.
         """
-        from sklearn.metrics import accuracy_score, classification_report, confusion_matrix as _cm
+        from sklearn.metrics import (
+            accuracy_score,
+            classification_report,
+            confusion_matrix as _cm,
+        )
         from sklearn.pipeline import Pipeline as _P
         from xgboost import XGBClassifier
 
@@ -1780,19 +1860,23 @@ class XGBoost(MLearn):
             else:
                 marker, value = full_name, "1"
             feature_values.setdefault(marker, []).append(str(value))
-        self.feature_values = {m: sorted(set(vals)) for m, vals in feature_values.items()}
+        self.feature_values = {
+            m: sorted(set(vals)) for m, vals in feature_values.items()
+        }
 
         # Split
         X_train_arr, X_test_arr, y_train, y_test = _safe_split(
             X_df.values, y_use, test_size, self.random_state
         )
         X_train_df = pd.DataFrame(X_train_arr, columns=self.feature_titles)
-        X_test_df  = pd.DataFrame(X_test_arr,  columns=self.feature_titles)
+        X_test_df = pd.DataFrame(X_test_arr, columns=self.feature_titles)
 
         # Objective selection
         n_classes = int(len(set(y_train)))
         if n_classes <= 1:
-            raise ValueError("XGBoost.train_combined(): need at least 2 classes to train.")
+            raise ValueError(
+                "XGBoost.train_combined(): need at least 2 classes to train."
+            )
 
         if n_classes == 2:
             objective = "binary:logistic"
@@ -1842,9 +1926,11 @@ class XGBoost(MLearn):
         }
         return self
 
+
 # =============================================================================
 # NBayes Class (Naive Bayes)
 # =============================================================================
+
 
 class NBayes(MLearn):
     """
@@ -1861,19 +1947,18 @@ class NBayes(MLearn):
 
     def __init__(
         self,
-        marker_style: str = "plain",   # "plain" (default) or "combined"
-        alpha: float = 1.0,           # smoothing (CategoricalNB & MultinomialNB)
+        marker_style: str = "plain",  # "plain" (default) or "combined"
+        alpha: float = 1.0,  # smoothing (CategoricalNB & MultinomialNB)
         fit_prior: bool = True,
         class_prior: list[float] | None = None,
-        categorical: bool = True,     # kept for interface consistency; NB here is categorical by design
+        categorical: bool = True,  # kept for interface consistency; NB here is categorical by design
         min_coverage_warn: float = 0.2,
         raise_on_low_coverage: bool = False,
-        random_state: int = 42
+        random_state: int = 42,
     ) -> None:
         try:
             from sklearn.model_selection import train_test_split  # noqa
-            from sklearn.pipeline import Pipeline                 # noqa
-            from sklearn.metrics import accuracy_score, classification_report, confusion_matrix  # noqa
+            from sklearn.pipeline import Pipeline  # noqa
         except ModuleNotFoundError as e:
             print(f"❌ Missing required module: {e.name}")
             print("➡️  Please install scikit-learn using: pip install scikit-learn")
@@ -1887,7 +1972,7 @@ class NBayes(MLearn):
             marker_style=marker_style,
             categorical=categorical,
             min_coverage_warn=min_coverage_warn,
-            raise_on_low_coverage=raise_on_low_coverage
+            raise_on_low_coverage=raise_on_low_coverage,
         )
 
         self.alpha = float(alpha)
@@ -1904,7 +1989,7 @@ class NBayes(MLearn):
         y: np.ndarray,
         feature_titles: List[str] | None = None,
         test_size: float = 0.2,
-        drop_singletons: bool = True
+        drop_singletons: bool = True,
     ) -> "NBayes":
         """
         Dispatching train method for Naive Bayes.
@@ -1932,7 +2017,11 @@ class NBayes(MLearn):
         # =========================
         from sklearn.preprocessing import OrdinalEncoder
         from sklearn.naive_bayes import CategoricalNB
-        from sklearn.metrics import accuracy_score, classification_report, confusion_matrix as _cm
+        from sklearn.metrics import (
+            accuracy_score,
+            classification_report,
+            confusion_matrix as _cm,
+        )
         from sklearn.pipeline import Pipeline as _P
 
         # Validate feature length
@@ -1978,18 +2067,13 @@ class NBayes(MLearn):
             X_df.values, y_use, test_size, self.random_state
         )
         X_train_df = pd.DataFrame(X_train_arr, columns=self.feature_titles).astype(str)
-        X_test_df  = pd.DataFrame(X_test_arr,  columns=self.feature_titles).astype(str)
+        X_test_df = pd.DataFrame(X_test_arr, columns=self.feature_titles).astype(str)
 
         # Ordinal encoding per column, unknown -> -1 (safe for predict time)
-        enc = OrdinalEncoder(
-            handle_unknown="use_encoded_value",
-            unknown_value=-1
-        )
+        enc = OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1)
 
         nb = CategoricalNB(
-            alpha=self.alpha,
-            fit_prior=self.fit_prior,
-            class_prior=self.class_prior
+            alpha=self.alpha, fit_prior=self.fit_prior, class_prior=self.class_prior
         )
 
         self.pipeline = _P([("pre", enc), ("clf", nb)])
@@ -2022,7 +2106,7 @@ class NBayes(MLearn):
         y: np.ndarray,
         feature_titles: List[str] | None = None,
         test_size: float = 0.2,
-        drop_singletons: bool = True
+        drop_singletons: bool = True,
     ) -> "NBayes":
         """
         Train Naive Bayes in 'combined' (one-hot) marker style.
@@ -2033,7 +2117,11 @@ class NBayes(MLearn):
           - Uses MultinomialNB (works well with sparse/binary counts)
         """
         from sklearn.naive_bayes import MultinomialNB
-        from sklearn.metrics import accuracy_score, classification_report, confusion_matrix as _cm
+        from sklearn.metrics import (
+            accuracy_score,
+            classification_report,
+            confusion_matrix as _cm,
+        )
         from sklearn.pipeline import Pipeline as _P
 
         # Validate feature length
@@ -2067,20 +2155,20 @@ class NBayes(MLearn):
             else:
                 marker, value = full_name, "1"
             feature_values.setdefault(marker, []).append(str(value))
-        self.feature_values = {m: sorted(set(vals)) for m, vals in feature_values.items()}
+        self.feature_values = {
+            m: sorted(set(vals)) for m, vals in feature_values.items()
+        }
 
         # Split
         X_train_arr, X_test_arr, y_train, y_test = _safe_split(
             X_df.values, y_use, test_size, self.random_state
         )
         X_train_df = pd.DataFrame(X_train_arr, columns=self.feature_titles)
-        X_test_df  = pd.DataFrame(X_test_arr,  columns=self.feature_titles)
+        X_test_df = pd.DataFrame(X_test_arr, columns=self.feature_titles)
 
         # MultinomialNB expects non-negative features (one-hot is fine)
         nb = MultinomialNB(
-            alpha=self.alpha,
-            fit_prior=self.fit_prior,
-            class_prior=self.class_prior
+            alpha=self.alpha, fit_prior=self.fit_prior, class_prior=self.class_prior
         )
 
         self.pipeline = _P([("pre", "passthrough"), ("clf", nb)])
@@ -2109,6 +2197,7 @@ class NBayes(MLearn):
 # KNN Class (k-Nearest Neighbours)
 # =============================================================================
 
+
 class KNN(MLearn):
     """
     k-Nearest Neighbours classifier for categorical marker matrices.
@@ -2120,21 +2209,20 @@ class KNN(MLearn):
 
     def __init__(
         self,
-        marker_style: str = "plain",     # "plain" (default) or "combined"
+        marker_style: str = "plain",  # "plain" (default) or "combined"
         n_neighbors: int = 5,
-        weights: str = "distance",      # "uniform" or "distance"
-        metric: str = "minkowski",      # KNN metric in encoded space
-        p: int = 2,                     # for minkowski (p=2 -> euclidean)
+        weights: str = "distance",  # "uniform" or "distance"
+        metric: str = "minkowski",  # KNN metric in encoded space
+        p: int = 2,  # for minkowski (p=2 -> euclidean)
         n_jobs: int = -1,
         categorical: bool = True,
         min_coverage_warn: float = 0.2,
         raise_on_low_coverage: bool = False,
-        random_state: int = 42
+        random_state: int = 42,
     ) -> None:
         try:
             from sklearn.model_selection import train_test_split  # noqa
-            from sklearn.pipeline import Pipeline                 # noqa
-            from sklearn.metrics import accuracy_score, classification_report, confusion_matrix  # noqa
+            from sklearn.pipeline import Pipeline  # noqa
         except ModuleNotFoundError as e:
             print(f"❌ Missing required module: {e.name}")
             print("➡️  Please install scikit-learn using: pip install scikit-learn")
@@ -2148,7 +2236,7 @@ class KNN(MLearn):
             marker_style=marker_style,
             categorical=categorical,
             min_coverage_warn=min_coverage_warn,
-            raise_on_low_coverage=raise_on_low_coverage
+            raise_on_low_coverage=raise_on_low_coverage,
         )
 
         self.n_neighbors = int(n_neighbors)
@@ -2167,7 +2255,7 @@ class KNN(MLearn):
         y: np.ndarray,
         feature_titles: List[str] | None = None,
         test_size: float = 0.2,
-        drop_singletons: bool = True
+        drop_singletons: bool = True,
     ) -> "KNN":
         """
         Dispatching train method for KNN.
@@ -2199,7 +2287,11 @@ class KNN(MLearn):
         from sklearn.compose import ColumnTransformer
         from sklearn.preprocessing import OneHotEncoder
         from sklearn.neighbors import KNeighborsClassifier
-        from sklearn.metrics import accuracy_score, classification_report, confusion_matrix as _cm
+        from sklearn.metrics import (
+            accuracy_score,
+            classification_report,
+            confusion_matrix as _cm,
+        )
         from sklearn.pipeline import Pipeline as _P
 
         # Validate feature length
@@ -2245,7 +2337,7 @@ class KNN(MLearn):
             X_df.values, y_use, test_size, self.random_state
         )
         X_train_df = pd.DataFrame(X_train_arr, columns=self.feature_titles).astype(str)
-        X_test_df  = pd.DataFrame(X_test_arr,  columns=self.feature_titles).astype(str)
+        X_test_df = pd.DataFrame(X_test_arr, columns=self.feature_titles).astype(str)
 
         # Preprocessor
         if self.categorical:
@@ -2311,7 +2403,7 @@ class KNN(MLearn):
         y: np.ndarray,
         feature_titles: List[str] | None = None,
         test_size: float = 0.2,
-        drop_singletons: bool = True
+        drop_singletons: bool = True,
     ) -> "KNN":
         """
         Train KNN in 'combined' (one-hot) marker style.
@@ -2322,7 +2414,11 @@ class KNN(MLearn):
           - No additional OneHotEncoder is applied; features are used as-is.
         """
         from sklearn.neighbors import KNeighborsClassifier
-        from sklearn.metrics import accuracy_score, classification_report, confusion_matrix as _cm
+        from sklearn.metrics import (
+            accuracy_score,
+            classification_report,
+            confusion_matrix as _cm,
+        )
         from sklearn.pipeline import Pipeline as _P
 
         # Validate feature length
@@ -2358,14 +2454,16 @@ class KNN(MLearn):
                 marker, value = full_name, "1"
             feature_values.setdefault(marker, []).append(str(value))
 
-        self.feature_values = {m: sorted(set(vals)) for m, vals in feature_values.items()}
+        self.feature_values = {
+            m: sorted(set(vals)) for m, vals in feature_values.items()
+        }
 
         # Split
         X_train_arr, X_test_arr, y_train, y_test = _safe_split(
             X_df.values, y_use, test_size, self.random_state
         )
         X_train_df = pd.DataFrame(X_train_arr, columns=self.feature_titles)
-        X_test_df  = pd.DataFrame(X_test_arr,  columns=self.feature_titles)
+        X_test_df = pd.DataFrame(X_test_arr, columns=self.feature_titles)
 
         pre = "passthrough"
 
@@ -2403,6 +2501,7 @@ class KNN(MLearn):
 # SVC Class (Support Vector Machine)
 # =============================================================================
 
+
 class SVC(MLearn):
     """
     Support Vector Machine classifier treating each cell as a SYMBOL (categorical state).
@@ -2410,7 +2509,7 @@ class SVC(MLearn):
 
     def __init__(
         self,
-        marker_style: str = "plain",    # Marker title style: plain (default) like 'marker_1' or combined (one-hot) like 'marker_1=0'
+        marker_style: str = "plain",  # Marker title style: plain (default) like 'marker_1' or combined (one-hot) like 'marker_1=0'
         C: float = 1.0,
         kernel: str = "rbf",
         degree: int = 3,
@@ -2420,12 +2519,11 @@ class SVC(MLearn):
         random_state: int = 42,
         categorical: bool = True,
         min_coverage_warn: float = 0.2,
-        raise_on_low_coverage: bool = False
+        raise_on_low_coverage: bool = False,
     ) -> None:
         try:
             from sklearn.model_selection import train_test_split  # noqa
-            from sklearn.pipeline import Pipeline                 # noqa
-            from sklearn.metrics import accuracy_score, classification_report, confusion_matrix  # noqa
+            from sklearn.pipeline import Pipeline  # noqa
         except ModuleNotFoundError as e:
             print(f"❌ Missing required module: {e.name}")
             print("➡️  Please install scikit-learn using: pip install scikit-learn")
@@ -2439,7 +2537,7 @@ class SVC(MLearn):
             marker_style=marker_style,
             categorical=categorical,
             min_coverage_warn=min_coverage_warn,
-            raise_on_low_coverage=raise_on_low_coverage
+            raise_on_low_coverage=raise_on_low_coverage,
         )
 
         self.C = float(C)
@@ -2456,7 +2554,7 @@ class SVC(MLearn):
         y: np.ndarray,
         feature_titles: List[str] | None = None,
         test_size: float = 0.2,
-        drop_singletons: bool = True
+        drop_singletons: bool = True,
     ) -> "SVC":
         """
         Dispatching train method for SVC.
@@ -2488,7 +2586,11 @@ class SVC(MLearn):
         from sklearn.compose import ColumnTransformer
         from sklearn.preprocessing import OneHotEncoder
         from sklearn.svm import SVC as _SVC
-        from sklearn.metrics import accuracy_score, classification_report, confusion_matrix as _cm
+        from sklearn.metrics import (
+            accuracy_score,
+            classification_report,
+            confusion_matrix as _cm,
+        )
         from sklearn.pipeline import Pipeline as _P
 
         # --- Validate feature name length ---
@@ -2525,7 +2627,6 @@ class SVC(MLearn):
         # --- DataFrame of normalized symbols ---
         X_df = self._prepare_X_df(X_use, self.feature_titles)
 
-
         # --- Collect unique values per marker (no duplicates) ---
         # X_df is already normalized ("" / nd / nan -> ""), so we take it as ground truth.
         self.feature_values = {
@@ -2538,7 +2639,7 @@ class SVC(MLearn):
             X_df.values, y_use, test_size, self.random_state
         )
         X_train_df = pd.DataFrame(X_train_arr, columns=self.feature_titles).astype(str)
-        X_test_df  = pd.DataFrame(X_test_arr,  columns=self.feature_titles).astype(str)
+        X_test_df = pd.DataFrame(X_test_arr, columns=self.feature_titles).astype(str)
 
         # --- Preprocessor ---
         if self.categorical:
@@ -2597,7 +2698,7 @@ class SVC(MLearn):
         y: np.ndarray,
         feature_titles: List[str] | None = None,
         test_size: float = 0.2,
-        drop_singletons: bool = True
+        drop_singletons: bool = True,
     ) -> "SVC":
         """
         Train an SVM (SVC) in 'combined' (one-hot) marker style.
@@ -2611,7 +2712,11 @@ class SVC(MLearn):
         This mode is for backward compatibility with older 'combined' models.
         """
         from sklearn.svm import SVC as _SVC
-        from sklearn.metrics import accuracy_score, classification_report, confusion_matrix as _cm
+        from sklearn.metrics import (
+            accuracy_score,
+            classification_report,
+            confusion_matrix as _cm,
+        )
         from sklearn.pipeline import Pipeline as _P
 
         # --- Validate feature name length ---
@@ -2637,7 +2742,6 @@ class SVC(MLearn):
         # --- DataFrame of encoded features (numeric one-hot) ---
         X_df = pd.DataFrame(X_use, columns=self.feature_titles)
 
-
         # --- Collect unique values per marker from one-hot representation ---
         feature_values: dict[str, list[str]] = {}
 
@@ -2655,14 +2759,16 @@ class SVC(MLearn):
             feature_values.setdefault(marker, []).append(str(value))
 
         # Deduplicate + sort
-        self.feature_values = {m: sorted(set(vals)) for m, vals in feature_values.items()}
+        self.feature_values = {
+            m: sorted(set(vals)) for m, vals in feature_values.items()
+        }
 
         # --- Safe train/test split ---
         X_train_arr, X_test_arr, y_train, y_test = _safe_split(
             X_df.values, y_use, test_size, self.random_state
         )
         X_train_df = pd.DataFrame(X_train_arr, columns=self.feature_titles)
-        X_test_df  = pd.DataFrame(X_test_arr,  columns=self.feature_titles)
+        X_test_df = pd.DataFrame(X_test_arr, columns=self.feature_titles)
 
         # --- No extra preprocessing: data is already encoded ---
         pre = "passthrough"
@@ -2700,10 +2806,12 @@ class SVC(MLearn):
             "confusion_matrix": cm.tolist(),
         }
         return self
-        
+
+
 # =============================================================================
 # LR Class (Logistic Regression)
 # =============================================================================
+
 
 class LR(MLearn):
     """
@@ -2712,7 +2820,7 @@ class LR(MLearn):
 
     def __init__(
         self,
-        marker_style: str = 'plain',
+        marker_style: str = "plain",
         C: float = 1.0,
         penalty: str = "l2",
         solver: str = "lbfgs",
@@ -2722,12 +2830,11 @@ class LR(MLearn):
         n_jobs: int = -1,
         categorical: bool = True,
         min_coverage_warn: float = 0.2,
-        raise_on_low_coverage: bool = False
+        raise_on_low_coverage: bool = False,
     ) -> None:
         try:
             from sklearn.model_selection import train_test_split  # noqa
-            from sklearn.pipeline import Pipeline                 # noqa
-            from sklearn.metrics import accuracy_score, classification_report, confusion_matrix  # noqa
+            from sklearn.pipeline import Pipeline  # noqa
         except ModuleNotFoundError as e:
             print(f"❌ Missing required module: {e.name}")
             print("➡️  Please install scikit-learn using: pip install scikit-learn")
@@ -2741,7 +2848,7 @@ class LR(MLearn):
             marker_style=marker_style,
             categorical=categorical,
             min_coverage_warn=min_coverage_warn,
-            raise_on_low_coverage=raise_on_low_coverage
+            raise_on_low_coverage=raise_on_low_coverage,
         )
 
         self.C = float(C)
@@ -2761,7 +2868,7 @@ class LR(MLearn):
         y: np.ndarray,
         feature_titles: List[str] | None = None,
         test_size: float = 0.2,
-        drop_singletons: bool = True
+        drop_singletons: bool = True,
     ) -> "LR":
         """
         Dispatching train method for Logistic Regression.
@@ -2793,7 +2900,11 @@ class LR(MLearn):
         from sklearn.compose import ColumnTransformer
         from sklearn.preprocessing import OneHotEncoder
         from sklearn.linear_model import LogisticRegression
-        from sklearn.metrics import accuracy_score, classification_report, confusion_matrix as _cm
+        from sklearn.metrics import (
+            accuracy_score,
+            classification_report,
+            confusion_matrix as _cm,
+        )
         from sklearn.pipeline import Pipeline as _P
 
         # --- Validate feature name length ---
@@ -2845,7 +2956,7 @@ class LR(MLearn):
             X_df.values, y_use, test_size, self.random_state
         )
         X_train_df = pd.DataFrame(X_train_arr, columns=self.feature_titles).astype(str)
-        X_test_df  = pd.DataFrame(X_test_arr,  columns=self.feature_titles).astype(str)
+        X_test_df = pd.DataFrame(X_test_arr, columns=self.feature_titles).astype(str)
 
         # --- Preprocessor: OneHotEncode all marker columns if categorical=True ---
         if self.categorical:
@@ -2909,7 +3020,7 @@ class LR(MLearn):
         y: np.ndarray,
         feature_titles: List[str] | None = None,
         test_size: float = 0.2,
-        drop_singletons: bool = True
+        drop_singletons: bool = True,
     ) -> "LR":
         """
         Train Logistic Regression in 'combined' (one-hot) marker style.
@@ -2923,7 +3034,11 @@ class LR(MLearn):
         This mode is for backward compatibility with older 'combined' models.
         """
         from sklearn.linear_model import LogisticRegression
-        from sklearn.metrics import accuracy_score, classification_report, confusion_matrix as _cm
+        from sklearn.metrics import (
+            accuracy_score,
+            classification_report,
+            confusion_matrix as _cm,
+        )
         from sklearn.pipeline import Pipeline as _P
 
         # --- Validate feature name length ---
@@ -2966,14 +3081,16 @@ class LR(MLearn):
             feature_values.setdefault(marker, []).append(str(value))
 
         # Deduplicate + sort
-        self.feature_values = {m: sorted(set(vals)) for m, vals in feature_values.items()}
+        self.feature_values = {
+            m: sorted(set(vals)) for m, vals in feature_values.items()
+        }
 
         # --- Safe train/test split ---
         X_train_arr, X_test_arr, y_train, y_test = _safe_split(
             X_df.values, y_use, test_size, self.random_state
         )
         X_train_df = pd.DataFrame(X_train_arr, columns=self.feature_titles)
-        X_test_df  = pd.DataFrame(X_test_arr,  columns=self.feature_titles)
+        X_test_df = pd.DataFrame(X_test_arr, columns=self.feature_titles)
 
         # --- No extra preprocessing: data is already encoded ---
         pre = "passthrough"
@@ -3015,9 +3132,11 @@ class LR(MLearn):
         }
         return self
 
+
 # =============================================================================
 # MBCS Class (Matrix-Based Classifier Search)
 # =============================================================================
+
 
 class MBCS(MLearn):
     """
@@ -3037,18 +3156,17 @@ class MBCS(MLearn):
 
     def __init__(
         self,
-        marker_style: str = "plain",    # Marker title style: plain (default) like 'marker_1' or combined (one-hot) like 'marker_1=0'
+        marker_style: str = "plain",  # Marker title style: plain (default) like 'marker_1' or combined (one-hot) like 'marker_1=0'
         random_state: int = 42,
         cv_folds: int = 5,
         test_size: float = 0.2,
-        n_jobs: int = -1
+        n_jobs: int = -1,
     ) -> None:
         try:
-            from sklearn.model_selection import train_test_split, cross_val_score # noqa
-            from sklearn.linear_model import LogisticRegression                   # noqa
-            from sklearn.ensemble import RandomForestClassifier                   # noqa
-            from sklearn.naive_bayes import GaussianNB                            # noqa
-            from sklearn.svm import SVC                                           # noqa
+            from sklearn.linear_model import LogisticRegression  # noqa
+            from sklearn.ensemble import RandomForestClassifier  # noqa
+            from sklearn.naive_bayes import GaussianNB  # noqa
+            from sklearn.svm import SVC  # noqa
         except ModuleNotFoundError as e:
             print(f"❌ Missing required module: {e.name}")
             print("➡️  Please install scikit-learn using: pip install scikit-learn")
@@ -3144,13 +3262,17 @@ class MBCS(MLearn):
             # Optional: cast to 'category' for clarity
             for c in df.columns:
                 df[c] = df[c].astype("category")
-            X_arr = pd.get_dummies(df, prefix_sep="=", dummy_na=True).values.astype(float)
+            X_arr = pd.get_dummies(df, prefix_sep="=", dummy_na=True).values.astype(
+                float
+            )
 
         n_samples, n_features = X_arr.shape
         classes, counts = np.unique(y_arr, return_counts=True)
         self.X_shape = (n_samples, n_features)
         self.y_classes_ = classes
-        self.class_counts_ = {cls: int(cnt) for cls, cnt in zip(classes, counts, strict=False)}
+        self.class_counts_ = {
+            cls: int(cnt) for cls, cnt in zip(classes, counts, strict=False)
+        }
 
         candidates = {
             "LogisticRegression": LogisticRegression(
@@ -3270,7 +3392,9 @@ class MBCS(MLearn):
         y_arr = np.asarray(y)
 
         if X_arr.ndim != 2:
-            raise ValueError(f"MBCS.train_combined(): X must be 2D, got shape {X_arr.shape}")
+            raise ValueError(
+                f"MBCS.train_combined(): X must be 2D, got shape {X_arr.shape}"
+            )
         if y_arr.ndim != 1 or y_arr.shape[0] != X_arr.shape[0]:
             raise ValueError(
                 f"MBCS.train_combined(): y must be 1D of length {X_arr.shape[0]}, got shape {y_arr.shape}"
@@ -3293,7 +3417,9 @@ class MBCS(MLearn):
         classes, counts = np.unique(y_arr, return_counts=True)
         self.X_shape = (n_samples, n_features)
         self.y_classes_ = classes
-        self.class_counts_ = {cls: int(cnt) for cls, cnt in zip(classes, counts, strict=False)}
+        self.class_counts_ = {
+            cls: int(cnt) for cls, cnt in zip(classes, counts, strict=False)
+        }
 
         candidates = {
             "LogisticRegression": LogisticRegression(
@@ -3388,7 +3514,7 @@ class MBCS(MLearn):
 
     # -------------------------- generic identify ------------------------------
 
-    def identify(self) -> Dict[str, Any]:
+    def identify(self, markers: Any = None) -> Dict[str, Any]:
         """
         Return the MBCS recommendation and summary.
 
@@ -3410,7 +3536,9 @@ class MBCS(MLearn):
         # PLAIN MATRIX STYLE IDENT
         # =========================
         if self.X_shape is None or self.y_classes_ is None or self.cv_results_ is None:
-            raise RuntimeError("MBCS.identify(): model not trained yet. Call train(X, y) first.")
+            raise RuntimeError(
+                "MBCS.identify(): model not trained yet. Call train(X, y) first."
+            )
 
         n_samples, n_features = self.X_shape
         n_classes = len(self.y_classes_)
@@ -3455,7 +3583,9 @@ class MBCS(MLearn):
                 f"Recommended classifier based on mean CV accuracy: {self.recommended_}"
             )
         else:
-            rationale.append("No reliable recommendation (all CV scores failed or NaN).")
+            rationale.append(
+                "No reliable recommendation (all CV scores failed or NaN)."
+            )
 
         return {
             "recommendation": self.recommended_,
@@ -3467,7 +3597,7 @@ class MBCS(MLearn):
     # ==================================================
     # COMBINED (ONE-HOT 'marker=value') MARKER STYLE IDENTIFICATION
     # ==================================================
-    def identify_combined(self) -> Dict[str, Any]:
+    def identify_combined(self, markers: Any = None) -> Dict[str, Any]:
         """
         MBCS identification for 'combined' (one-hot) matrix style.
 
@@ -3531,7 +3661,9 @@ class MBCS(MLearn):
                 f"Recommended classifier based on mean CV accuracy: {self.recommended_}"
             )
         else:
-            rationale.append("No reliable recommendation (all CV scores failed or NaN).")
+            rationale.append(
+                "No reliable recommendation (all CV scores failed or NaN)."
+            )
 
         return {
             "recommendation": self.recommended_,
@@ -3539,9 +3671,12 @@ class MBCS(MLearn):
             "dataset_summary": dataset_summary,
             "probe_scores": self.probe_scores_,
         }
+
+
 # =============================================================================
 # DT Class (Decision Tree)
 # =============================================================================
+
 
 class DT(MLearn):
     """
@@ -3555,24 +3690,25 @@ class DT(MLearn):
         using the SAME marker names as in `feature_titles`.
     """
 
-    def __init__(self,
-                 marker_style: str = 'plain',
-                 criterion: str = "gini",
-                 splitter: str = "best",
-                 max_depth: Union[int, None] = None,
-                 min_samples_split: int = 2,
-                 min_samples_leaf: int = 1,
-                 max_features: Union[str, int, float, None] = None,
-                 class_weight: Union[dict, list, str, None] = None,
-                 random_state: int = 42,
-                 categorical: bool = True,
-                 min_coverage_warn: float = 0.2,
-                 raise_on_low_coverage: bool = False) -> None:
+    def __init__(
+        self,
+        marker_style: str = "plain",
+        criterion: str = "gini",
+        splitter: str = "best",
+        max_depth: Union[int, None] = None,
+        min_samples_split: int = 2,
+        min_samples_leaf: int = 1,
+        max_features: Union[str, int, float, None] = None,
+        class_weight: Union[dict, list, str, None] = None,
+        random_state: int = 42,
+        categorical: bool = True,
+        min_coverage_warn: float = 0.2,
+        raise_on_low_coverage: bool = False,
+    ) -> None:
         try:
             from sklearn.model_selection import train_test_split  # noqa
-            from sklearn.pipeline import Pipeline                 # noqa
-            from sklearn.metrics import accuracy_score, classification_report, confusion_matrix  # noqa
-            from sklearn.tree import DecisionTreeClassifier       # noqa
+            from sklearn.pipeline import Pipeline  # noqa
+            from sklearn.tree import DecisionTreeClassifier  # noqa
         except ModuleNotFoundError as e:
             print(f"❌ Missing required module: {e.name}")
             print("➡️  Please install scikit-learn using: pip install scikit-learn")
@@ -3586,7 +3722,7 @@ class DT(MLearn):
             marker_style=marker_style,
             categorical=categorical,
             min_coverage_warn=min_coverage_warn,
-            raise_on_low_coverage=raise_on_low_coverage
+            raise_on_low_coverage=raise_on_low_coverage,
         )
 
         self.criterion = criterion
@@ -3601,12 +3737,14 @@ class DT(MLearn):
     # ------------------------------------------------------------------
     # Training
     # ------------------------------------------------------------------
-    def train(self,
-              X: np.ndarray,
-              y: np.ndarray,
-              feature_titles: List[str] | None = None,
-              test_size: float = 0.2,
-              drop_singletons: bool = True) -> "DT":
+    def train(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        feature_titles: List[str] | None = None,
+        test_size: float = 0.2,
+        drop_singletons: bool = True,
+    ) -> "DT":
         """
         Dispatching train method.
 
@@ -3638,7 +3776,11 @@ class DT(MLearn):
             from sklearn.compose import ColumnTransformer
             from sklearn.preprocessing import OneHotEncoder
             from sklearn.tree import DecisionTreeClassifier
-            from sklearn.metrics import accuracy_score, classification_report, confusion_matrix as _cm
+            from sklearn.metrics import (
+                accuracy_score,
+                classification_report,
+                confusion_matrix as _cm,
+            )
             from sklearn.pipeline import Pipeline as _P
         except ModuleNotFoundError as e:
             print(f"❌ Missing required module: {e.name}")
@@ -3684,7 +3826,6 @@ class DT(MLearn):
         # --- DataFrame of RAW symbols, with ""/nd/nan normalized to "" ---
         X_df = self._prepare_X_df(X_use, self.feature_titles)
 
-
         # --- Collect unique values per marker (no duplicates) ---
         # X_df is already normalized ("" / nd / nan -> ""), so we take it as ground truth.
         self.feature_values = {
@@ -3697,18 +3838,20 @@ class DT(MLearn):
             X_df.values, y_use, test_size, self.random_state
         )
         X_train_df = pd.DataFrame(X_train_arr, columns=self.feature_titles).astype(str)
-        X_test_df  = pd.DataFrame(X_test_arr,  columns=self.feature_titles).astype(str)
+        X_test_df = pd.DataFrame(X_test_arr, columns=self.feature_titles).astype(str)
 
         # --- Preprocessor: OneHotEncode all marker columns if categorical=True ---
         if self.categorical:
             pre = ColumnTransformer(
                 transformers=[
-                    ("cat",
-                     OneHotEncoder(handle_unknown="ignore", dtype=np.float64),
-                     self.feature_titles)
+                    (
+                        "cat",
+                        OneHotEncoder(handle_unknown="ignore", dtype=np.float64),
+                        self.feature_titles,
+                    )
                 ],
                 remainder="drop",
-                verbose_feature_names_out=False
+                verbose_feature_names_out=False,
             )
         else:
             pre = "passthrough"
@@ -3722,7 +3865,7 @@ class DT(MLearn):
             min_samples_leaf=self.min_samples_leaf,
             max_features=self.max_features,
             class_weight=self.class_weight,
-            random_state=self.random_state
+            random_state=self.random_state,
         )
 
         # --- Build pipeline: [preprocessor] -> DT ---
@@ -3746,19 +3889,21 @@ class DT(MLearn):
         self.training_metrics = {
             "accuracy": float(acc),
             "classification_report": report,
-            "confusion_matrix": cm.tolist()
+            "confusion_matrix": cm.tolist(),
         }
         return self
 
     # ==================================================
     # COMBINED (ONE-HOT 'marker=value') MARKER STYLE TRAIN
     # ==================================================
-    def train_combined(self,
-                       X: np.ndarray,
-                       y: np.ndarray,
-                       feature_titles: List[str] | None = None,
-                       test_size: float = 0.2,
-                       drop_singletons: bool = True) -> "DT":
+    def train_combined(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        feature_titles: List[str] | None = None,
+        test_size: float = 0.2,
+        drop_singletons: bool = True,
+    ) -> "DT":
         """
         Train a Decision Tree in 'combined' (one-hot) marker style.
 
@@ -3773,7 +3918,11 @@ class DT(MLearn):
 
         try:
             from sklearn.tree import DecisionTreeClassifier
-            from sklearn.metrics import accuracy_score, classification_report, confusion_matrix as _cm
+            from sklearn.metrics import (
+                accuracy_score,
+                classification_report,
+                confusion_matrix as _cm,
+            )
             from sklearn.pipeline import Pipeline as _P
         except ModuleNotFoundError as e:
             print(f"❌ Missing required module: {e.name}")
@@ -3810,7 +3959,6 @@ class DT(MLearn):
         # as X is assumed to be numeric one-hot already.
         X_df = pd.DataFrame(X_use, columns=self.feature_titles)
 
-
         # --- Collect unique values per marker from one-hot representation ---
         feature_values: dict[str, list[str]] = {}
 
@@ -3828,14 +3976,16 @@ class DT(MLearn):
             feature_values.setdefault(marker, []).append(str(value))
 
         # Deduplicate + sort
-        self.feature_values = {m: sorted(set(vals)) for m, vals in feature_values.items()}
+        self.feature_values = {
+            m: sorted(set(vals)) for m, vals in feature_values.items()
+        }
 
         # --- Safe train/test split ---
         X_train_arr, X_test_arr, y_train, y_test = _safe_split(
             X_df.values, y_use, test_size, self.random_state
         )
         X_train_df = pd.DataFrame(X_train_arr, columns=self.feature_titles)
-        X_test_df  = pd.DataFrame(X_test_arr,  columns=self.feature_titles)
+        X_test_df = pd.DataFrame(X_test_arr, columns=self.feature_titles)
 
         # --- No extra preprocessing: data is already encoded ---
         pre = "passthrough"
@@ -3849,7 +3999,7 @@ class DT(MLearn):
             min_samples_leaf=self.min_samples_leaf,
             max_features=self.max_features,
             class_weight=self.class_weight,
-            random_state=self.random_state
+            random_state=self.random_state,
         )
 
         # --- Build pipeline: [passthrough] -> DT ---
@@ -3873,9 +4023,10 @@ class DT(MLearn):
         self.training_metrics = {
             "accuracy": float(acc),
             "classification_report": report,
-            "confusion_matrix": cm.tolist()
+            "confusion_matrix": cm.tolist(),
         }
         return self
+
 
 ########################################################################
 class DeltaNonlinLin(MLearn):
@@ -3893,7 +4044,7 @@ class DeltaNonlinLin(MLearn):
 
     def __init__(
         self,
-        marker_style: str = "plain",    # 'plain' markers or 'combined' one-hot
+        marker_style: str = "plain",  # 'plain' markers or 'combined' one-hot
         # Non-linear (RF) hyperparameters
         n_estimators: int = 300,
         max_depth: Union[int, None] = None,
@@ -3918,8 +4069,7 @@ class DeltaNonlinLin(MLearn):
         try:
             # ensure sklearn is present
             from sklearn.model_selection import train_test_split  # noqa
-            from sklearn.pipeline import Pipeline                 # noqa
-            from sklearn.metrics import accuracy_score, classification_report, confusion_matrix  # noqa
+            from sklearn.pipeline import Pipeline  # noqa
         except ModuleNotFoundError as e:
             print(f"❌ Missing required module: {e.name}")
             print("➡️  Please install scikit-learn using: pip install scikit-learn")
@@ -3937,22 +4087,22 @@ class DeltaNonlinLin(MLearn):
         )
 
         # RF params
-        self.n_estimators    = int(n_estimators)
-        self.max_depth       = max_depth
-        self.max_features    = max_features
+        self.n_estimators = int(n_estimators)
+        self.max_depth = max_depth
+        self.max_features = max_features
         self.min_samples_split = int(min_samples_split)
-        self.min_samples_leaf  = int(min_samples_leaf)
-        self.bootstrap       = bool(bootstrap)
+        self.min_samples_leaf = int(min_samples_leaf)
+        self.bootstrap = bool(bootstrap)
         self.rf_class_weight = rf_class_weight
-        self.random_state    = random_state
-        self.n_jobs          = n_jobs
+        self.random_state = random_state
+        self.n_jobs = n_jobs
 
         # LR params
-        self.C              = float(C)
-        self.penalty        = penalty
-        self.solver         = solver
+        self.C = float(C)
+        self.penalty = penalty
+        self.solver = solver
         self.lr_class_weight = lr_class_weight
-        self.lr_max_iter    = int(max_iter)
+        self.lr_max_iter = int(max_iter)
 
         # store linear baseline pipeline separately (optional)
         self.baseline_pipeline_: Any | None = None
@@ -4014,7 +4164,11 @@ class DeltaNonlinLin(MLearn):
         from sklearn.preprocessing import OneHotEncoder
         from sklearn.ensemble import RandomForestClassifier
         from sklearn.linear_model import LogisticRegression
-        from sklearn.metrics import accuracy_score, classification_report, confusion_matrix as _cm
+        from sklearn.metrics import (
+            accuracy_score,
+            classification_report,
+            confusion_matrix as _cm,
+        )
         from sklearn.pipeline import Pipeline as _P
 
         # --- Validate feature name length ---
@@ -4053,7 +4207,6 @@ class DeltaNonlinLin(MLearn):
         # --- DataFrame of normalized symbols ---
         X_df = self._prepare_X_df(X_use, self.feature_titles)
 
-
         # --- Collect unique values per marker (no duplicates) ---
         # X_df is already normalized ("" / nd / nan -> ""), so we take it as ground truth.
         self.feature_values = {
@@ -4066,7 +4219,7 @@ class DeltaNonlinLin(MLearn):
             X_df.values, y_use, test_size, self.random_state
         )
         X_train_df = pd.DataFrame(X_train_arr, columns=self.feature_titles).astype(str)
-        X_test_df  = pd.DataFrame(X_test_arr,  columns=self.feature_titles).astype(str)
+        X_test_df = pd.DataFrame(X_test_arr, columns=self.feature_titles).astype(str)
 
         # --- Preprocessor (shared by both models) ---
         if self.categorical:
@@ -4179,7 +4332,11 @@ class DeltaNonlinLin(MLearn):
         """
         from sklearn.ensemble import RandomForestClassifier
         from sklearn.linear_model import LogisticRegression
-        from sklearn.metrics import accuracy_score, classification_report, confusion_matrix as _cm
+        from sklearn.metrics import (
+            accuracy_score,
+            classification_report,
+            confusion_matrix as _cm,
+        )
         from sklearn.pipeline import Pipeline as _P
 
         # --- Validate feature name length ---
@@ -4206,7 +4363,6 @@ class DeltaNonlinLin(MLearn):
         # --- DataFrame of encoded features (numeric one-hot) ---
         X_df = pd.DataFrame(X_use, columns=self.feature_titles)
 
-
         # --- Collect unique values per marker from one-hot representation ---
         feature_values: dict[str, list[str]] = {}
 
@@ -4224,14 +4380,16 @@ class DeltaNonlinLin(MLearn):
             feature_values.setdefault(marker, []).append(str(value))
 
         # Deduplicate + sort
-        self.feature_values = {m: sorted(set(vals)) for m, vals in feature_values.items()}
+        self.feature_values = {
+            m: sorted(set(vals)) for m, vals in feature_values.items()
+        }
 
         # --- Safe train/test split ---
         X_train_arr, X_test_arr, y_train, y_test = _safe_split(
             X_df.values, y_use, test_size, self.random_state
         )
         X_train_df = pd.DataFrame(X_train_arr, columns=self.feature_titles)
-        X_test_df  = pd.DataFrame(X_test_arr,  columns=self.feature_titles)
+        X_test_df = pd.DataFrame(X_test_arr, columns=self.feature_titles)
 
         # No extra preprocessing: data is already encoded
         pre = "passthrough"
@@ -4304,23 +4462,29 @@ class DeltaNonlinLin(MLearn):
         }
         return self
 
+
 ###############################################################################
 # Simple test for loading an existing model (as in your original __main__)
 ###############################################################################
 if __name__ == "__main__":
+
     def load_model(model_path: str):
         """Load a trained model (.pkl) using joblib/pickle from model_folder/model_name"""
         if not os.path.isfile(model_path):
             sys.exit(f"🛑 Error: Model file not found: {model_path}")
         try:
             import joblib
+
             model = joblib.load(model_path)
         except Exception:
             import pickle
+
             with open(model_path, "rb") as fh:
                 model = pickle.load(fh)
         return model
 
-    model_path = os.path.join("..", "applications", "yp_classifier_by_genotype", "db", "yp_genotyping.pkl")
+    model_path = os.path.join(
+        "..", "applications", "yp_classifier_by_genotype", "db", "yp_genotyping.pkl"
+    )
     model = load_model(model_path)
     print(getattr(model, "feature_titles", None))

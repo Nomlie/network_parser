@@ -6,7 +6,7 @@ NetworkParser user-facing query engine
 
 Purpose
 -------
-Apply a trained two-level NetworkParser model registry to new strain/sample
+Apply a trained hierarchical NetworkParser model registry to new strain/sample
 input and produce a user-facing prediction report.
 
 The query engine is inference-only:
@@ -19,7 +19,7 @@ training, or bootstrap confidence. Those are training/discovery-time operations.
 
 Expected trained input
 ----------------------
-A two-level model registry produced by ``two_level_protocol.py`` with:
+A hierarchical model registry produced by ``hierarchy_protocol.py`` with:
 
     level1.model_file
     level1.features
@@ -50,7 +50,7 @@ import threading
 from collections import defaultdict
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
 import pandas as pd
@@ -71,7 +71,16 @@ try:
         should_run_parallel,
     )
     from network_parser.fastq_processor import FastqProcessor
-except Exception:  # pragma: no cover - supports direct source-tree execution
+    from network_parser.matrix_contract import (
+        FittedMissingnessState,
+        transform_with_missingness_state,
+    )
+    from network_parser.vcf_call_semantics import (
+        CallState,
+        VcfQCConfig,
+        callability_gate_result,
+    )
+except ImportError:  # pragma: no cover - supports direct source-tree execution
     from config import NetworkParserConfig  # type: ignore
     from data_loader import DataLoader  # type: ignore
     from sequence_query_encoder import (  # type: ignore
@@ -86,6 +95,15 @@ except Exception:  # pragma: no cover - supports direct source-tree execution
         should_run_parallel,
     )
     from fastq_processor import FastqProcessor  # type: ignore
+    from matrix_contract import (  # type: ignore
+        FittedMissingnessState,
+        transform_with_missingness_state,
+    )
+    from vcf_call_semantics import (  # type: ignore
+        CallState,
+        VcfQCConfig,
+        callability_gate_result,
+    )
 
 
 logger = logging.getLogger(__name__)
@@ -94,6 +112,7 @@ logger = logging.getLogger(__name__)
 # -----------------------------------------------------------------------------
 # General utilities
 # -----------------------------------------------------------------------------
+
 
 def ensure_dir(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
@@ -111,7 +130,7 @@ def json_default(obj: Any) -> Any:
         return obj.tolist()
     if isinstance(obj, pd.DataFrame):
         return obj.to_dict(orient="records")
-    if is_dataclass(obj):
+    if is_dataclass(obj) and not isinstance(obj, type):
         return asdict(obj)
     if isinstance(obj, Path):
         return str(obj)
@@ -176,15 +195,23 @@ def load_pickle(path: Path) -> Any:
 
     try:
         import joblib
-        return joblib.load(path)
+
+        loaded = joblib.load(path)
     except Exception:
         with open(path, "rb") as handle:
-            return pickle.load(handle)
+            loaded = pickle.load(handle)
+    try:
+        from network_parser.model_bundle import _patch_sklearn_estimator_compat
+
+        return _patch_sklearn_estimator_compat(loaded)
+    except Exception:
+        return loaded
 
 
 # -----------------------------------------------------------------------------
 # Matrix loading and feature alignment
 # -----------------------------------------------------------------------------
+
 
 def load_query_matrix(
     genomic_path: str,
@@ -207,19 +234,22 @@ def load_query_matrix(
     query_config.min_minor_count = 0
     query_config.matrices_min_count = 0
 
-    loader = DataLoader(config=query_config, n_jobs=n_jobs if n_jobs is not None else getattr(query_config, "n_jobs", -1))
+    loader = DataLoader(
+        config=query_config,
+        n_jobs=n_jobs if n_jobs is not None else getattr(query_config, "n_jobs", -1),
+    )
     X = loader.load_genomic_matrix(
         file_path=genomic_path,
         output_dir=str(output_dir / "query_matrix_artifacts"),
         ref_fasta=ref_fasta,
     )
     if not isinstance(X, pd.DataFrame):
-        raise TypeError("DataLoader.load_genomic_matrix did not return a pandas DataFrame.")
+        raise TypeError(
+            "DataLoader.load_genomic_matrix did not return a pandas DataFrame."
+        )
     X = X.copy()
     X.index = X.index.astype(str).map(normalize_sample_id)
     return X
-
-
 
 
 def is_hierarchical_registry(registry: Dict[str, Any]) -> bool:
@@ -279,7 +309,7 @@ def _collect_manifest_candidates_from_hierarchy_node(
 
 
 def collect_required_features_from_registry(registry: Dict[str, Any]) -> List[str]:
-    """Collect the union of every feature required by two-level or hierarchy models."""
+    """Collect the union of every feature required by hierarchy models."""
     ordered: List[str] = []
     seen: set = set()
 
@@ -293,9 +323,13 @@ def collect_required_features_from_registry(registry: Dict[str, Any]) -> List[st
     _add_unique_features(ordered, seen, level1.get("features", []))
 
     level2 = registry.get("level2", {}) if isinstance(registry, dict) else {}
-    global_payload = level2.get("global_fallback", {}) if isinstance(level2, dict) else {}
+    global_payload = (
+        level2.get("global_fallback", {}) if isinstance(level2, dict) else {}
+    )
     _add_unique_features(ordered, seen, global_payload.get("features", []))
-    global_binary_payload = level2.get("global_binary_fallback", {}) if isinstance(level2, dict) else {}
+    global_binary_payload = (
+        level2.get("global_binary_fallback", {}) if isinstance(level2, dict) else {}
+    )
     _add_unique_features(ordered, seen, global_binary_payload.get("features", []))
 
     by_group = level2.get("by_level1_group", {}) if isinstance(level2, dict) else {}
@@ -307,10 +341,14 @@ def collect_required_features_from_registry(registry: Dict[str, Any]) -> List[st
     return ordered
 
 
-def resolve_registry_feature_manifest(registry: Dict[str, Any], registry_base: Path) -> Optional[Path]:
+def resolve_registry_feature_manifest(
+    registry: Dict[str, Any], registry_base: Path
+) -> Optional[Path]:
     """Resolve the all-feature manifest saved during training."""
     candidates: List[Optional[str]] = []
-    training_matrix = registry.get("training_matrix", {}) if isinstance(registry, dict) else {}
+    training_matrix = (
+        registry.get("training_matrix", {}) if isinstance(registry, dict) else {}
+    )
     candidates.append(training_matrix.get("feature_manifest_file"))
 
     if is_hierarchical_registry(registry):
@@ -324,13 +362,25 @@ def resolve_registry_feature_manifest(registry: Dict[str, Any], registry_base: P
         candidates.append(l1_manifest.get("manifest_file"))
 
     level2 = registry.get("level2", {}) if isinstance(registry, dict) else {}
-    global_payload = level2.get("global_fallback", {}) if isinstance(level2, dict) else {}
-    g_manifest = global_payload.get("feature_manifest", {}) if isinstance(global_payload, dict) else {}
+    global_payload = (
+        level2.get("global_fallback", {}) if isinstance(level2, dict) else {}
+    )
+    g_manifest = (
+        global_payload.get("feature_manifest", {})
+        if isinstance(global_payload, dict)
+        else {}
+    )
     if isinstance(g_manifest, dict):
         candidates.append(g_manifest.get("manifest_file"))
 
-    global_binary_payload = level2.get("global_binary_fallback", {}) if isinstance(level2, dict) else {}
-    gb_manifest = global_binary_payload.get("feature_manifest", {}) if isinstance(global_binary_payload, dict) else {}
+    global_binary_payload = (
+        level2.get("global_binary_fallback", {}) if isinstance(level2, dict) else {}
+    )
+    gb_manifest = (
+        global_binary_payload.get("feature_manifest", {})
+        if isinstance(global_binary_payload, dict)
+        else {}
+    )
     if isinstance(gb_manifest, dict):
         candidates.append(gb_manifest.get("manifest_file"))
 
@@ -350,7 +400,9 @@ def resolve_registry_feature_manifest(registry: Dict[str, Any], registry_base: P
     return None
 
 
-def feature_call_metadata_by_sample(calls: Optional[pd.DataFrame]) -> Dict[str, Dict[str, Dict[str, Any]]]:
+def feature_call_metadata_by_sample(
+    calls: Optional[pd.DataFrame],
+) -> Dict[str, Dict[str, Dict[str, Any]]]:
     if calls is None or calls.empty:
         return {}
     if "sample_id" not in calls.columns or "feature_id" not in calls.columns:
@@ -364,17 +416,20 @@ def feature_call_metadata_by_sample(calls: Optional[pd.DataFrame]) -> Dict[str, 
         out.setdefault(sample_id, {})[feature_id] = row.to_dict()
     return out
 
+
 def align_to_training_features(
     X_new: pd.DataFrame,
     features: Sequence[str],
+    *,
+    fill_missing_as_zero: bool = False,
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """
     Align new samples to a saved trained feature list.
 
-    Missing trained features are filled with 0. Extra query features are ignored.
-    This keeps query-time inference consistent with the training-time feature space,
-    but the alignment summary records missing-feature burden so reports can flag
-    low-coverage query inputs.
+    By default, features absent from the query matrix are filled with NaN
+    (not ordinary zero biological evidence). Set ``fill_missing_as_zero=True``
+    only for explicit legacy compatibility; this is audited in the summary.
+    Existing NaN cells (non-callable genotypes) are preserved.
     """
     requested = [str(f) for f in features]
 
@@ -388,61 +443,91 @@ def align_to_training_features(
     missing = [f for f in requested if f not in X.columns]
     extra = [f for f in X.columns if f not in requested_set]
 
+    fill_value = 0.0 if fill_missing_as_zero else float("nan")
     if missing:
-        fill_block = pd.DataFrame(0, index=X.index, columns=missing)
+        fill_block = pd.DataFrame(fill_value, index=X.index, columns=missing)
         X = pd.concat([X, fill_block], axis=1)
 
     X_aligned = X.loc[:, requested].copy()
-    X_aligned = X_aligned.apply(pd.to_numeric, errors="coerce").fillna(0)
+    X_aligned = X_aligned.apply(pd.to_numeric, errors="coerce")
+    if fill_missing_as_zero:
+        # Only fill structural absence; do not invent values for already-NaN cells
+        # that represent non-callable genotypes from the encoder.
+        for col in missing:
+            X_aligned[col] = X_aligned[col].fillna(0.0)
 
     missing_fraction = float(len(missing) / max(1, len(requested)))
+    noncallable_fraction = (
+        float(X_aligned.isna().to_numpy().mean()) if X_aligned.size else 0.0
+    )
 
-    if missing_fraction == 0:
+    if missing_fraction == 0 and noncallable_fraction == 0:
         alignment_status = "complete"
         warning = None
-    elif missing_fraction < 0.5:
+    elif missing_fraction < 0.5 and noncallable_fraction < 0.5:
         alignment_status = "partial"
         warning = (
-            "Some trained features were missing from the query input and were filled as 0. "
+            "Some trained features were missing or non-callable in the query input. "
+            "They are encoded as NaN (not biological zero) unless fill_missing_as_zero=True. "
             "Interpret prediction support with caution."
         )
     else:
         alignment_status = "low_feature_coverage"
         warning = (
-            "Many trained features were missing from the query input and were filled as 0. "
-            "This may indicate a feature-space mismatch between training and query data."
+            "Many trained features were missing or non-callable in the query input. "
+            "Prediction may abstain or be marked review/unresolved under callability gates."
         )
 
     summary = {
         "requested_training_features": int(len(requested)),
         "features_present_in_query": int(len(requested) - len(missing)),
-        "missing_training_features_filled_as_zero": int(len(missing)),
+        "missing_training_features": int(len(missing)),
+        "missing_training_features_filled_as_zero": int(len(missing))
+        if fill_missing_as_zero
+        else 0,
+        "missing_training_features_filled_as_nan": int(len(missing))
+        if not fill_missing_as_zero
+        else 0,
         "missing_training_feature_fraction": missing_fraction,
+        "noncallable_cell_fraction": noncallable_fraction,
+        "fill_missing_as_zero": bool(fill_missing_as_zero),
         "extra_query_features_ignored": int(len(extra)),
         "alignment_status": alignment_status,
         "warning": warning,
         "missing_feature_names": missing,
     }
 
+    if fill_missing_as_zero and missing:
+        logger.warning(
+            "LEGACY ALIGNMENT: %d missing trained features filled as 0 "
+            "(fill_missing_as_zero=True). Prefer NaN + callability gates.",
+            len(missing),
+        )
+
     if warning:
         logger.warning(warning)
 
-    if missing_fraction > 0.3:
+    if missing_fraction > 0.3 or noncallable_fraction > 0.3:
         logger.warning(
-            "High missing-feature fraction (%.2f). "
-            "Check that query input uses the same reference/contig naming as training.",
+            "High missing/non-callable feature fraction (missing=%.2f, noncallable=%.2f). "
+            "Check callability (gVCF/depth) and reference/contig naming.",
             missing_fraction,
+            noncallable_fraction,
         )
 
     return X_aligned, summary
+
 
 # -----------------------------------------------------------------------------
 # Model prediction helpers
 # -----------------------------------------------------------------------------
 
-def unpack_model_payload(payload: Any) -> Tuple[Any, Optional[Any], Optional[List[str]]]:
+
+def unpack_model_payload(
+    payload: Any,
+) -> Tuple[Any, Optional[Any], Optional[List[str]]]:
     """
-    Support the fallback payload written by two_level_protocol.py and plain
+    Support the fallback payload written by hierarchy_protocol.py and plain
     sklearn-like model objects.
     """
     if isinstance(payload, dict) and "model" in payload:
@@ -451,6 +536,138 @@ def unpack_model_payload(payload: Any) -> Tuple[Any, Optional[Any], Optional[Lis
         features = payload.get("features")
         return model, label_encoder, list(features) if features is not None else None
     return payload, None, None
+
+
+def _missingness_state_from_payload(payload: Any) -> Optional[FittedMissingnessState]:
+    """Return the train-fitted matrix preprocessor embedded with a model."""
+    model, _, _ = unpack_model_payload(payload)
+    raw_state: Any = None
+    if isinstance(payload, dict):
+        raw_state = payload.get("missingness_state") or payload.get(
+            "preprocessing_state"
+        )
+    if raw_state is None:
+        raw_state = getattr(model, "networkparser_missingness_state", None)
+    if isinstance(raw_state, FittedMissingnessState):
+        return raw_state
+    if isinstance(raw_state, dict) and raw_state:
+        return FittedMissingnessState.from_dict(raw_state)
+    return None
+
+
+def build_query_callability_gates(
+    X_raw: pd.DataFrame,
+    features: Sequence[str],
+    *,
+    config: Any,
+    feature_metadata_by_sample: Optional[Dict[str, Dict[str, Dict[str, Any]]]] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """Calculate per-sample recovery/callability before any prediction.
+
+    Matrix columns establish coordinate/feature recovery. Per-call metadata, when
+    available, distinguishes filtered, missing-GT, unresolved and absent states.
+    Numeric non-missing matrix cells are callable evidence. This function always
+    delegates the final decision to the shared VCF callability policy.
+    """
+    requested = [str(feature) for feature in features]
+    qc = VcfQCConfig.from_config(config)
+    metadata = feature_metadata_by_sample or {}
+    raw_columns = set(map(str, X_raw.columns))
+    gates: Dict[str, Dict[str, Any]] = {}
+
+    for raw_sample_id, row in X_raw.iterrows():
+        sample_id = normalize_sample_id(str(raw_sample_id))
+        sample_meta = metadata.get(sample_id, {})
+        states: List[CallState] = []
+        n_assumed_reference = 0
+        for feature in requested:
+            meta = sample_meta.get(feature, {}) if isinstance(sample_meta, dict) else {}
+            raw_state = str(meta.get("call_state", "")).strip()
+            try:
+                state = CallState(raw_state) if raw_state else None
+            except ValueError:
+                state = CallState.UNRESOLVED_OR_AMBIGUOUS
+
+            if state is None:
+                if feature not in raw_columns:
+                    state = CallState.LOCUS_NOT_PRESENT
+                else:
+                    value = row.get(feature, float("nan"))
+                    state = (
+                        CallState.MISSING_OR_NO_CALL
+                        if pd.isna(value)
+                        else (
+                            CallState.CALLED_ALTERNATE
+                            if float(value) == 1.0
+                            else CallState.CALLED_REFERENCE
+                        )
+                    )
+            if bool(meta.get("assumed_reference", False)):
+                n_assumed_reference += 1
+            states.append(state)
+
+        gate = callability_gate_result(
+            states,
+            qc=qc,
+            n_assumed_reference=n_assumed_reference,
+        )
+        state_counts = {state.value: 0 for state in CallState}
+        for state in states:
+            state_counts[state.value] += 1
+        reasons: List[str] = []
+        if not requested:
+            reasons.append("empty_required_feature_list")
+        if float(gate.get("feature_recovery_fraction", 0.0)) < float(
+            gate.get("min_feature_recovery_fraction", 0.0)
+        ):
+            reasons.append("feature_recovery_below_threshold")
+        if float(gate.get("callable_fraction", 0.0)) < float(
+            gate.get("min_callable_fraction", 0.0)
+        ):
+            reasons.append("callable_fraction_below_threshold")
+        if int(gate.get("n_callable", 0)) == 0:
+            reasons.append("no_callable_required_features")
+        gate.update(
+            {
+                "sample_id": sample_id,
+                "n_required_features": int(len(requested)),
+                "call_state_counts": state_counts,
+                "abstention_reason_codes": reasons,
+            }
+        )
+        if not requested or int(gate.get("n_callable", 0)) == 0:
+            gate.update(
+                {
+                    "gate_passed": False,
+                    "gate_status": (
+                        "empty_required_feature_list_abstain"
+                        if not requested
+                        else "no_callable_required_features_abstain"
+                    ),
+                    "prediction_action": "abstain_review_unresolved",
+                }
+            )
+        gates[sample_id] = gate
+    return gates
+
+
+def _prepare_query_matrix_for_payload(payload: Any, X: pd.DataFrame) -> pd.DataFrame:
+    """Apply only the preprocessor fitted with the deployment model."""
+    state = _missingness_state_from_payload(payload)
+    if state is None:
+        if X.isna().any().any():
+            raise ValueError(
+                "Query contains non-callable required markers but the model has no "
+                "train-fitted missingness/preprocessing state."
+            )
+        return X.apply(pd.to_numeric, errors="coerce")
+    transformed, _ = transform_with_missingness_state(
+        X,
+        state,
+        apply_imputation=True,
+        drop_high_missing_samples=False,
+    )
+    return transformed
 
 
 def _marker_value_for_identify(value: Any) -> str:
@@ -485,9 +702,14 @@ def _marker_value_for_identify(value: Any) -> str:
 def predict_labels_and_support(
     payload: Any,
     X: pd.DataFrame,
+    *,
+    gate_results: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Tuple[List[str], List[Optional[float]], List[Dict[str, float]]]:
     """
-    Predict labels plus probability-like support.
+    Predict labels plus model support scores.
+
+    ``predict_proba`` outputs are reported as uncalibrated model support,
+    not as probability confidence.
 
     Supports:
       - sklearn-like models with predict()/predict_proba()
@@ -496,27 +718,59 @@ def predict_labels_and_support(
     """
     model, label_encoder, _ = unpack_model_payload(payload)
 
-    labels: List[str] = []
-    max_support: List[Optional[float]] = []
-    class_support: List[Dict[str, float]] = []
+    sample_ids = [normalize_sample_id(str(value)) for value in X.index]
+    predict_positions: List[int] = []
+    for position, sample_id in enumerate(sample_ids):
+        gate = (gate_results or {}).get(sample_id)
+        if gate is None or gate.get("prediction_action") == "predict":
+            predict_positions.append(position)
+
+    labels: List[str] = ["unavailable" for _ in sample_ids]
+    max_support: List[Optional[float]] = [None for _ in sample_ids]
+    class_support: List[Dict[str, float]] = [{} for _ in sample_ids]
+    if not predict_positions:
+        return labels, max_support, class_support
+
+    X_predict = X.iloc[predict_positions].copy()
+    try:
+        X_model = _prepare_query_matrix_for_payload(payload, X_predict)
+    except Exception as exc:
+        for position in predict_positions:
+            sample_id = sample_ids[position]
+            if gate_results is not None:
+                gate = gate_results.setdefault(sample_id, {})
+                gate.update(
+                    {
+                        "gate_passed": False,
+                        "gate_status": "missing_preprocessing_state_abstain",
+                        "prediction_action": "abstain_review_unresolved",
+                    }
+                )
+                reasons = list(gate.get("abstention_reason_codes") or [])
+                if "missing_train_fitted_preprocessing_state" not in reasons:
+                    reasons.append("missing_train_fitted_preprocessing_state")
+                gate["abstention_reason_codes"] = reasons
+                gate["preprocessing_error"] = str(exc)
+        return labels, max_support, class_support
 
     if hasattr(model, "predict"):
-        raw_pred = model.predict(X)
+        raw_pred = model.predict(X_model)
 
         if label_encoder is not None:
             try:
-                labels = [str(v) for v in label_encoder.inverse_transform(raw_pred)]
+                predicted_labels = [
+                    str(v) for v in label_encoder.inverse_transform(raw_pred)
+                ]
             except Exception:
-                labels = [str(v) for v in raw_pred]
+                predicted_labels = [str(v) for v in raw_pred]
         else:
-            labels = [str(v) for v in raw_pred]
-
-        max_support = [None for _ in labels]
-        class_support = [{} for _ in labels]
+            predicted_labels = [str(v) for v in raw_pred]
+        for position, label in zip(predict_positions, predicted_labels):
+            labels[position] = label
 
         if hasattr(model, "predict_proba"):
             try:
-                proba = np.asarray(model.predict_proba(X), dtype=float)
+                proba = np.asarray(model.predict_proba(X_model), dtype=float)
 
                 if label_encoder is not None and hasattr(label_encoder, "classes_"):
                     classes = [str(c) for c in label_encoder.classes_]
@@ -525,14 +779,17 @@ def predict_labels_and_support(
                 else:
                     classes = [str(i) for i in range(proba.shape[1])]
 
-                max_support = [float(np.max(row)) for row in proba]
-                class_support = [
+                predicted_support = [float(np.max(row)) for row in proba]
+                predicted_class_support = [
                     {
                         classes[i]: float(row[i])
                         for i in range(min(len(classes), len(row)))
                     }
                     for row in proba
                 ]
+                for local, position in enumerate(predict_positions):
+                    max_support[position] = predicted_support[local]
+                    class_support[position] = predicted_class_support[local]
 
             except Exception as exc:
                 logger.warning(
@@ -543,26 +800,31 @@ def predict_labels_and_support(
         return labels, max_support, class_support
 
     if hasattr(model, "identify"):
-        for _, row in X.iterrows():
+        for local_position, (_, row) in enumerate(X_model.iterrows()):
             marker_dict = {
                 str(col): _marker_value_for_identify(value)
                 for col, value in row.items()
             }
 
             result = model.identify(marker_dict)
-            pred_list = result.get("predictions", []) if isinstance(result, dict) else []
+            pred_list = (
+                result.get("predictions", []) if isinstance(result, dict) else []
+            )
 
             if not pred_list:
-                labels.append("unavailable")
-                max_support.append(None)
-                class_support.append({})
                 continue
 
             first = pred_list[0]
 
             if isinstance(first, dict):
-                label = first.get("label") or first.get("class") or first.get("prediction")
-                prob = first.get("probability") or first.get("support") or first.get("score")
+                label = (
+                    first.get("label") or first.get("class") or first.get("prediction")
+                )
+                prob = (
+                    first.get("probability")
+                    or first.get("support")
+                    or first.get("score")
+                )
             elif isinstance(first, (tuple, list)):
                 label = first[0] if len(first) >= 1 else "unavailable"
                 prob = first[1] if len(first) >= 2 else None
@@ -570,14 +832,19 @@ def predict_labels_and_support(
                 label = first
                 prob = None
 
-            labels.append(str(label))
+            position = predict_positions[local_position]
+            labels[position] = str(label)
 
             try:
-                max_support.append(float(prob) if prob is not None else None)
+                max_support[position] = float(prob) if prob is not None else None
             except Exception:
-                max_support.append(None)
+                max_support[position] = None
 
-            class_support.append({str(label): max_support[-1]} if max_support[-1] is not None else {})
+            class_support[position] = (
+                {str(label): max_support[position]}
+                if max_support[position] is not None
+                else {}
+            )
 
         return labels, max_support, class_support
 
@@ -586,9 +853,15 @@ def predict_labels_and_support(
     )
 
 
-def read_ranked_feature_table(filter_summary: Dict[str, Any], registry_base: Path) -> Optional[pd.DataFrame]:
-    artifacts = filter_summary.get("artifacts", {}) if isinstance(filter_summary, dict) else {}
-    table_path = artifacts.get("rf_fdr_results_csv") or artifacts.get("feature_results_csv")
+def read_ranked_feature_table(
+    filter_summary: Dict[str, Any], registry_base: Path
+) -> Optional[pd.DataFrame]:
+    artifacts = (
+        filter_summary.get("artifacts", {}) if isinstance(filter_summary, dict) else {}
+    )
+    table_path = artifacts.get("rf_fdr_results_csv") or artifacts.get(
+        "feature_results_csv"
+    )
     resolved = resolve_path(table_path, registry_base)
     if resolved is None or not resolved.exists():
         return None
@@ -602,16 +875,18 @@ def read_ranked_feature_table(filter_summary: Dict[str, Any], registry_base: Pat
         return None
 
 
-def extract_model_importance(payload: Any, features: Sequence[str]) -> Optional[pd.DataFrame]:
+def extract_model_importance(
+    payload: Any, features: Sequence[str]
+) -> Optional[pd.DataFrame]:
     model, _, _ = unpack_model_payload(payload)
     if not hasattr(model, "feature_importances_"):
         return None
     values = np.asarray(getattr(model, "feature_importances_"), dtype=float)
     if values.shape[0] != len(features):
         return None
-    return pd.DataFrame({"feature": list(features), "model_importance": values}).sort_values(
-        "model_importance", ascending=False
-    )
+    return pd.DataFrame(
+        {"feature": list(features), "model_importance": values}
+    ).sort_values("model_importance", ascending=False)
 
 
 RESOLVED_ALLELE_CALLS = {"baseline_match", "alt_match", "known_nonbaseline_match"}
@@ -623,11 +898,19 @@ UNRESOLVED_ALLELE_CALLS = {
     "not_called_multi_hit_context",
     "non_training_allele",
 }
-SUPPORTING_EVIDENCE_ROLES = {
+# Roles allowed as *resolved query states* in evidence tables.
+# Globally important zero-valued inputs are NOT automatic support for the
+# predicted class unless they appear on the model decision path / signed
+# contribution list (see prediction_explanation helpers).
+RESOLVED_EVIDENCE_ROLES = {
     "resolved_nonbaseline_state",
     "resolved_baseline_state",
     "resolved_trained_zero_state",
     "aligned_matrix_state",
+}
+# Markers that can support a non-baseline predicted class claim
+SUPPORTING_EVIDENCE_ROLES = {
+    "resolved_nonbaseline_state",
 }
 
 
@@ -654,7 +937,11 @@ def _feature_evidence_role(
     if allele_call in BASELINE_ALLELE_CALLS:
         return "resolved_baseline_state"
     if allele_call in RESOLVED_ALLELE_CALLS:
-        return "resolved_trained_zero_state" if numeric_value == 0.0 else "resolved_nonbaseline_state"
+        return (
+            "resolved_trained_zero_state"
+            if numeric_value == 0.0
+            else "resolved_nonbaseline_state"
+        )
     if allele_call in UNRESOLVED_ALLELE_CALLS or mapping_status:
         return "unresolved_zero_fill"
 
@@ -662,13 +949,174 @@ def _feature_evidence_role(
     # feature that came from the user-supplied matrix is an aligned matrix state;
     # a feature absent from the matrix and injected by alignment is a zero-fill.
     if available_features is not None:
-        return "aligned_matrix_state" if feature_id in available_features else "unresolved_zero_fill"
+        return (
+            "aligned_matrix_state"
+            if feature_id in available_features
+            else "unresolved_zero_fill"
+        )
 
     return "aligned_matrix_state"
 
 
 def _is_supporting_marker_role(role: str) -> bool:
+    """True only for non-baseline resolved states (not global zeros)."""
     return str(role) in SUPPORTING_EVIDENCE_ROLES
+
+
+def _is_resolved_marker_role(role: str) -> bool:
+    return str(role) in RESOLVED_EVIDENCE_ROLES
+
+
+def decision_tree_path_for_sample(
+    model: Any,
+    sample_values: pd.Series,
+    feature_names: Sequence[str],
+) -> Optional[Dict[str, Any]]:
+    """Return the actual decision path for a tree model (not global importance)."""
+    try:
+        from sklearn.tree import DecisionTreeClassifier
+    except Exception:
+        return None
+    if not isinstance(model, DecisionTreeClassifier):
+        return None
+    feats = [str(f) for f in feature_names]
+    x = np.asarray(
+        [_safe_float(sample_values.get(f)) or 0.0 for f in feats], dtype=float
+    ).reshape(1, -1)
+    try:
+        node_indicator = model.decision_path(x)
+        node_index = node_indicator.indices[
+            node_indicator.indptr[0] : node_indicator.indptr[1]
+        ]
+        tree_ = model.tree_
+        steps: List[Dict[str, Any]] = []
+        for node_id in node_index:
+            feat_idx = int(tree_.feature[node_id])
+            if feat_idx < 0:
+                steps.append({"node": int(node_id), "is_leaf": True})
+                continue
+            thr = float(tree_.threshold[node_id])
+            fname = feats[feat_idx] if feat_idx < len(feats) else str(feat_idx)
+            val = float(x[0, feat_idx])
+            steps.append(
+                {
+                    "node": int(node_id),
+                    "feature": fname,
+                    "threshold": thr,
+                    "sample_value": val,
+                    "direction": "left" if val <= thr else "right",
+                    "is_leaf": False,
+                }
+            )
+        return {
+            "explanation_type": "decision_tree_path",
+            "path": steps,
+            "path_features": [s["feature"] for s in steps if s.get("feature")],
+            "note": "Actual tree decision path for this sample; not global feature importance.",
+        }
+    except Exception as exc:
+        logger.debug("decision_tree_path_for_sample failed: %s", exc)
+        return None
+
+
+def logistic_signed_contributions(
+    model: Any,
+    sample_values: pd.Series,
+    feature_names: Sequence[str],
+    predicted_label: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Class-specific signed linear contributions for logistic regression."""
+    coef = getattr(model, "coef_", None)
+    intercept = getattr(model, "intercept_", None)
+    classes = getattr(model, "classes_", None)
+    if coef is None:
+        return None
+    feats = [str(f) for f in feature_names]
+    x = np.asarray(
+        [_safe_float(sample_values.get(f)) or 0.0 for f in feats], dtype=float
+    )
+    coef = np.asarray(coef, dtype=float)
+    if coef.ndim == 1:
+        coef = coef.reshape(1, -1)
+    if coef.shape[1] != len(feats):
+        return None
+    class_idx = 0
+    if classes is not None and predicted_label is not None:
+        try:
+            class_idx = list(map(str, classes)).index(str(predicted_label))
+        except ValueError:
+            class_idx = 0
+        if coef.shape[0] == 1 and len(list(classes)) == 2:
+            # binary: coef is for classes_[1]
+            class_idx = 0
+    row = coef[min(class_idx, coef.shape[0] - 1)]
+    contribs: List[Dict[str, Any]] = []
+    for i, f in enumerate(feats):
+        c = float(row[i] * x[i])
+        if abs(c) > 0 or abs(float(row[i])) > 0:
+            contribs.append(
+                {
+                    "feature": f,
+                    "value": float(x[i]),
+                    "coefficient": float(row[i]),
+                    "signed_contribution": c,
+                    "supports_predicted_class": bool(c > 0 and x[i] != 0),
+                }
+            )
+    contribs.sort(key=lambda d: abs(d["signed_contribution"]), reverse=True)
+    inter = (
+        float(
+            np.asarray(intercept).ravel()[
+                min(class_idx, len(np.asarray(intercept).ravel()) - 1)
+            ]
+        )
+        if intercept is not None
+        else 0.0
+    )
+    return {
+        "explanation_type": "logistic_signed_contributions",
+        "predicted_label": predicted_label,
+        "intercept": inter,
+        "contributions": contribs,
+        "note": (
+            "Class-specific signed contributions (coef * value). "
+            "Zero-valued inputs contribute 0 and are not class-support markers."
+        ),
+    }
+
+
+def prediction_explanation_for_sample(
+    model: Any,
+    sample_values: pd.Series,
+    feature_names: Sequence[str],
+    predicted_label: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Model-appropriate local explanation (path / signed contrib / resolved inputs)."""
+    payload = unpack_model_payload(model)[0] if not hasattr(model, "predict") else model
+    # Prefer tree path
+    path = decision_tree_path_for_sample(payload, sample_values, feature_names)
+    if path is not None:
+        return path
+    lr = logistic_signed_contributions(
+        payload, sample_values, feature_names, predicted_label
+    )
+    if lr is not None:
+        return lr
+    # Generic: resolved model inputs only (not importance-ranked zeros as support)
+    resolved = []
+    for f in feature_names:
+        v = _safe_float(sample_values.get(f))
+        if v is None:
+            continue
+        resolved.append({"feature": str(f), "value": float(v)})
+    return {
+        "explanation_type": "resolved_model_inputs",
+        "inputs": resolved,
+        "note": (
+            "Model type has no decision-path or signed-coefficient explanation; "
+            "listing resolved input values only. Not probability confidence."
+        ),
+    }
 
 
 def supporting_markers_for_sample(
@@ -678,17 +1126,39 @@ def supporting_markers_for_sample(
     max_markers: int = 10,
     feature_metadata: Optional[Dict[str, Dict[str, Any]]] = None,
     available_features: Optional[set] = None,
+    *,
+    prefer_nonbaseline_support: bool = True,
+    model: Any = None,
+    predicted_label: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
-    Return top trained-marker evidence for a sample.
+    Return top marker evidence for a sample.
 
-    This intentionally includes resolved baseline 0 states. A baseline 0 is a
-    valid trained marker state when the query feature was genuinely resolved.
-    Unresolved, ambiguous, repeated, or non-training allele zero-fills are kept
-    out of the supporting-marker list and reported through evidence summaries.
+    Global importance alone does **not** mark a zero-valued feature as supporting
+    the predicted class. Prefer:
+      - non-baseline resolved states, and/or
+      - features on the decision path / with positive signed contribution.
+    Unresolved zero-fills are excluded.
     """
     feature_metadata = feature_metadata or {}
-    available_features = {str(f) for f in available_features} if available_features is not None else None
+    available_features = (
+        {str(f) for f in available_features} if available_features is not None else None
+    )
+
+    path_features: Set[str] = set()
+    positive_contrib: Set[str] = set()
+    if model is not None:
+        expl = prediction_explanation_for_sample(
+            model, sample_values, list(map(str, sample_values.index)), predicted_label
+        )
+        if expl.get("explanation_type") == "decision_tree_path":
+            path_features = {str(f) for f in expl.get("path_features", [])}
+        if expl.get("explanation_type") == "logistic_signed_contributions":
+            positive_contrib = {
+                str(c["feature"])
+                for c in expl.get("contributions", [])
+                if c.get("supports_predicted_class")
+            }
 
     def _attach_metadata(record: Dict[str, Any]) -> Dict[str, Any]:
         feature_id = str(record.get("feature", ""))
@@ -726,10 +1196,27 @@ def supporting_markers_for_sample(
             available_features=available_features,
         )
         record["evidence_role"] = role
-        record["supports_trained_marker_pattern"] = bool(_is_supporting_marker_role(role))
+        on_path = feature_id in path_features
+        pos_c = feature_id in positive_contrib
+        val = float(record.get("value", 0) or 0)
+        # Support for predicted class: non-baseline resolved OR path/contrib with non-zero value
+        supports_class = bool(
+            _is_supporting_marker_role(role)
+            or (on_path and val != 0.0 and _is_resolved_marker_role(role))
+            or pos_c
+        )
+        record["on_decision_path"] = on_path
+        record["positive_signed_contribution"] = pos_c
+        record["supports_trained_marker_pattern"] = bool(_is_resolved_marker_role(role))
+        record["supports_predicted_class"] = supports_class
+        # Do not present global importance zeros as class support
+        if prefer_nonbaseline_support and val == 0.0 and not on_path and not pos_c:
+            record["supports_predicted_class"] = False
         return record
 
-    def _candidate_record(feature: Any, extra: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    def _candidate_record(
+        feature: Any, extra: Optional[Dict[str, Any]] = None
+    ) -> Optional[Dict[str, Any]]:
         feature_id = str(feature)
         if feature_id not in sample_values.index:
             return None
@@ -807,7 +1294,9 @@ def _safe_float(value: Any) -> Optional[float]:
         return None
 
 
-def _status_from_unique_fraction(unique_fraction: Optional[float], has_mapping_metadata: bool) -> Tuple[str, str]:
+def _status_from_unique_fraction(
+    unique_fraction: Optional[float], has_mapping_metadata: bool
+) -> Tuple[str, str]:
     """Classify whether a model-specific selected feature set was mapped in the query."""
     if not has_mapping_metadata:
         return (
@@ -835,7 +1324,9 @@ def _status_from_unique_fraction(unique_fraction: Optional[float], has_mapping_m
     )
 
 
-def _status_from_active_fraction(active_fraction: float, active_count: int) -> Tuple[str, str]:
+def _status_from_active_fraction(
+    active_fraction: float, active_count: int
+) -> Tuple[str, str]:
     """Classify non-baseline evidence for a model-specific selected feature set."""
     if active_count >= 10 or active_fraction >= 0.01:
         return (
@@ -905,10 +1396,15 @@ def summarize_feature_evidence_for_model(
     """
     requested = [str(f) for f in features or []]
     feature_metadata = feature_metadata or {}
-    available_features = {str(f) for f in available_features} if available_features is not None else None
+    available_features = (
+        {str(f) for f in available_features} if available_features is not None else None
+    )
 
-    values = pd.to_numeric(sample_values.reindex(requested).fillna(0), errors="coerce").fillna(0)
-    active_features = [str(f) for f, value in values.items() if float(value) != 0.0]
+    # Do not coerce missing/non-callable (NaN) to baseline 0 for evidence counts.
+    values = pd.to_numeric(sample_values.reindex(requested), errors="coerce")
+    active_features = [
+        str(f) for f, value in values.items() if pd.notna(value) and float(value) != 0.0
+    ]
     n_features = int(len(requested))
     n_active = int(len(active_features))
     active_fraction = float(n_active / max(1, n_features))
@@ -916,17 +1412,33 @@ def summarize_feature_evidence_for_model(
     has_mapping_metadata = any(str(f) in feature_metadata for f in requested)
     metadata_rows = [feature_metadata.get(str(f), {}) for f in requested]
 
-    mapping_status_values = [str(m.get("mapping_status", "")) for m in metadata_rows if m]
+    mapping_status_values = [
+        str(m.get("mapping_status", "")) for m in metadata_rows if m
+    ]
     allele_call_values = [str(m.get("allele_call", "")) for m in metadata_rows if m]
 
-    mapping_status_counts = {
-        str(k): int(v)
-        for k, v in pd.Series(mapping_status_values, dtype="object").value_counts(dropna=False).to_dict().items()
-    } if mapping_status_values else {}
-    allele_call_counts = {
-        str(k): int(v)
-        for k, v in pd.Series(allele_call_values, dtype="object").value_counts(dropna=False).to_dict().items()
-    } if allele_call_values else {}
+    mapping_status_counts = (
+        {
+            str(k): int(v)
+            for k, v in pd.Series(mapping_status_values, dtype="object")
+            .value_counts(dropna=False)
+            .to_dict()
+            .items()
+        }
+        if mapping_status_values
+        else {}
+    )
+    allele_call_counts = (
+        {
+            str(k): int(v)
+            for k, v in pd.Series(allele_call_values, dtype="object")
+            .value_counts(dropna=False)
+            .to_dict()
+            .items()
+        }
+        if allele_call_values
+        else {}
+    )
 
     evidence_role_counts: Dict[str, int] = {}
     resolved_features: List[str] = []
@@ -943,7 +1455,11 @@ def summarize_feature_evidence_for_model(
             available_features=available_features,
         )
         evidence_role_counts[role] = evidence_role_counts.get(role, 0) + 1
-        if role in {"resolved_baseline_state", "resolved_nonbaseline_state", "resolved_trained_zero_state"}:
+        if role in {
+            "resolved_baseline_state",
+            "resolved_nonbaseline_state",
+            "resolved_trained_zero_state",
+        }:
             resolved_features.append(feature)
         elif role == "aligned_matrix_state" and not has_mapping_metadata:
             # For matrix-only queries, present matrix states are the best
@@ -957,11 +1473,14 @@ def summarize_feature_evidence_for_model(
         if role == "resolved_nonbaseline_state":
             resolved_nonbaseline_features.append(feature)
 
-    unique_mapped = int(sum(1 for status in mapping_status_values if status == "mapped_unique_context"))
+    unique_mapped = int(
+        sum(1 for status in mapping_status_values if status == "mapped_unique_context")
+    )
     mapped_or_reported = int(len(mapping_status_values))
     unique_fraction = (
         float(unique_mapped / max(1, mapped_or_reported))
-        if has_mapping_metadata else None
+        if has_mapping_metadata
+        else None
     )
 
     n_resolved = int(len(resolved_features))
@@ -971,8 +1490,12 @@ def summarize_feature_evidence_for_model(
     resolved_baseline_fraction = float(n_resolved_baseline / max(1, n_features))
     resolved_nonbaseline_fraction = float(n_resolved_nonbaseline / max(1, n_features))
 
-    recovery_status, recovery_reason = _status_from_unique_fraction(unique_fraction, has_mapping_metadata)
-    active_status, active_reason = _status_from_active_fraction(active_fraction, n_active)
+    recovery_status, recovery_reason = _status_from_unique_fraction(
+        unique_fraction, has_mapping_metadata
+    )
+    active_status, active_reason = _status_from_active_fraction(
+        active_fraction, n_active
+    )
     resolved_status, resolved_reason = _status_from_resolved_fraction(
         resolved_fraction=resolved_fraction,
         resolved_count=n_resolved,
@@ -989,15 +1512,21 @@ def summarize_feature_evidence_for_model(
     )
     n_non_training = int(
         allele_call_counts.get("non_training_allele", 0)
-        + sum(v for k, v in mapping_status_counts.items() if "non_training_allele" in str(k))
+        + sum(
+            v
+            for k, v in mapping_status_counts.items()
+            if "non_training_allele" in str(k)
+        )
     )
     n_unresolved_or_missing = int(
         allele_call_counts.get("not_called", 0)
-        + sum(v for k, v in mapping_status_counts.items() if "missing_context" in str(k) or "unresolved_context" in str(k))
+        + sum(
+            v
+            for k, v in mapping_status_counts.items()
+            if "missing_context" in str(k) or "unresolved_context" in str(k)
+        )
     )
-    n_zero_fill_caution = int(
-        evidence_role_counts.get("unresolved_zero_fill", 0)
-    )
+    n_zero_fill_caution = int(evidence_role_counts.get("unresolved_zero_fill", 0))
 
     return {
         "n_selected_features": n_features,
@@ -1027,7 +1556,9 @@ def summarize_feature_evidence_for_model(
         "allele_call_counts": allele_call_counts,
         "n_baseline_match_calls": int(allele_call_counts.get("baseline_match", 0)),
         "n_alt_match_calls": int(allele_call_counts.get("alt_match", 0)),
-        "n_known_nonbaseline_match_calls": int(allele_call_counts.get("known_nonbaseline_match", 0)),
+        "n_known_nonbaseline_match_calls": int(
+            allele_call_counts.get("known_nonbaseline_match", 0)
+        ),
         "n_unresolved_or_missing_calls": n_unresolved_or_missing,
         "n_multi_hit_calls": n_multi_hit,
         "n_ambiguous_base_calls": n_ambiguous,
@@ -1053,7 +1584,9 @@ def low_support_review_fields(
     if not candidate or candidate.lower() in {
         "unavailable",
         "low_support_review_required",
-        str(getattr(config, "low_support_review_label", "low_support_review_required")).lower(),
+        str(
+            getattr(config, "low_support_review_label", "low_support_review_required")
+        ).lower(),
     }:
         return prediction, {}
 
@@ -1065,7 +1598,11 @@ def low_support_review_fields(
         return prediction, {}
 
     train_count = int(class_info.get("training_sample_count", 0))
-    train_min = int(block.get("min_class_count_for_training", getattr(config, "level2_min_class_count", 2)))
+    train_min = int(
+        block.get(
+            "min_class_count_for_training", getattr(config, "level2_min_class_count", 2)
+        )
+    )
     review_min = int(
         block.get(
             "min_class_count_for_confident_reporting",
@@ -1115,15 +1652,15 @@ def low_support_review_fields(
         f"{prefix}_recommended_action": action,
         f"{prefix}_training_sample_count_for_candidate": train_count,
         f"{prefix}_interpretation_confidence": "low_support_review_required",
-        f"{prefix}_confidence_note": (
-            f"{reason} {action}"
-        ).strip(),
+        f"{prefix}_confidence_note": (f"{reason} {action}").strip(),
     }
 
 
 def resolve_amr_evidence_guard_label_columns(config: NetworkParserConfig) -> List[str]:
     """Return metadata label columns that should receive AMR evidence guarding."""
-    configured = str(getattr(config, "amr_evidence_guard_label_columns", "") or "").strip()
+    configured = str(
+        getattr(config, "amr_evidence_guard_label_columns", "") or ""
+    ).strip()
     if configured:
         return [part.strip() for part in configured.split(",") if part.strip()]
     binary_col = str(getattr(config, "level2_binary_label_column", "") or "").strip()
@@ -1140,11 +1677,18 @@ def amr_branch_evidence_is_weak(
     """Detect when a branch AMR model lacks enough resolved marker evidence."""
     resolved_fraction = float(evidence.get("resolved_feature_fraction", 0.0) or 0.0)
     resolved_count = int(evidence.get("n_resolved_features", 0) or 0)
-    resolved_status = str(evidence.get("resolved_marker_evidence_status", "") or "").strip().lower()
-    min_fraction = float(getattr(config, "amr_weak_evidence_min_resolved_fraction", 0.15))
+    resolved_status = (
+        str(evidence.get("resolved_marker_evidence_status", "") or "").strip().lower()
+    )
+    min_fraction = float(
+        getattr(config, "amr_weak_evidence_min_resolved_fraction", 0.15)
+    )
 
     if resolved_count <= 0:
-        return True, "no resolved trained-marker states were available for the branch AMR model."
+        return (
+            True,
+            "no resolved trained-marker states were available for the branch AMR model.",
+        )
     if resolved_status == "low_resolved_marker_evidence":
         return (
             True,
@@ -1170,13 +1714,23 @@ def amr_weak_evidence_review_fields(
     prefix: str,
     escalation_source: Optional[str] = None,
 ) -> Tuple[str, Dict[str, Any]]:
-    """Replace weak-evidence susceptible AMR calls with a review-required endpoint."""
+    """
+    Guard weak-evidence susceptible AMR calls.
+
+    Default mode (``amr_weak_evidence_mode='warn'``): keep the model class so
+    TP/FP/TN/FN tables stay clean, and attach warning / reason fields.
+
+    Legacy mode (``amr_weak_evidence_mode='block'``): replace the reported
+    prediction with ``amr_weak_evidence_review_label`` (review/abstention token).
+    """
     if not bool(getattr(config, "amr_weak_evidence_review_enabled", True)):
         return prediction, {}
 
     candidate = str(prediction or "").strip()
     review_label = str(
-        getattr(config, "amr_weak_evidence_review_label", "amr_evidence_review_required")
+        getattr(
+            config, "amr_weak_evidence_review_label", "amr_evidence_review_required"
+        )
     )
     if (
         not candidate
@@ -1185,7 +1739,9 @@ def amr_weak_evidence_review_fields(
     ):
         return prediction, {}
 
-    guard_columns = {col.lower() for col in resolve_amr_evidence_guard_label_columns(config)}
+    guard_columns = {
+        col.lower() for col in resolve_amr_evidence_guard_label_columns(config)
+    }
     if str(label_column).strip().lower() not in guard_columns:
         return prediction, {}
 
@@ -1204,22 +1760,41 @@ def amr_weak_evidence_review_fields(
             ),
         )
     )
-    reason = (
-        f"Candidate susceptible call for '{label_column}' was blocked because {weak_reason}"
-    )
+    mode = str(getattr(config, "amr_weak_evidence_mode", "warn") or "warn").strip().lower()
+    if mode not in {"warn", "block"}:
+        mode = "warn"
+
+    if mode == "block":
+        reason = (
+            f"Candidate susceptible call for '{label_column}' was blocked because {weak_reason}"
+        )
+        status = "amr_evidence_review_required"
+        reported = review_label
+        confidence = "amr_evidence_review_required"
+    else:
+        # warn: keep phenotype class for evaluation; flag weak evidence alongside.
+        reason = (
+            f"Susceptible call for '{label_column}' retained for classification, "
+            f"but marker evidence is weak because {weak_reason}"
+        )
+        status = "amr_weak_evidence_warning"
+        reported = candidate
+        confidence = "amr_weak_evidence_warning"
+
     if escalation_source:
         reason = (
             f"{reason} A terminal AMR fallback model ({escalation_source}) was also checked "
             "but did not provide a confident resistant override."
         )
 
-    return review_label, {
-        f"predicted_{prefix}": review_label,
+    return reported, {
+        f"predicted_{prefix}": reported,
         f"{prefix}_candidate_prediction": candidate,
-        f"{prefix}_prediction_status": "amr_evidence_review_required",
+        f"{prefix}_prediction_status": status,
         f"{prefix}_amr_evidence_reason": reason,
         f"{prefix}_recommended_action": action,
-        f"{prefix}_interpretation_confidence": "amr_evidence_review_required",
+        f"{prefix}_amr_weak_evidence_mode": mode,
+        f"{prefix}_interpretation_confidence": confidence,
         f"{prefix}_confidence_note": f"{reason} {action}".strip(),
     }
 
@@ -1230,58 +1805,76 @@ def interpretation_confidence_for_level(
     evidence: Dict[str, Any],
     n_supporting_markers: int,
 ) -> Tuple[str, str]:
-    """Combine model support and resolved trained-marker evidence into a cautious label."""
+    """
+    Combine uncalibrated model support and resolved marker evidence into a
+    cautious qualitative label.
+
+    Labels retain the historical ``*_confidence`` token for compatibility but
+    are **not** calibrated probabilities.
+    """
     support_value = _safe_float(support)
     active_count = int(evidence.get("n_active_features", 0) or 0)
     resolved_count = int(evidence.get("n_resolved_features", 0) or 0)
     resolved_fraction = float(evidence.get("resolved_feature_fraction", 0.0) or 0.0)
     recovery_status = str(evidence.get("marker_recovery_status", ""))
     resolved_status = str(evidence.get("resolved_marker_evidence_status", ""))
+    disclaimer = " Uncalibrated model support, not probability confidence."
 
     if recovery_status == "low_marker_recovery" and resolved_count == 0:
         return (
             "low_confidence",
-            "Prediction generated, but too few model-specific selected markers were resolved in the query input.",
+            "Prediction generated, but too few model-specific selected markers were resolved in the query input."
+            + disclaimer,
         )
 
     if resolved_count == 0:
         return (
             "low_confidence",
-            "Prediction generated, but this model received no confirmed resolved trained-marker states for this sample.",
+            "Prediction generated, but this model received no confirmed resolved trained-marker states for this sample."
+            + disclaimer,
         )
 
     if support_value is None:
         return (
             "evidence_available_support_unavailable",
-            "Resolved trained-marker pattern evidence is present, but probability-like support was unavailable from the model.",
+            "Resolved trained-marker pattern evidence is present, but uncalibrated model support was unavailable.",
         )
 
     if support_value >= 0.70 and n_supporting_markers > 0 and resolved_fraction >= 0.50:
         if active_count == 0:
             return (
                 "high_confidence_baseline_pattern",
-                "Prediction has strong model support and many resolved trained markers, mostly as baseline states encoded as 0.",
+                "Strong uncalibrated model support with many resolved trained markers (mostly baseline states)."
+                + disclaimer,
             )
         return (
             "high_confidence",
-            "Prediction has strong model support and resolved model-specific trained-marker evidence.",
+            "Strong uncalibrated model support and resolved non-baseline marker evidence."
+            + disclaimer,
         )
 
     if support_value >= 0.50 and (n_supporting_markers > 0 or resolved_count > 0):
         return (
             "moderate_confidence",
-            "Prediction has some model support and a resolved trained-marker pattern, but should still be interpreted cautiously.",
+            "Some uncalibrated model support and resolved markers; interpret cautiously."
+            + disclaimer,
         )
 
-    if resolved_status in {"resolved_marker_evidence_present", "partial_resolved_marker_evidence", "aligned_matrix_evidence_present"}:
+    if resolved_status in {
+        "resolved_marker_evidence_present",
+        "partial_resolved_marker_evidence",
+        "aligned_matrix_evidence_present",
+    }:
         return (
             "low_to_moderate_confidence",
-            "Resolved trained-marker evidence is available, but model support is weak.",
+            "Resolved trained-marker evidence is available, but uncalibrated model support is weak."
+            + disclaimer,
         )
 
     return (
         "low_confidence",
-        "Prediction has weak probability-like support despite available marker evidence.",
+        "Weak uncalibrated model support despite available marker evidence."
+        + disclaimer,
     )
 
 
@@ -1291,46 +1884,97 @@ def flatten_feature_evidence(prefix: str, evidence: Dict[str, Any]) -> Dict[str,
         f"{prefix}_n_selected_features": evidence.get("n_selected_features"),
         f"{prefix}_n_active_features": evidence.get("n_active_features"),
         f"{prefix}_active_feature_fraction": evidence.get("active_feature_fraction"),
-        f"{prefix}_nonbaseline_evidence_status": evidence.get("nonbaseline_evidence_status"),
-        f"{prefix}_nonbaseline_evidence_reason": evidence.get("nonbaseline_evidence_reason"),
+        f"{prefix}_nonbaseline_evidence_status": evidence.get(
+            "nonbaseline_evidence_status"
+        ),
+        f"{prefix}_nonbaseline_evidence_reason": evidence.get(
+            "nonbaseline_evidence_reason"
+        ),
         f"{prefix}_n_resolved_features": evidence.get("n_resolved_features"),
-        f"{prefix}_resolved_feature_fraction": evidence.get("resolved_feature_fraction"),
-        f"{prefix}_n_resolved_baseline_features": evidence.get("n_resolved_baseline_features"),
-        f"{prefix}_resolved_baseline_feature_fraction": evidence.get("resolved_baseline_feature_fraction"),
-        f"{prefix}_n_resolved_nonbaseline_features": evidence.get("n_resolved_nonbaseline_features"),
-        f"{prefix}_resolved_nonbaseline_feature_fraction": evidence.get("resolved_nonbaseline_feature_fraction"),
-        f"{prefix}_resolved_marker_evidence_status": evidence.get("resolved_marker_evidence_status"),
-        f"{prefix}_resolved_marker_evidence_reason": evidence.get("resolved_marker_evidence_reason"),
+        f"{prefix}_resolved_feature_fraction": evidence.get(
+            "resolved_feature_fraction"
+        ),
+        f"{prefix}_n_resolved_baseline_features": evidence.get(
+            "n_resolved_baseline_features"
+        ),
+        f"{prefix}_resolved_baseline_feature_fraction": evidence.get(
+            "resolved_baseline_feature_fraction"
+        ),
+        f"{prefix}_n_resolved_nonbaseline_features": evidence.get(
+            "n_resolved_nonbaseline_features"
+        ),
+        f"{prefix}_resolved_nonbaseline_feature_fraction": evidence.get(
+            "resolved_nonbaseline_feature_fraction"
+        ),
+        f"{prefix}_resolved_marker_evidence_status": evidence.get(
+            "resolved_marker_evidence_status"
+        ),
+        f"{prefix}_resolved_marker_evidence_reason": evidence.get(
+            "resolved_marker_evidence_reason"
+        ),
         f"{prefix}_n_unique_mapped_features": evidence.get("n_unique_mapped_features"),
         f"{prefix}_unique_mapped_fraction": evidence.get("unique_mapped_fraction"),
         f"{prefix}_marker_recovery_status": evidence.get("marker_recovery_status"),
         f"{prefix}_marker_recovery_reason": evidence.get("marker_recovery_reason"),
-        f"{prefix}_active_marker_evidence_status": evidence.get("active_marker_evidence_status"),
-        f"{prefix}_active_marker_evidence_reason": evidence.get("active_marker_evidence_reason"),
+        f"{prefix}_active_marker_evidence_status": evidence.get(
+            "active_marker_evidence_status"
+        ),
+        f"{prefix}_active_marker_evidence_reason": evidence.get(
+            "active_marker_evidence_reason"
+        ),
         f"{prefix}_n_baseline_match_calls": evidence.get("n_baseline_match_calls"),
         f"{prefix}_n_alt_match_calls": evidence.get("n_alt_match_calls"),
-        f"{prefix}_n_known_nonbaseline_match_calls": evidence.get("n_known_nonbaseline_match_calls"),
-        f"{prefix}_n_unresolved_or_missing_calls": evidence.get("n_unresolved_or_missing_calls"),
+        f"{prefix}_n_known_nonbaseline_match_calls": evidence.get(
+            "n_known_nonbaseline_match_calls"
+        ),
+        f"{prefix}_n_unresolved_or_missing_calls": evidence.get(
+            "n_unresolved_or_missing_calls"
+        ),
         f"{prefix}_n_multi_hit_calls": evidence.get("n_multi_hit_calls"),
         f"{prefix}_n_ambiguous_base_calls": evidence.get("n_ambiguous_base_calls"),
-        f"{prefix}_n_non_training_allele_calls": evidence.get("n_non_training_allele_calls"),
-        f"{prefix}_n_zero_fill_caution_features": evidence.get("n_zero_fill_caution_features"),
+        f"{prefix}_n_non_training_allele_calls": evidence.get(
+            "n_non_training_allele_calls"
+        ),
+        f"{prefix}_n_zero_fill_caution_features": evidence.get(
+            "n_zero_fill_caution_features"
+        ),
     }
 
 
-def decision_tree_path_explanation(payload: Any, X: pd.DataFrame) -> Dict[str, List[str]]:
+def decision_tree_path_explanation(
+    payload: Any,
+    X: pd.DataFrame,
+    gate_results: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> Dict[str, List[str]]:
     """
     Best-effort explanation for sklearn decision-tree-like models.
     If unavailable, returns empty paths. This does not train a tree.
     """
+    all_ids = [str(idx) for idx in X.index]
+    eligible_ids = [
+        sample_id
+        for sample_id in all_ids
+        if gate_results is None
+        or (gate_results.get(sample_id) or {}).get("prediction_action") == "predict"
+    ]
+    paths: Dict[str, List[str]] = {sample_id: [] for sample_id in all_ids}
+    if not eligible_ids:
+        return paths
+
     model, _, features_from_payload = unpack_model_payload(payload)
     if not hasattr(model, "tree_"):
-        return {str(idx): [] for idx in X.index}
+        return paths
 
-    feature_names = features_from_payload if features_from_payload is not None else list(X.columns)
+    try:
+        X = _prepare_query_matrix_for_payload(payload, X.loc[eligible_ids])
+    except ValueError:
+        # A failed callability/preprocessing gate has no valid model path.
+        return paths
+
+    feature_names = (
+        features_from_payload if features_from_payload is not None else list(X.columns)
+    )
     tree = model.tree_
-    paths: Dict[str, List[str]] = {}
-
     for sample_id, row in X.iterrows():
         node_id = 0
         rules: List[str] = []
@@ -1338,7 +1982,11 @@ def decision_tree_path_explanation(payload: Any, X: pd.DataFrame) -> Dict[str, L
         while tree.children_left[node_id] != tree.children_right[node_id]:
             feature_idx = int(tree.feature[node_id])
             threshold = float(tree.threshold[node_id])
-            feature_name = str(feature_names[feature_idx]) if feature_idx < len(feature_names) else f"feature_{feature_idx}"
+            feature_name = (
+                str(feature_names[feature_idx])
+                if feature_idx < len(feature_names)
+                else f"feature_{feature_idx}"
+            )
             value = float(values[feature_idx])
             if value <= threshold:
                 rules.append(f"{feature_name} <= {threshold:.6g}")
@@ -1354,29 +2002,43 @@ def decision_tree_path_explanation(payload: Any, X: pd.DataFrame) -> Dict[str, L
 # Query engine
 # -----------------------------------------------------------------------------
 
+
 class NetworkParserQueryEngine:
-    """Apply saved two-level NetworkParser models to new samples."""
+    """Apply saved hierarchical NetworkParser models to new samples."""
 
     def _resolve_label_training_support_policy(self) -> Dict[str, Any]:
         """Load saved label-support policy or rebuild it from aligned training labels."""
-        policy = self.registry.get("label_training_support_policy", {}) if isinstance(self.registry, dict) else {}
+        policy = (
+            self.registry.get("label_training_support_policy", {})
+            if isinstance(self.registry, dict)
+            else {}
+        )
         if isinstance(policy, dict) and policy.get("per_label"):
             return policy
 
         try:
-            from network_parser.two_level_protocol import build_label_training_support_policy
-        except Exception:  # pragma: no cover - supports direct source-tree execution
-            from two_level_protocol import build_label_training_support_policy  # type: ignore
+            from network_parser.hierarchy_protocol import (
+                build_label_training_support_policy,
+            )
+        except ImportError:  # pragma: no cover - supports direct source-tree execution
+            try:
+                from hierarchy_protocol import build_label_training_support_policy  # type: ignore
+            except Exception:
+                from two_level_protocol import build_label_training_support_policy  # type: ignore
 
         training_matrix = (
-            self.registry.get("training_matrix", {}) if isinstance(self.registry, dict) else {}
+            self.registry.get("training_matrix", {})
+            if isinstance(self.registry, dict)
+            else {}
         )
         labels_csv = (
             training_matrix.get("aligned_labels_csv")
             or training_matrix.get("aligned_hierarchy_labels_csv")
             or training_matrix.get("aligned_two_level_labels_csv")
         )
-        labels_path = resolve_path(labels_csv, self.registry_base) if labels_csv else None
+        labels_path = (
+            resolve_path(labels_csv, self.registry_base) if labels_csv else None
+        )
         if labels_path is None or not labels_path.exists():
             return {}
 
@@ -1385,17 +2047,33 @@ class NetworkParserQueryEngine:
             labels_df = labels_df.set_index("sample_id")
 
         label_columns: List[str] = []
-        hierarchy = self.registry.get("hierarchy", {}) if isinstance(self.registry, dict) else {}
+        hierarchy = (
+            self.registry.get("hierarchy", {})
+            if isinstance(self.registry, dict)
+            else {}
+        )
         if isinstance(hierarchy, dict) and hierarchy.get("label_columns"):
             label_columns = [str(x) for x in hierarchy.get("label_columns", [])]
         else:
-            level1 = self.registry.get("level1", {}) if isinstance(self.registry, dict) else {}
-            level2 = self.registry.get("level2", {}) if isinstance(self.registry, dict) else {}
+            level1 = (
+                self.registry.get("level1", {})
+                if isinstance(self.registry, dict)
+                else {}
+            )
+            level2 = (
+                self.registry.get("level2", {})
+                if isinstance(self.registry, dict)
+                else {}
+            )
             level1_label = (
-                str(level1.get("label_column", "")).strip() if isinstance(level1, dict) else ""
+                str(level1.get("label_column", "")).strip()
+                if isinstance(level1, dict)
+                else ""
             )
             level2_label = (
-                str(level2.get("label_column", "")).strip() if isinstance(level2, dict) else ""
+                str(level2.get("label_column", "")).strip()
+                if isinstance(level2, dict)
+                else ""
             )
             rename_map: Dict[str, str] = {}
             if level1_label and "level1_label" in labels_df.columns:
@@ -1462,7 +2140,9 @@ class NetworkParserQueryEngine:
             "recommended_action": review_fields.get(f"{prefix}_recommended_action"),
         }
         if f"{prefix}_interpretation_confidence" in review_fields:
-            step_fields["interpretation_confidence"] = review_fields[f"{prefix}_interpretation_confidence"]
+            step_fields["interpretation_confidence"] = review_fields[
+                f"{prefix}_interpretation_confidence"
+            ]
         if f"{prefix}_confidence_note" in review_fields:
             step_fields["confidence_note"] = review_fields[f"{prefix}_confidence_note"]
         return final_pred, candidate, review_fields, step_fields
@@ -1481,10 +2161,22 @@ class NetworkParserQueryEngine:
         node_key: str,
     ) -> Dict[str, Any]:
         """Run one saved terminal-fallback model without mutating hierarchy steps."""
-        features, payload, ranked, importance = self._load_hierarchy_node_payload(fallback_payload)
+        features, payload, ranked, importance = self._load_hierarchy_node_payload(
+            fallback_payload
+        )
         X_node, alignment = align_to_training_features(X_raw.loc[[sample_id]], features)
+        node_gates = self._gates_for_features(
+            X_raw=X_raw.loc[[sample_id]],
+            features=features,
+            feature_metadata_by_sample={sample_id: sample_feature_metadata},
+        )
+        alignment["callability_gates"] = node_gates
         alignment_by_node.setdefault(node_key, alignment)
-        pred, support, class_support = predict_labels_and_support(payload, X_node)
+        pred, support, class_support = predict_labels_and_support(
+            payload,
+            X_node,
+            gate_results=node_gates,
+        )
         prediction = str(pred[0]) if pred else "unavailable"
         support_value = support[0] if support else None
         class_support_value = class_support[0] if class_support else {}
@@ -1523,6 +2215,7 @@ class NetworkParserQueryEngine:
             "feature_evidence": evidence,
             "supporting_markers": markers,
             "fallback_source": fallback_source,
+            "callability_gate": node_gates.get(sample_id, {}),
         }
 
     def _maybe_escalate_amr_with_terminal_fallback(
@@ -1537,10 +2230,14 @@ class NetworkParserQueryEngine:
         sample_feature_metadata: Dict[str, Dict[str, Any]],
     ) -> Optional[Dict[str, Any]]:
         """Try lineage/global terminal AMR fallbacks when branch evidence is weak."""
-        if not bool(getattr(self.config, "hierarchy_global_amr_fallback_on_weak_evidence", True)):
+        if not bool(
+            getattr(self.config, "hierarchy_global_amr_fallback_on_weak_evidence", True)
+        ):
             return None
 
-        fallback_payload, fallback_source = self._select_terminal_fallback_payload(hierarchy_steps)
+        fallback_payload, fallback_source = self._select_terminal_fallback_payload(
+            hierarchy_steps
+        )
         if not isinstance(fallback_payload, dict):
             return None
 
@@ -1557,12 +2254,19 @@ class NetworkParserQueryEngine:
             node_key=node_key,
         )
         min_resistant_prob = float(
-            getattr(self.config, "hierarchy_global_amr_fallback_min_resistant_probability", 0.50)
+            getattr(
+                self.config,
+                "hierarchy_global_amr_fallback_min_resistant_probability",
+                0.50,
+            )
         )
         resistant_probability = result.get("resistant_probability")
         if str(result.get("prediction", "")).strip().lower() != "resistant":
             return None
-        if resistant_probability is None or float(resistant_probability) < min_resistant_prob:
+        if (
+            resistant_probability is None
+            or float(resistant_probability) < min_resistant_prob
+        ):
             return None
         return result
 
@@ -1594,13 +2298,33 @@ class NetworkParserQueryEngine:
         final_confidence = confidence
         final_confidence_note = confidence_note
 
-        guard_columns = {col.lower() for col in resolve_amr_evidence_guard_label_columns(self.config)}
+        guard_columns = {
+            col.lower() for col in resolve_amr_evidence_guard_label_columns(self.config)
+        }
         if str(label_column).strip().lower() not in guard_columns:
-            return reported, routing, review_fields, step_fields, final_support, final_confidence, final_confidence_note
+            return (
+                reported,
+                routing,
+                review_fields,
+                step_fields,
+                final_support,
+                final_confidence,
+                final_confidence_note,
+            )
 
-        is_weak, _weak_reason = amr_branch_evidence_is_weak(evidence=evidence, config=self.config)
+        is_weak, _weak_reason = amr_branch_evidence_is_weak(
+            evidence=evidence, config=self.config
+        )
         if not is_weak or candidate.lower() != "susceptible":
-            return reported, routing, review_fields, step_fields, final_support, final_confidence, final_confidence_note
+            return (
+                reported,
+                routing,
+                review_fields,
+                step_fields,
+                final_support,
+                final_confidence,
+                final_confidence_note,
+            )
 
         escalation = self._maybe_escalate_amr_with_terminal_fallback(
             sample_id=sample_id,
@@ -1615,7 +2339,9 @@ class NetworkParserQueryEngine:
             reported = str(escalation.get("prediction", reported))
             routing = reported
             final_support = escalation.get("support", final_support)
-            final_confidence = str(escalation.get("interpretation_confidence", final_confidence))
+            final_confidence = str(
+                escalation.get("interpretation_confidence", final_confidence)
+            )
             final_confidence_note = (
                 "Weak branch AMR evidence triggered terminal AMR fallback escalation "
                 f"({escalation.get('fallback_source')}). {escalation.get('confidence_note', '')}"
@@ -1632,7 +2358,9 @@ class NetworkParserQueryEngine:
                 "interpretation_confidence": final_confidence,
                 "confidence_note": final_confidence_note,
                 "fallback_source": escalation.get("fallback_source"),
-                "fallback_resistant_probability": escalation.get("resistant_probability"),
+                "fallback_resistant_probability": escalation.get(
+                    "resistant_probability"
+                ),
             }
             review_fields = {
                 f"predicted_{prefix}": reported,
@@ -1641,11 +2369,21 @@ class NetworkParserQueryEngine:
                 f"{prefix}_amr_evidence_reason": step_fields["amr_evidence_reason"],
                 f"{prefix}_recommended_action": step_fields["recommended_action"],
                 f"{prefix}_fallback_source": escalation.get("fallback_source"),
-                f"{prefix}_fallback_resistant_probability": escalation.get("resistant_probability"),
+                f"{prefix}_fallback_resistant_probability": escalation.get(
+                    "resistant_probability"
+                ),
                 f"{prefix}_interpretation_confidence": final_confidence,
                 f"{prefix}_confidence_note": final_confidence_note,
             }
-            return reported, routing, review_fields, step_fields, final_support, final_confidence, final_confidence_note
+            return (
+                reported,
+                routing,
+                review_fields,
+                step_fields,
+                final_support,
+                final_confidence,
+                final_confidence_note,
+            )
 
         escalation_source = None
         reported, review_fields = amr_weak_evidence_review_fields(
@@ -1658,18 +2396,34 @@ class NetworkParserQueryEngine:
         )
         if review_fields:
             routing = candidate
-            final_confidence = review_fields.get(f"{prefix}_interpretation_confidence", final_confidence)
-            final_confidence_note = review_fields.get(f"{prefix}_confidence_note", final_confidence_note)
+            final_confidence = review_fields.get(
+                f"{prefix}_interpretation_confidence", final_confidence
+            )
+            final_confidence_note = review_fields.get(
+                f"{prefix}_confidence_note", final_confidence_note
+            )
             step_fields = {
                 "prediction": reported,
-                "candidate_prediction": review_fields.get(f"{prefix}_candidate_prediction"),
+                "candidate_prediction": review_fields.get(
+                    f"{prefix}_candidate_prediction"
+                ),
                 "prediction_status": review_fields.get(f"{prefix}_prediction_status"),
-                "amr_evidence_reason": review_fields.get(f"{prefix}_amr_evidence_reason"),
+                "amr_evidence_reason": review_fields.get(
+                    f"{prefix}_amr_evidence_reason"
+                ),
                 "recommended_action": review_fields.get(f"{prefix}_recommended_action"),
                 "interpretation_confidence": final_confidence,
                 "confidence_note": final_confidence_note,
             }
-        return reported, routing, review_fields, step_fields, final_support, final_confidence, final_confidence_note
+        return (
+            reported,
+            routing,
+            review_fields,
+            step_fields,
+            final_support,
+            final_confidence,
+            final_confidence_note,
+        )
 
     def _init_query_caches(self) -> None:
         """Initialize per-query payload caches shared by registry and bundled engines."""
@@ -1678,9 +2432,27 @@ class NetworkParserQueryEngine:
         ] = {}
         self._hierarchy_payload_cache_lock = threading.Lock()
         self._level2_payload_cache: Dict[
-            str, Tuple[str, List[str], Any, Optional[pd.DataFrame], Optional[pd.DataFrame]]
+            str,
+            Tuple[str, List[str], Any, Optional[pd.DataFrame], Optional[pd.DataFrame]],
         ] = {}
         self._level2_payload_cache_lock = threading.Lock()
+
+    def _gates_for_features(
+        self,
+        *,
+        X_raw: pd.DataFrame,
+        features: Sequence[str],
+        feature_metadata_by_sample: Optional[
+            Dict[str, Dict[str, Dict[str, Any]]]
+        ] = None,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Shared per-node callability gate for bundled and registry queries."""
+        return build_query_callability_gates(
+            X_raw,
+            features,
+            config=self.config,
+            feature_metadata_by_sample=feature_metadata_by_sample,
+        )
 
     def __init__(self, registry_path: str, config: NetworkParserConfig):
         self.registry_path = Path(registry_path)
@@ -1705,7 +2477,9 @@ class NetworkParserQueryEngine:
 
         features = [str(f) for f in node.get("features", [])]
         if not features:
-            raise ValueError("Hierarchy node is marked trainable but has no selected features.")
+            raise ValueError(
+                "Hierarchy node is marked trainable but has no selected features."
+            )
         if model_path is None or not model_path.exists():
             raise ValueError("Hierarchy node is missing a readable model file.")
         payload = load_pickle(model_path)
@@ -1733,8 +2507,16 @@ class NetworkParserQueryEngine:
         )
 
     def _get_hierarchy_global_lineage_fallback(self) -> Optional[Dict[str, Any]]:
-        hierarchy = self.registry.get("hierarchy", {}) if isinstance(self.registry, dict) else {}
-        payload = hierarchy.get("global_lineage_fallback") if isinstance(hierarchy, dict) else None
+        hierarchy = (
+            self.registry.get("hierarchy", {})
+            if isinstance(self.registry, dict)
+            else {}
+        )
+        payload = (
+            hierarchy.get("global_lineage_fallback")
+            if isinstance(hierarchy, dict)
+            else None
+        )
         if isinstance(payload, dict) and payload.get("status") == "success":
             return payload
         return None
@@ -1759,18 +2541,30 @@ class NetworkParserQueryEngine:
         if branch_status != "success":
             return True, "branch_node_unavailable"
 
-        if bool(getattr(self.config, "hierarchy_global_lineage_fallback_on_low_confidence", True)):
+        if bool(
+            getattr(
+                self.config, "hierarchy_global_lineage_fallback_on_low_confidence", True
+            )
+        ):
             if branch_confidence in self._hierarchy_low_confidence_levels():
                 return True, "low_branch_confidence"
 
-        if bool(getattr(self.config, "hierarchy_global_lineage_fallback_on_disagreement", True)):
+        if bool(
+            getattr(
+                self.config, "hierarchy_global_lineage_fallback_on_disagreement", True
+            )
+        ):
             if (
                 branch_prediction
                 and global_prediction
                 and branch_prediction != global_prediction
             ):
                 delta = float(
-                    getattr(self.config, "hierarchy_global_lineage_fallback_min_support_delta", 0.0)
+                    getattr(
+                        self.config,
+                        "hierarchy_global_lineage_fallback_min_support_delta",
+                        0.0,
+                    )
                 )
                 if global_support is not None and (
                     branch_support is None or global_support >= branch_support + delta
@@ -1791,14 +2585,26 @@ class NetworkParserQueryEngine:
         sample_feature_metadata: Dict[str, Dict[str, Any]],
         node_key: str,
     ) -> Dict[str, Any]:
-        features, payload, ranked, importance = self._load_hierarchy_node_payload(fallback_payload)
+        features, payload, ranked, importance = self._load_hierarchy_node_payload(
+            fallback_payload
+        )
         X_node, alignment = align_to_training_features(X_raw.loc[[sample_id]], features)
+        node_gates = self._gates_for_features(
+            X_raw=X_raw.loc[[sample_id]],
+            features=features,
+            feature_metadata_by_sample={sample_id: sample_feature_metadata},
+        )
+        alignment["callability_gates"] = node_gates
         alignment_by_node.setdefault(node_key, alignment)
-        pred, support, class_support = predict_labels_and_support(payload, X_node)
+        pred, support, class_support = predict_labels_and_support(
+            payload,
+            X_node,
+            gate_results=node_gates,
+        )
         prediction = str(pred[0]) if pred else "unavailable"
         support_value = support[0] if support else None
         class_support_value = class_support[0] if class_support else {}
-        tree_paths = decision_tree_path_explanation(payload, X_node)
+        tree_paths = decision_tree_path_explanation(payload, X_node, node_gates)
         markers = supporting_markers_for_sample(
             X_node.loc[sample_id],
             ranked_features=ranked,
@@ -1827,6 +2633,7 @@ class NetworkParserQueryEngine:
             "feature_evidence": evidence,
             "supporting_markers": markers,
             "decision_path": tree_paths.get(sample_id, []),
+            "callability_gate": node_gates.get(sample_id, {}),
         }
 
     def _select_terminal_fallback_payload(
@@ -1846,8 +2653,16 @@ class NetworkParserQueryEngine:
            parent-conditioned fallback model.
         2. Otherwise use the global terminal fallback, if available.
         """
-        hierarchy = self.registry.get("hierarchy", {}) if isinstance(self.registry, dict) else {}
-        fallbacks = hierarchy.get("terminal_fallbacks", {}) if isinstance(hierarchy, dict) else {}
+        hierarchy = (
+            self.registry.get("hierarchy", {})
+            if isinstance(self.registry, dict)
+            else {}
+        )
+        fallbacks = (
+            hierarchy.get("terminal_fallbacks", {})
+            if isinstance(hierarchy, dict)
+            else {}
+        )
         if not isinstance(fallbacks, dict) or fallbacks.get("status") != "success":
             return None, "no_successful_terminal_fallbacks_in_registry"
 
@@ -1860,7 +2675,11 @@ class NetworkParserQueryEngine:
             for step in reversed(list(hierarchy_steps)):
                 label_column = str(step.get("label_column", "")).strip()
                 prediction = str(step.get("prediction", "")).strip()
-                if not label_column or not prediction or prediction.lower() == "unavailable":
+                if (
+                    not label_column
+                    or not prediction
+                    or prediction.lower() == "unavailable"
+                ):
                     continue
                 block = by_parent.get(label_column)
                 if not isinstance(block, dict):
@@ -1873,7 +2692,10 @@ class NetworkParserQueryEngine:
                     return payload, f"terminal_fallback_by_{label_column}"
 
         global_payload = fallbacks.get("global")
-        if isinstance(global_payload, dict) and global_payload.get("status") == "success":
+        if (
+            isinstance(global_payload, dict)
+            and global_payload.get("status") == "success"
+        ):
             return global_payload, "global_terminal_fallback"
 
         return None, "no_matching_terminal_fallback_model"
@@ -1899,7 +2721,9 @@ class NetworkParserQueryEngine:
         -------
         used, terminal_label, terminal_level, terminal_status, terminal_reason
         """
-        fallback_payload, fallback_source = self._select_terminal_fallback_payload(hierarchy_steps)
+        fallback_payload, fallback_source = self._select_terminal_fallback_payload(
+            hierarchy_steps
+        )
         if not isinstance(fallback_payload, dict):
             return (
                 False,
@@ -1927,14 +2751,26 @@ class NetworkParserQueryEngine:
         prefix = f"level{target_level}" if target_level is not None else "terminal"
         node_key = f"terminal_fallback:{fallback_source}:{target_label}"
 
-        features, payload, ranked, importance = self._load_hierarchy_node_payload(fallback_payload)
+        features, payload, ranked, importance = self._load_hierarchy_node_payload(
+            fallback_payload
+        )
         X_node, alignment = align_to_training_features(X_raw.loc[[sample_id]], features)
+        node_gates = self._gates_for_features(
+            X_raw=X_raw.loc[[sample_id]],
+            features=features,
+            feature_metadata_by_sample={sample_id: sample_feature_metadata},
+        )
+        alignment["callability_gates"] = node_gates
         alignment_by_node.setdefault(node_key, alignment)
-        pred, support, class_support = predict_labels_and_support(payload, X_node)
+        pred, support, class_support = predict_labels_and_support(
+            payload,
+            X_node,
+            gate_results=node_gates,
+        )
         prediction = str(pred[0]) if pred else "unavailable"
         support_value = support[0] if support else None
         class_support_value = class_support[0] if class_support else {}
-        tree_paths = decision_tree_path_explanation(payload, X_node)
+        tree_paths = decision_tree_path_explanation(payload, X_node, node_gates)
 
         markers = supporting_markers_for_sample(
             X_node.loc[sample_id],
@@ -1966,8 +2802,12 @@ class NetworkParserQueryEngine:
         )
         prediction = reported
         if review_row:
-            confidence = review_row.get(f"{prefix}_interpretation_confidence", confidence)
-            confidence_note = review_row.get(f"{prefix}_confidence_note", confidence_note)
+            confidence = review_row.get(
+                f"{prefix}_interpretation_confidence", confidence
+            )
+            confidence_note = review_row.get(
+                f"{prefix}_confidence_note", confidence_note
+            )
 
         step = {
             "level_number": target_level,
@@ -2039,6 +2879,45 @@ class NetworkParserQueryEngine:
         terminal_level: Optional[int] = None
         guard = 0
 
+        sample_gate = sample_mapping_quality.get("callability_gate", {})
+        if (
+            isinstance(sample_gate, dict)
+            and sample_gate.get("prediction_action") != "predict"
+        ):
+            reason_codes = list(sample_gate.get("abstention_reason_codes") or [])
+            row.update(
+                {
+                    "predicted_hierarchy_path": "",
+                    "predicted_terminal_label": "unavailable",
+                    "predicted_terminal_level": None,
+                    "hierarchy_terminal_status": "abstained",
+                    "hierarchy_terminal_reason": "query_callability_gate_failed",
+                    "query_prediction_action": "abstain_review_unresolved",
+                    "query_abstention_reason_codes": reason_codes,
+                    "query_callability_gate_status": sample_gate.get("gate_status"),
+                    "query_feature_recovery_fraction": sample_gate.get(
+                        "feature_recovery_fraction"
+                    ),
+                    "query_callable_fraction": sample_gate.get("callable_fraction"),
+                    "query_call_state_counts": sample_gate.get("call_state_counts", {}),
+                }
+            )
+            report_sample = {
+                **row,
+                "hierarchy_steps": [],
+                "callability_gate": sample_gate,
+                "fasta_mapping_quality": (
+                    sample_mapping_quality if query_input_type == "fasta" else {}
+                ),
+                "vcf_mapping_quality": (
+                    sample_mapping_quality
+                    if query_input_type in {"vcf", "fastq"}
+                    else {}
+                ),
+                "raw_sequence_mapping_quality": sample_mapping_quality,
+            }
+            return row, report_sample, alignment_by_node
+
         while isinstance(current, dict) and current and guard < 100:
             guard += 1
             status = str(current.get("status", ""))
@@ -2078,7 +2957,9 @@ class NetworkParserQueryEngine:
                 )
                 path_tokens.append(prediction)
                 children = current.get("children", {})
-                next_node = children.get(prediction) if isinstance(children, dict) else None
+                next_node = (
+                    children.get(prediction) if isinstance(children, dict) else None
+                )
                 if isinstance(next_node, dict):
                     current = next_node
                     continue
@@ -2120,10 +3001,14 @@ class NetworkParserQueryEngine:
                         "node_status": "global_lineage_fallback",
                         "node_key": fb_node_key,
                         "fallback_trigger_reason": trigger_reason,
-                        "interpretation_confidence": global_result.get("interpretation_confidence"),
+                        "interpretation_confidence": global_result.get(
+                            "interpretation_confidence"
+                        ),
                         "confidence_note": global_result.get("confidence_note"),
                         "feature_evidence": global_result.get("feature_evidence", {}),
-                        "supporting_markers": global_result.get("supporting_markers", []),
+                        "supporting_markers": global_result.get(
+                            "supporting_markers", []
+                        ),
                         "decision_path": global_result.get("decision_path", []),
                     }
                     row_update = {
@@ -2135,7 +3020,9 @@ class NetworkParserQueryEngine:
                         f"{prefix}_interpretation_confidence": global_result.get(
                             "interpretation_confidence"
                         ),
-                        f"{prefix}_confidence_note": global_result.get("confidence_note"),
+                        f"{prefix}_confidence_note": global_result.get(
+                            "confidence_note"
+                        ),
                         f"{prefix}_n_supporting_markers": int(
                             len(global_result.get("supporting_markers", []))
                         ),
@@ -2143,7 +3030,12 @@ class NetworkParserQueryEngine:
                             prefix, global_result.get("feature_evidence", {})
                         ),
                     }
-                    reported, routing, review_row, review_step = self._low_support_review_bundle(
+                    (
+                        reported,
+                        routing,
+                        review_row,
+                        review_step,
+                    ) = self._low_support_review_bundle(
                         label_column=label_column,
                         prediction=prediction,
                         prefix=prefix,
@@ -2158,27 +3050,33 @@ class NetworkParserQueryEngine:
                     terminal_label = reported
                     path_tokens.append(routing)
                     children = current.get("children", {})
-                    next_node = children.get(routing) if isinstance(children, dict) else None
+                    next_node = (
+                        children.get(routing) if isinstance(children, dict) else None
+                    )
                     if isinstance(next_node, dict):
                         current = next_node
                         continue
 
                     terminal_reason = "no_child_node_after_global_lineage_fallback"
                     if level_number < len(label_columns):
-                        used_fallback, fb_label, fb_level, fb_status, fb_reason = (
-                            self._apply_terminal_fallback_prediction(
-                                sample_id=sample_id,
-                                X_raw=X_raw,
-                                raw_available_features=raw_available_features,
-                                sample_feature_metadata=sample_feature_metadata,
-                                hierarchy_steps=hierarchy_steps,
-                                row=row,
-                                label_columns=label_columns,
-                                alignment_by_node=alignment_by_node,
-                                max_markers=max_markers,
-                                trigger_reason=terminal_reason,
-                                support_policy=support_policy,
-                            )
+                        (
+                            used_fallback,
+                            fb_label,
+                            fb_level,
+                            fb_status,
+                            fb_reason,
+                        ) = self._apply_terminal_fallback_prediction(
+                            sample_id=sample_id,
+                            X_raw=X_raw,
+                            raw_available_features=raw_available_features,
+                            sample_feature_metadata=sample_feature_metadata,
+                            hierarchy_steps=hierarchy_steps,
+                            row=row,
+                            label_columns=label_columns,
+                            alignment_by_node=alignment_by_node,
+                            max_markers=max_markers,
+                            trigger_reason=terminal_reason,
+                            support_policy=support_policy,
                         )
                         if used_fallback:
                             terminal_label = fb_label
@@ -2188,7 +3086,9 @@ class NetworkParserQueryEngine:
                     break
 
                 terminal_status = "stopped"
-                terminal_reason = str(current.get("reason", "hierarchy_node_not_trainable"))
+                terminal_reason = str(
+                    current.get("reason", "hierarchy_node_not_trainable")
+                )
                 terminal_level = level_number
                 step = {
                     "level_number": level_number,
@@ -2216,7 +3116,13 @@ class NetworkParserQueryEngine:
                     }
                 )
 
-                used_fallback, fb_label, fb_level, fb_status, fb_reason = self._apply_terminal_fallback_prediction(
+                (
+                    used_fallback,
+                    fb_label,
+                    fb_level,
+                    fb_status,
+                    fb_reason,
+                ) = self._apply_terminal_fallback_prediction(
                     sample_id=sample_id,
                     X_raw=X_raw,
                     raw_available_features=raw_available_features,
@@ -2236,14 +3142,65 @@ class NetworkParserQueryEngine:
                     terminal_reason = fb_reason
                 break
 
-            features, payload, ranked, importance = self._load_hierarchy_node_payload(current)
-            X_node, alignment = align_to_training_features(X_raw.loc[[sample_id]], features)
+            features, payload, ranked, importance = self._load_hierarchy_node_payload(
+                current
+            )
+            X_node, alignment = align_to_training_features(
+                X_raw.loc[[sample_id]], features
+            )
+            node_gates = self._gates_for_features(
+                X_raw=X_raw.loc[[sample_id]],
+                features=features,
+                feature_metadata_by_sample={sample_id: sample_feature_metadata},
+            )
+            alignment["callability_gates"] = node_gates
             alignment_by_node.setdefault(node_key, alignment)
-            pred, support, class_support = predict_labels_and_support(payload, X_node)
+            pred, support, class_support = predict_labels_and_support(
+                payload,
+                X_node,
+                gate_results=node_gates,
+            )
+            node_gate = node_gates.get(sample_id, {})
+            if node_gate.get("prediction_action") != "predict":
+                reason_codes = list(node_gate.get("abstention_reason_codes") or [])
+                terminal_status = "abstained"
+                terminal_reason = "node_callability_gate_failed"
+                terminal_label = "unavailable"
+                terminal_level = level_number
+                hierarchy_steps.append(
+                    {
+                        "level_number": level_number,
+                        "label_column": label_column,
+                        "prediction": "unavailable",
+                        "support": None,
+                        "class_support": {},
+                        "node_status": "abstained",
+                        "node_key": node_key,
+                        "callability_gate": node_gate,
+                        "abstention_reason_codes": reason_codes,
+                        "interpretation_confidence": "unavailable",
+                        "confidence_note": "Required node markers did not pass callability gates.",
+                        "feature_evidence": {},
+                        "supporting_markers": [],
+                        "decision_path": [],
+                    }
+                )
+                row.update(
+                    {
+                        f"{prefix}_label_column": label_column,
+                        f"predicted_{prefix}": "unavailable",
+                        f"{prefix}_support": None,
+                        f"{prefix}_node_status": "abstained",
+                        f"{prefix}_abstention_reason_codes": reason_codes,
+                        "query_prediction_action": "abstain_review_unresolved",
+                        "query_abstention_reason_codes": reason_codes,
+                    }
+                )
+                break
             prediction = str(pred[0]) if pred else "unavailable"
             support_value = support[0] if support else None
             class_support_value = class_support[0] if class_support else {}
-            tree_paths = decision_tree_path_explanation(payload, X_node)
+            tree_paths = decision_tree_path_explanation(payload, X_node, node_gates)
 
             markers = supporting_markers_for_sample(
                 X_node.loc[sample_id],
@@ -2297,7 +3254,9 @@ class NetworkParserQueryEngine:
                 if use_global:
                     prediction = str(global_result.get("prediction", prediction))
                     support_value = global_result.get("support", support_value)
-                    class_support_value = global_result.get("class_support", class_support_value)
+                    class_support_value = global_result.get(
+                        "class_support", class_support_value
+                    )
                     confidence = str(
                         global_result.get("interpretation_confidence", confidence)
                     )
@@ -2340,9 +3299,16 @@ class NetworkParserQueryEngine:
                 **flatten_feature_evidence(prefix, evidence),
             }
             if fallback_trigger_reason:
-                row_update[f"{prefix}_fallback_trigger_reason"] = fallback_trigger_reason
+                row_update[
+                    f"{prefix}_fallback_trigger_reason"
+                ] = fallback_trigger_reason
 
-            reported, routing, review_row, review_step = self._low_support_review_bundle(
+            (
+                reported,
+                routing,
+                review_row,
+                review_step,
+            ) = self._low_support_review_bundle(
                 label_column=label_column,
                 prediction=prediction,
                 prefix=prefix,
@@ -2409,7 +3375,13 @@ class NetworkParserQueryEngine:
 
             terminal_reason = "no_child_node_for_predicted_label"
             if level_number < len(label_columns):
-                used_fallback, fb_label, fb_level, fb_status, fb_reason = self._apply_terminal_fallback_prediction(
+                (
+                    used_fallback,
+                    fb_label,
+                    fb_level,
+                    fb_status,
+                    fb_reason,
+                ) = self._apply_terminal_fallback_prediction(
                     sample_id=sample_id,
                     X_raw=X_raw,
                     raw_available_features=raw_available_features,
@@ -2445,30 +3417,90 @@ class NetworkParserQueryEngine:
                 "predicted_terminal_level": terminal_level,
                 "hierarchy_terminal_status": terminal_status,
                 "hierarchy_terminal_reason": terminal_reason,
-                "query_marker_recovery_status": sample_mapping_quality.get("marker_recovery_status"),
-                "query_marker_recovery_reason": sample_mapping_quality.get("marker_recovery_reason"),
-                "query_active_marker_evidence_status": sample_mapping_quality.get("active_marker_evidence_status"),
-                "query_active_marker_evidence_reason": sample_mapping_quality.get("active_marker_evidence_reason"),
-                "query_unique_mapped_fraction": sample_mapping_quality.get("unique_mapped_fraction"),
-                "query_active_feature_fraction": sample_mapping_quality.get("active_feature_fraction"),
-                "query_n_encoded_active_features": sample_mapping_quality.get("n_encoded_active_features"),
-                "query_n_resolved_features": sample_mapping_quality.get("n_resolved_features"),
-                "query_resolved_feature_fraction": sample_mapping_quality.get("resolved_feature_fraction"),
-                "query_n_resolved_baseline_features": sample_mapping_quality.get("n_resolved_baseline_features"),
-                "query_resolved_baseline_feature_fraction": sample_mapping_quality.get("resolved_baseline_feature_fraction"),
-                "query_resolved_marker_evidence_status": sample_mapping_quality.get("resolved_marker_evidence_status"),
-                "query_resolved_marker_evidence_reason": sample_mapping_quality.get("resolved_marker_evidence_reason"),
-                "query_n_unresolved_or_missing_calls": sample_mapping_quality.get("n_unresolved_or_missing_context_calls", sample_mapping_quality.get("n_unresolved_or_missing_calls")),
-                "query_n_multi_hit_calls": sample_mapping_quality.get("n_multi_hit_calls"),
-                "query_n_ambiguous_base_calls": sample_mapping_quality.get("n_ambiguous_base_calls"),
-                "query_n_non_training_allele_calls": sample_mapping_quality.get("n_non_training_allele_calls"),
+                "query_marker_recovery_status": sample_mapping_quality.get(
+                    "marker_recovery_status"
+                ),
+                "query_marker_recovery_reason": sample_mapping_quality.get(
+                    "marker_recovery_reason"
+                ),
+                "query_active_marker_evidence_status": sample_mapping_quality.get(
+                    "active_marker_evidence_status"
+                ),
+                "query_active_marker_evidence_reason": sample_mapping_quality.get(
+                    "active_marker_evidence_reason"
+                ),
+                "query_unique_mapped_fraction": sample_mapping_quality.get(
+                    "unique_mapped_fraction"
+                ),
+                "query_active_feature_fraction": sample_mapping_quality.get(
+                    "active_feature_fraction"
+                ),
+                "query_n_encoded_active_features": sample_mapping_quality.get(
+                    "n_encoded_active_features"
+                ),
+                "query_n_resolved_features": sample_mapping_quality.get(
+                    "n_resolved_features"
+                ),
+                "query_resolved_feature_fraction": sample_mapping_quality.get(
+                    "resolved_feature_fraction"
+                ),
+                "query_n_resolved_baseline_features": sample_mapping_quality.get(
+                    "n_resolved_baseline_features"
+                ),
+                "query_resolved_baseline_feature_fraction": sample_mapping_quality.get(
+                    "resolved_baseline_feature_fraction"
+                ),
+                "query_resolved_marker_evidence_status": sample_mapping_quality.get(
+                    "resolved_marker_evidence_status"
+                ),
+                "query_resolved_marker_evidence_reason": sample_mapping_quality.get(
+                    "resolved_marker_evidence_reason"
+                ),
+                "query_n_unresolved_or_missing_calls": sample_mapping_quality.get(
+                    "n_unresolved_or_missing_context_calls",
+                    sample_mapping_quality.get("n_unresolved_or_missing_calls"),
+                ),
+                "query_n_multi_hit_calls": sample_mapping_quality.get(
+                    "n_multi_hit_calls"
+                ),
+                "query_n_ambiguous_base_calls": sample_mapping_quality.get(
+                    "n_ambiguous_base_calls"
+                ),
+                "query_n_non_training_allele_calls": sample_mapping_quality.get(
+                    "n_non_training_allele_calls"
+                ),
+                "query_prediction_action": sample_mapping_quality.get(
+                    "query_prediction_action", "predict"
+                ),
+                "query_abstention_reason_codes": list(
+                    (sample_mapping_quality.get("callability_gate") or {}).get(
+                        "abstention_reason_codes"
+                    )
+                    or []
+                ),
+                "query_callability_gate_status": (
+                    sample_mapping_quality.get("callability_gate") or {}
+                ).get("gate_status"),
+                "query_feature_recovery_fraction": (
+                    sample_mapping_quality.get("callability_gate") or {}
+                ).get("feature_recovery_fraction"),
+                "query_callable_fraction": (
+                    sample_mapping_quality.get("callability_gate") or {}
+                ).get("callable_fraction"),
+                "query_call_state_counts": (
+                    sample_mapping_quality.get("callability_gate") or {}
+                ).get("call_state_counts", {}),
             }
         )
         report_sample = {
             **row,
             "hierarchy_steps": hierarchy_steps,
-            "fasta_mapping_quality": sample_mapping_quality if query_input_type == "fasta" else {},
-            "vcf_mapping_quality": sample_mapping_quality if query_input_type in {"vcf", "fastq"} else {},
+            "fasta_mapping_quality": sample_mapping_quality
+            if query_input_type == "fasta"
+            else {},
+            "vcf_mapping_quality": sample_mapping_quality
+            if query_input_type in {"vcf", "fastq"}
+            else {},
             "raw_sequence_mapping_quality": sample_mapping_quality,
         }
 
@@ -2488,9 +3520,17 @@ class NetworkParserQueryEngine:
     ) -> pd.DataFrame:
         """Traverse an arbitrary-depth trained hierarchy without rerunning discovery."""
         output_dir = ensure_dir(Path(output_dir))
-        hierarchy = self.registry.get("hierarchy", {}) if isinstance(self.registry, dict) else {}
+        hierarchy = (
+            self.registry.get("hierarchy", {})
+            if isinstance(self.registry, dict)
+            else {}
+        )
         root = hierarchy.get("root", {}) if isinstance(hierarchy, dict) else {}
-        label_columns = [str(x) for x in hierarchy.get("label_columns", [])] if isinstance(hierarchy, dict) else []
+        label_columns = (
+            [str(x) for x in hierarchy.get("label_columns", [])]
+            if isinstance(hierarchy, dict)
+            else []
+        )
         if not isinstance(root, dict) or not root:
             raise ValueError("Hierarchical registry is missing hierarchy.root.")
 
@@ -2506,12 +3546,38 @@ class NetworkParserQueryEngine:
         if isinstance(raw_mapping_summary, dict):
             for item in raw_mapping_summary.get("per_sample", []) or []:
                 if isinstance(item, dict) and item.get("sample_id") is not None:
-                    raw_sample_quality[normalize_sample_id(str(item.get("sample_id")))] = item
+                    raw_sample_quality[
+                        normalize_sample_id(str(item.get("sample_id")))
+                    ] = item
+            gates = raw_mapping_summary.get("callability_gates") or {}
+            if isinstance(gates, dict):
+                for sid, gate in gates.items():
+                    key = normalize_sample_id(str(sid))
+                    payload = raw_sample_quality.setdefault(key, {"sample_id": key})
+                    payload["callability_gate"] = gate
+                    if gate.get("prediction_action") == "abstain_review_unresolved":
+                        payload["query_prediction_action"] = "abstain_review_unresolved"
+                        payload[
+                            "marker_recovery_status"
+                        ] = "insufficient_callability_abstain"
+                        payload["marker_recovery_reason"] = (
+                            "Feature recovery and/or callable fraction below configured gates; "
+                            "prediction should be treated as review/unresolved."
+                        )
+                        logger.warning(
+                            "Query sample %s abstains under callability gates | gate=%s",
+                            key,
+                            gate.get("gate_status"),
+                        )
 
-        sample_ids = [normalize_sample_id(str(sample_id)) for sample_id in X_raw.index.astype(str)]
+        sample_ids = [
+            normalize_sample_id(str(sample_id)) for sample_id in X_raw.index.astype(str)
+        ]
         support_policy = self._resolve_label_training_support_policy()
 
-        def _dispatch_one(sample_id: str) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+        def _dispatch_one(
+            sample_id: str,
+        ) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
             return self._traverse_hierarchy_sample(
                 sample_id=sample_id,
                 X_raw=X_raw,
@@ -2580,8 +3646,12 @@ class NetworkParserQueryEngine:
             "n_query_samples": int(X_raw.shape[0]),
             "n_query_features_raw": int(X_raw.shape[1]),
             "query_input_type": query_input_type,
-            "fasta_mapping": raw_mapping_summary if query_input_type == "fasta" else None,
-            "vcf_mapping": raw_mapping_summary if query_input_type in {"vcf", "fastq"} else None,
+            "fasta_mapping": raw_mapping_summary
+            if query_input_type == "fasta"
+            else None,
+            "vcf_mapping": raw_mapping_summary
+            if query_input_type in {"vcf", "fastq"}
+            else None,
             "raw_sequence_mapping": raw_mapping_summary,
             "fastq_processing": fastq_processing_summary,
         }
@@ -2610,7 +3680,7 @@ class NetworkParserQueryEngine:
                 "Deterministic branches are followed when a training node had only one observed child label and therefore no model was fitted.",
                 "For FASTA/VCF/FASTQ queries, NetworkParser reconstructs the saved trained feature space from the selected-feature manifest.",
                 "Resolved baseline states encoded as 0 are valid trained-marker evidence for the overall query pattern.",
-                "Unresolved, ambiguous, repeated, or non-training allele calls are encoded as 0 and explicitly reported in the mapping summary.",
+                "Unresolved, ambiguous, repeated, absent, or non-training allele calls remain NaN and contribute to callability abstention.",
             ],
             "artifacts": {
                 "predictions_csv": str(predictions_path),
@@ -2621,8 +3691,13 @@ class NetworkParserQueryEngine:
                 "report_json": str(output_dir / "query_report.json"),
                 "report_txt": str(output_dir / "query_report.txt"),
                 "fastq_processing_summary": (
-                    str(output_dir / "fastq_query_preprocessing" / "fastq_processing_summary.json")
-                    if fastq_processing_summary is not None else None
+                    str(
+                        output_dir
+                        / "fastq_query_preprocessing"
+                        / "fastq_processing_summary.json"
+                    )
+                    if fastq_processing_summary is not None
+                    else None
                 ),
             },
         }
@@ -2637,7 +3712,9 @@ class NetworkParserQueryEngine:
         )
         return predictions
 
-    def _load_level1(self) -> Tuple[List[str], Any, Optional[pd.DataFrame], Optional[pd.DataFrame]]:
+    def _load_level1(
+        self,
+    ) -> Tuple[List[str], Any, Optional[pd.DataFrame], Optional[pd.DataFrame]]:
         level1 = self.registry.get("level1", {})
         features = [str(f) for f in level1.get("features", [])]
         model_path = resolve_path(level1.get("model_file"), self.registry_base)
@@ -2650,7 +3727,9 @@ class NetworkParserQueryEngine:
         model_importance = extract_model_importance(payload, features)
         return features, payload, ranked, model_importance
 
-    def _select_level2_payload(self, predicted_level1: str) -> Tuple[str, List[str], Any, Optional[pd.DataFrame], Optional[pd.DataFrame]]:
+    def _select_level2_payload(
+        self, predicted_level1: str
+    ) -> Tuple[str, List[str], Any, Optional[pd.DataFrame], Optional[pd.DataFrame]]:
         cache_key = str(predicted_level1)
         with self._level2_payload_cache_lock:
             cached = self._level2_payload_cache.get(cache_key)
@@ -2659,15 +3738,33 @@ class NetworkParserQueryEngine:
 
         level2 = self.registry.get("level2", {})
         by_group = level2.get("by_level1_group", {}) if isinstance(level2, dict) else {}
-        group_payload = by_group.get(str(predicted_level1), {}) if isinstance(by_group, dict) else {}
+        group_payload = (
+            by_group.get(str(predicted_level1), {})
+            if isinstance(by_group, dict)
+            else {}
+        )
 
         source = "level1_group_specific"
         selected = group_payload
-        if not selected or selected.get("status") != "success" or not selected.get("model_file"):
-            selected = level2.get("global_fallback", {}) if isinstance(level2, dict) else {}
+        if (
+            not selected
+            or selected.get("status") != "success"
+            or not selected.get("model_file")
+        ):
+            selected = (
+                level2.get("global_fallback", {}) if isinstance(level2, dict) else {}
+            )
             source = "global_fallback"
-            if not selected or selected.get("status") != "success" or not selected.get("model_file"):
-                selected = level2.get("global_binary_fallback", {}) if isinstance(level2, dict) else {}
+            if (
+                not selected
+                or selected.get("status") != "success"
+                or not selected.get("model_file")
+            ):
+                selected = (
+                    level2.get("global_binary_fallback", {})
+                    if isinstance(level2, dict)
+                    else {}
+                )
                 source = "global_binary_fallback"
 
         features = [str(f) for f in selected.get("features", [])]
@@ -2678,7 +3775,9 @@ class NetworkParserQueryEngine:
             )
 
         payload = load_pickle(model_path)
-        ranked = read_ranked_feature_table(selected.get("filter", {}), self.registry_base)
+        ranked = read_ranked_feature_table(
+            selected.get("filter", {}), self.registry_base
+        )
         model_importance = extract_model_importance(payload, features)
         result = (source, features, payload, ranked, model_importance)
         with self._level2_payload_cache_lock:
@@ -2717,9 +3816,13 @@ class NetworkParserQueryEngine:
             elif genomic_candidate.is_dir():
                 files = [p for p in genomic_candidate.iterdir() if p.is_file()]
                 names = [p.name.lower() for p in files]
-                if any(any(name.endswith(ext) for ext in fastq_suffixes) for name in names):
+                if any(
+                    any(name.endswith(ext) for ext in fastq_suffixes) for name in names
+                ):
                     query_input_type = "fastq"
-                elif any(any(name.endswith(ext) for ext in vcf_suffixes) for name in names):
+                elif any(
+                    any(name.endswith(ext) for ext in vcf_suffixes) for name in names
+                ):
                     query_input_type = "vcf"
                 elif any(p.suffix.lower() in fasta_suffixes for p in files):
                     query_input_type = "fasta"
@@ -2727,7 +3830,9 @@ class NetworkParserQueryEngine:
                 query_input_type = "matrix"
 
         if query_input_type in {"raw_sequence", "raw_fasta", "sequence"}:
-            logger.warning("query_input_type=raw_sequence is deprecated; use query_input_type=fasta instead.")
+            logger.warning(
+                "query_input_type=raw_sequence is deprecated; use query_input_type=fasta instead."
+            )
             query_input_type = "fasta"
 
         raw_calls: Optional[pd.DataFrame] = None
@@ -2735,7 +3840,9 @@ class NetworkParserQueryEngine:
         fastq_processing_summary: Optional[Dict[str, Any]] = None
 
         required_features = collect_required_features_from_registry(self.registry)
-        manifest_path = resolve_registry_feature_manifest(self.registry, self.registry_base)
+        manifest_path = resolve_registry_feature_manifest(
+            self.registry, self.registry_base
+        )
 
         def _require_feature_manifest(input_label: str) -> Path:
             if manifest_path is None:
@@ -2747,7 +3854,12 @@ class NetworkParserQueryEngine:
             manifest = load_feature_manifest(Path(manifest_path))
             context_columns = [
                 col
-                for col in ("Context_sequence", "Context_±40", "Context", "context_sequence")
+                for col in (
+                    "Context_sequence",
+                    "Context_±40",
+                    "Context",
+                    "context_sequence",
+                )
                 if col in manifest.columns
             ]
             context_present = 0
@@ -2783,6 +3895,7 @@ class NetworkParserQueryEngine:
                 feature_manifest_path=str(resolved_manifest),
                 features=required_features,
                 output_dir=str(out / "vcf_query_encoding"),
+                config=self.config,
             )
             X_raw.index = X_raw.index.astype(str).map(normalize_sample_id)
 
@@ -2794,12 +3907,25 @@ class NetworkParserQueryEngine:
                 )
             resolved_manifest = _require_feature_manifest("FASTQ")
             fastq_out = ensure_dir(out / "fastq_query_preprocessing")
+            # Pass trained marker IDs so panel_* call modes only pileup/call those sites.
+            panel_ids: Optional[List[str]] = None
+            call_mode = str(
+                getattr(self.config, "fastq_call_mode", "full") or "full"
+            ).strip().lower()
+            if call_mode in {"panel_bcftools", "panel_majority"}:
+                panel_ids = [str(f) for f in list(required_features)]
+                logger.info(
+                    "FASTQ panel call mode=%s | injecting %d trained feature IDs",
+                    call_mode,
+                    len(panel_ids),
+                )
             processor = FastqProcessor(
                 config=self.config,
                 fastq_dir=genomic_path,
                 ref_genome=ref_fasta,
                 output_dir=str(fastq_out),
                 n_jobs=n_jobs,
+                panel_feature_ids=panel_ids,
             )
             vcf_dir, fastq_summary = processor.process_samples()
             fastq_processing_summary = asdict(fastq_summary)
@@ -2808,6 +3934,7 @@ class NetworkParserQueryEngine:
                 feature_manifest_path=str(resolved_manifest),
                 features=required_features,
                 output_dir=str(out / "vcf_query_encoding"),
+                config=self.config,
             )
             X_raw.index = X_raw.index.astype(str).map(normalize_sample_id)
 
@@ -2820,7 +3947,9 @@ class NetworkParserQueryEngine:
                 n_jobs=n_jobs,
             )
         else:
-            raise ValueError("query_input_type must be one of: auto, matrix, vcf, fasta, fastq")
+            raise ValueError(
+                "query_input_type must be one of: auto, matrix, vcf, fasta, fastq"
+            )
 
         raw_available_features = set(map(str, X_raw.columns))
 
@@ -2830,14 +3959,55 @@ class NetworkParserQueryEngine:
                 normalize_sample_id(str(sample_id)): feature_map
                 for sample_id, feature_map in raw_feature_metadata.items()
             }
+
+        # Authoritative execution gate for every input mode. Encoder-provided
+        # VCF/gVCF summaries remain audit evidence, while both bundled and
+        # unbundled inference enforce this model-feature calculation.
+        global_query_gates = self._gates_for_features(
+            X_raw=X_raw,
+            features=required_features,
+            feature_metadata_by_sample=raw_feature_metadata,
+        )
+        if not isinstance(raw_mapping_summary, dict):
+            raw_mapping_summary = {}
+        raw_mapping_summary["callability_gates"] = global_query_gates
+        raw_mapping_summary["samples_requiring_abstention"] = [
+            sample_id
+            for sample_id, gate in global_query_gates.items()
+            if gate.get("prediction_action") != "predict"
+        ]
         raw_sample_quality: Dict[str, Dict[str, Any]] = {}
         if isinstance(raw_mapping_summary, dict):
             for item in raw_mapping_summary.get("per_sample", []) or []:
                 if isinstance(item, dict) and item.get("sample_id") is not None:
-                    raw_sample_quality[normalize_sample_id(str(item.get("sample_id")))] = item
+                    raw_sample_quality[
+                        normalize_sample_id(str(item.get("sample_id")))
+                    ] = item
+            gates = raw_mapping_summary.get("callability_gates") or {}
+            if isinstance(gates, dict):
+                for sid, gate in gates.items():
+                    key = normalize_sample_id(str(sid))
+                    payload = raw_sample_quality.setdefault(key, {"sample_id": key})
+                    payload["callability_gate"] = gate
+                    if gate.get("prediction_action") == "abstain_review_unresolved":
+                        payload["query_prediction_action"] = "abstain_review_unresolved"
+                        payload[
+                            "marker_recovery_status"
+                        ] = "insufficient_callability_abstain"
+                        payload["marker_recovery_reason"] = (
+                            "Feature recovery and/or callable fraction below configured gates; "
+                            "prediction should be treated as review/unresolved."
+                        )
+                        logger.warning(
+                            "Query sample %s abstains under callability gates | gate=%s",
+                            key,
+                            gate.get("gate_status"),
+                        )
 
         if is_hierarchical_registry(self.registry):
-            logger.info("Detected multi-level hierarchy registry; using recursive hierarchy query traversal.")
+            logger.info(
+                "Detected multi-level hierarchy registry; using recursive hierarchy query traversal."
+            )
             return self._query_hierarchy(
                 X_raw=X_raw,
                 raw_calls=raw_calls,
@@ -2849,38 +4019,127 @@ class NetworkParserQueryEngine:
                 max_markers=max_markers,
             )
 
-        level1_features, level1_payload, level1_ranked, level1_importance = self._load_level1()
+        (
+            level1_features,
+            level1_payload,
+            level1_ranked,
+            level1_importance,
+        ) = self._load_level1()
         X_l1, l1_alignment = align_to_training_features(X_raw, level1_features)
-        l1_pred, l1_support, l1_class_support = predict_labels_and_support(level1_payload, X_l1)
-        l1_tree_paths = decision_tree_path_explanation(level1_payload, X_l1)
+        l1_gates = self._gates_for_features(
+            X_raw=X_raw,
+            features=level1_features,
+            feature_metadata_by_sample=raw_feature_metadata,
+        )
+        l1_alignment["callability_gates"] = l1_gates
+        l1_pred, l1_support, l1_class_support = predict_labels_and_support(
+            level1_payload,
+            X_l1,
+            gate_results=l1_gates,
+        )
+        l1_tree_paths = decision_tree_path_explanation(level1_payload, X_l1, l1_gates)
         support_policy = self._resolve_label_training_support_policy()
-        level1_label_column = str(self.registry.get("level1", {}).get("label_column", "level1")).strip()
+        level1_label_column = str(
+            self.registry.get("level1", {}).get("label_column", "level1")
+        ).strip()
 
         sample_ids = list(X_l1.index.astype(str))
         groups: Dict[str, List[Tuple[int, str]]] = defaultdict(list)
         for idx, sample_id in enumerate(sample_ids):
-            groups[str(l1_pred[idx])].append((idx, sample_id))
+            if (l1_gates.get(sample_id) or {}).get("prediction_action") == "predict":
+                groups[str(l1_pred[idx])].append((idx, sample_id))
 
         rows_by_sample_id: Dict[str, Dict[str, Any]] = {}
         report_by_sample_id: Dict[str, Dict[str, Any]] = {}
         alignment_by_level2_source: Dict[str, Any] = {}
 
+        # A failed Level-1 gate terminates classic two-level routing immediately;
+        # no Level-2 payload is loaded and no explanation path is fabricated.
+        for idx, sample_id in enumerate(sample_ids):
+            l1_gate = l1_gates.get(sample_id, {})
+            if l1_gate.get("prediction_action") == "predict":
+                continue
+            reason_codes = list(l1_gate.get("abstention_reason_codes") or [])
+            sample_mapping_quality = raw_sample_quality.get(sample_id, {})
+            row = {
+                "sample_id": sample_id,
+                "predicted_level1_identity": "unavailable",
+                "level1_support": None,
+                "predicted_level2_identity": "unavailable",
+                "level2_support": None,
+                "level2_model_source": "not_routed_callability_abstention",
+                "n_level1_supporting_markers": 0,
+                "n_level2_supporting_markers": 0,
+                "level1_interpretation_confidence": "unavailable",
+                "level1_confidence_note": "Required Level-1 markers did not pass callability gates.",
+                "level2_interpretation_confidence": "unavailable",
+                "level2_confidence_note": "Level-2 routing was not attempted.",
+                "query_marker_recovery_status": sample_mapping_quality.get(
+                    "marker_recovery_status"
+                ),
+                "query_marker_recovery_reason": sample_mapping_quality.get(
+                    "marker_recovery_reason"
+                ),
+                "query_prediction_action": "abstain_review_unresolved",
+                "query_abstention_reason_codes": reason_codes,
+                "query_callability_gate_status": l1_gate.get("gate_status"),
+                "query_feature_recovery_fraction": l1_gate.get(
+                    "feature_recovery_fraction"
+                ),
+                "query_callable_fraction": l1_gate.get("callable_fraction"),
+                "query_call_state_counts": l1_gate.get("call_state_counts", {}),
+            }
+            rows_by_sample_id[sample_id] = row
+            report_by_sample_id[sample_id] = {
+                **row,
+                "level1_class_support": {},
+                "level2_class_support": {},
+                "level1_feature_evidence": {},
+                "level2_feature_evidence": {},
+                "level1_supporting_markers": [],
+                "level2_supporting_markers": [],
+                "level1_decision_path": [],
+                "level2_decision_path": [],
+                "level1_callability_gate": l1_gate,
+                "level2_callability_gate": {},
+                "raw_sequence_mapping_quality": sample_mapping_quality,
+            }
+
         logger.info(
-            "Running two-level query with batched Level-2 inference | samples=%d | level1_groups=%d",
+            "Running hierarchy query with batched Level-2 inference | samples=%d | level1_groups=%d",
             len(sample_ids),
             len(groups),
         )
 
         for predicted_l1, members in groups.items():
-            level2_source, l2_features, l2_payload, l2_ranked, l2_importance = self._select_level2_payload(
-                predicted_l1
-            )
+            (
+                level2_source,
+                l2_features,
+                l2_payload,
+                l2_ranked,
+                l2_importance,
+            ) = self._select_level2_payload(predicted_l1)
             member_sample_ids = [sample_id for _, sample_id in members]
-            X_l2, l2_alignment = align_to_training_features(X_raw.loc[member_sample_ids], l2_features)
+            X_l2, l2_alignment = align_to_training_features(
+                X_raw.loc[member_sample_ids], l2_features
+            )
+            l2_gates = self._gates_for_features(
+                X_raw=X_raw.loc[member_sample_ids],
+                features=l2_features,
+                feature_metadata_by_sample={
+                    sample_id: raw_feature_metadata.get(sample_id, {})
+                    for sample_id in member_sample_ids
+                },
+            )
+            l2_alignment["callability_gates"] = l2_gates
             alignment_by_level2_source.setdefault(level2_source, l2_alignment)
 
-            l2_pred, l2_support, l2_class_support = predict_labels_and_support(l2_payload, X_l2)
-            l2_tree_paths = decision_tree_path_explanation(l2_payload, X_l2)
+            l2_pred, l2_support, l2_class_support = predict_labels_and_support(
+                l2_payload,
+                X_l2,
+                gate_results=l2_gates,
+            )
+            l2_tree_paths = decision_tree_path_explanation(l2_payload, X_l2, l2_gates)
             level2_target_label_column = (
                 self.registry.get("level2", {}).get("global_label_column")
                 if level2_source == "global_fallback"
@@ -2890,6 +4149,15 @@ class NetworkParserQueryEngine:
             for local_idx, (global_idx, sample_id) in enumerate(members):
                 sample_feature_metadata = raw_feature_metadata.get(sample_id, {})
                 sample_mapping_quality = raw_sample_quality.get(sample_id, {})
+                l1_gate = l1_gates.get(sample_id, {})
+                l2_gate = l2_gates.get(sample_id, {})
+                failed_gate = (
+                    l1_gate
+                    if l1_gate.get("prediction_action") != "predict"
+                    else (
+                        l2_gate if l2_gate.get("prediction_action") != "predict" else {}
+                    )
+                )
                 l1_markers = supporting_markers_for_sample(
                     X_l1.loc[sample_id],
                     ranked_features=level1_ranked,
@@ -2931,27 +4199,48 @@ class NetworkParserQueryEngine:
                     n_supporting_markers=len(l2_markers),
                 )
 
-                l1_reported, l1_routing, l1_review_row, _l1_review_step = self._low_support_review_bundle(
+                (
+                    l1_reported,
+                    l1_routing,
+                    l1_review_row,
+                    _l1_review_step,
+                ) = self._low_support_review_bundle(
                     label_column=level1_label_column,
                     prediction=str(predicted_l1),
                     prefix="level1_identity",
                     support_policy=support_policy,
                 )
                 if l1_review_row:
-                    l1_confidence = l1_review_row.get("level1_identity_interpretation_confidence", l1_confidence)
-                    l1_confidence_note = l1_review_row.get("level1_identity_confidence_note", l1_confidence_note)
+                    l1_confidence = l1_review_row.get(
+                        "level1_identity_interpretation_confidence", l1_confidence
+                    )
+                    l1_confidence_note = l1_review_row.get(
+                        "level1_identity_confidence_note", l1_confidence_note
+                    )
 
                 l2_candidate = str(l2_pred[local_idx])
-                l2_label_column = str(level2_target_label_column or self.registry.get("level2", {}).get("label_column", "level2")).strip()
-                l2_reported, _l2_routing, l2_review_row, _l2_review_step = self._low_support_review_bundle(
+                l2_label_column = str(
+                    level2_target_label_column
+                    or self.registry.get("level2", {}).get("label_column", "level2")
+                ).strip()
+                (
+                    l2_reported,
+                    _l2_routing,
+                    l2_review_row,
+                    _l2_review_step,
+                ) = self._low_support_review_bundle(
                     label_column=l2_label_column,
                     prediction=l2_candidate,
                     prefix="level2_identity",
                     support_policy=support_policy,
                 )
                 if l2_review_row:
-                    l2_confidence = l2_review_row.get("level2_identity_interpretation_confidence", l2_confidence)
-                    l2_confidence_note = l2_review_row.get("level2_identity_confidence_note", l2_confidence_note)
+                    l2_confidence = l2_review_row.get(
+                        "level2_identity_interpretation_confidence", l2_confidence
+                    )
+                    l2_confidence_note = l2_review_row.get(
+                        "level2_identity_confidence_note", l2_confidence_note
+                    )
 
                 row = {
                     "sample_id": sample_id,
@@ -2969,16 +4258,36 @@ class NetworkParserQueryEngine:
                     "level2_confidence_note": l2_confidence_note,
                     **flatten_feature_evidence("level1", l1_evidence),
                     **flatten_feature_evidence("level2", l2_evidence),
-                    "query_marker_recovery_status": sample_mapping_quality.get("marker_recovery_status"),
-                    "query_marker_recovery_reason": sample_mapping_quality.get("marker_recovery_reason"),
-                    "query_active_marker_evidence_status": sample_mapping_quality.get("active_marker_evidence_status"),
-                    "query_active_marker_evidence_reason": sample_mapping_quality.get("active_marker_evidence_reason"),
-                    "query_unique_mapped_fraction": sample_mapping_quality.get("unique_mapped_fraction"),
-                    "query_active_feature_fraction": sample_mapping_quality.get("active_feature_fraction"),
-                    "query_n_encoded_active_features": sample_mapping_quality.get("n_encoded_active_features"),
-                    "query_n_resolved_features": sample_mapping_quality.get("n_resolved_features"),
-                    "query_resolved_feature_fraction": sample_mapping_quality.get("resolved_feature_fraction"),
-                    "query_n_resolved_baseline_features": sample_mapping_quality.get("n_resolved_baseline_features"),
+                    "query_marker_recovery_status": sample_mapping_quality.get(
+                        "marker_recovery_status"
+                    ),
+                    "query_marker_recovery_reason": sample_mapping_quality.get(
+                        "marker_recovery_reason"
+                    ),
+                    "query_active_marker_evidence_status": sample_mapping_quality.get(
+                        "active_marker_evidence_status"
+                    ),
+                    "query_active_marker_evidence_reason": sample_mapping_quality.get(
+                        "active_marker_evidence_reason"
+                    ),
+                    "query_unique_mapped_fraction": sample_mapping_quality.get(
+                        "unique_mapped_fraction"
+                    ),
+                    "query_active_feature_fraction": sample_mapping_quality.get(
+                        "active_feature_fraction"
+                    ),
+                    "query_n_encoded_active_features": sample_mapping_quality.get(
+                        "n_encoded_active_features"
+                    ),
+                    "query_n_resolved_features": sample_mapping_quality.get(
+                        "n_resolved_features"
+                    ),
+                    "query_resolved_feature_fraction": sample_mapping_quality.get(
+                        "resolved_feature_fraction"
+                    ),
+                    "query_n_resolved_baseline_features": sample_mapping_quality.get(
+                        "n_resolved_baseline_features"
+                    ),
                     "query_resolved_baseline_feature_fraction": sample_mapping_quality.get(
                         "resolved_baseline_feature_fraction"
                     ),
@@ -2992,9 +4301,27 @@ class NetworkParserQueryEngine:
                         "n_unresolved_or_missing_context_calls",
                         sample_mapping_quality.get("n_unresolved_or_missing_calls"),
                     ),
-                    "query_n_multi_hit_calls": sample_mapping_quality.get("n_multi_hit_calls"),
-                    "query_n_ambiguous_base_calls": sample_mapping_quality.get("n_ambiguous_base_calls"),
-                    "query_n_non_training_allele_calls": sample_mapping_quality.get("n_non_training_allele_calls"),
+                    "query_n_multi_hit_calls": sample_mapping_quality.get(
+                        "n_multi_hit_calls"
+                    ),
+                    "query_n_ambiguous_base_calls": sample_mapping_quality.get(
+                        "n_ambiguous_base_calls"
+                    ),
+                    "query_n_non_training_allele_calls": sample_mapping_quality.get(
+                        "n_non_training_allele_calls"
+                    ),
+                    "query_prediction_action": (
+                        "abstain_review_unresolved" if failed_gate else "predict"
+                    ),
+                    "query_abstention_reason_codes": list(
+                        failed_gate.get("abstention_reason_codes") or []
+                    ),
+                    "query_callability_gate_status": failed_gate.get("gate_status"),
+                    "query_feature_recovery_fraction": failed_gate.get(
+                        "feature_recovery_fraction"
+                    ),
+                    "query_callable_fraction": failed_gate.get("callable_fraction"),
+                    "query_call_state_counts": failed_gate.get("call_state_counts", {}),
                     **l1_review_row,
                     **l2_review_row,
                 }
@@ -3009,11 +4336,17 @@ class NetworkParserQueryEngine:
                     "level2_feature_evidence": l2_evidence,
                     "level1_supporting_markers": l1_markers,
                     "level2_supporting_markers": l2_markers,
-                    "fasta_mapping_quality": sample_mapping_quality if query_input_type == "fasta" else {},
-                    "vcf_mapping_quality": sample_mapping_quality if query_input_type in {"vcf", "fastq"} else {},
+                    "fasta_mapping_quality": sample_mapping_quality
+                    if query_input_type == "fasta"
+                    else {},
+                    "vcf_mapping_quality": sample_mapping_quality
+                    if query_input_type in {"vcf", "fastq"}
+                    else {},
                     "raw_sequence_mapping_quality": sample_mapping_quality,
                     "level1_decision_path": l1_tree_paths.get(sample_id, []),
                     "level2_decision_path": l2_tree_paths.get(sample_id, []),
+                    "level1_callability_gate": l1_gate,
+                    "level2_callability_gate": l2_gate,
                 }
 
         rows = [rows_by_sample_id[sample_id] for sample_id in sample_ids]
@@ -3034,8 +4367,12 @@ class NetworkParserQueryEngine:
             "n_query_samples": int(X_raw.shape[0]),
             "n_query_features_raw": int(X_raw.shape[1]),
             "query_input_type": query_input_type,
-            "fasta_mapping": raw_mapping_summary if query_input_type == "fasta" else None,
-            "vcf_mapping": raw_mapping_summary if query_input_type in {"vcf", "fastq"} else None,
+            "fasta_mapping": raw_mapping_summary
+            if query_input_type == "fasta"
+            else None,
+            "vcf_mapping": raw_mapping_summary
+            if query_input_type in {"vcf", "fastq"}
+            else None,
             "raw_sequence_mapping": raw_mapping_summary,
             "fastq_processing": fastq_processing_summary,
         }
@@ -3051,7 +4388,7 @@ class NetworkParserQueryEngine:
         write_json(route_audit, route_audit_path)
 
         report = {
-            "mode": "two_level_query",
+            "mode": "hierarchy_query",
             "registry": str(self.registry_path),
             "genomic_input": str(genomic_path),
             "n_samples": int(len(report_samples)),
@@ -3063,9 +4400,9 @@ class NetworkParserQueryEngine:
                 "For FASTA/VCF/FASTQ queries, NetworkParser reconstructs the saved trained feature space from the selected-feature manifest.",
                 "Query mode does not rerun cohort-level matrix refinement, redundancy reduction, RF-FDR, model selection, or tree construction.",
                 "For FASTA queries, saved context sequences are mapped to the query genome and the centre nucleotide is encoded with the saved baseline/REF/ALT rule.",
-                "For VCF queries, saved feature coordinates are looked up directly in the query VCF; absent variant records are treated as reference-state calls and encoded with the same saved rule.",
+                "For VCF queries, saved feature coordinates are looked up by contig and position; absence from a variants-only VCF remains unknown unless the explicit legacy absence-as-reference option is enabled.",
                 "Resolved baseline states encoded as 0 are valid trained-marker evidence for the overall query pattern.",
-                "Unresolved, ambiguous, repeated, or non-training allele calls are encoded as 0 and explicitly reported in the mapping summary.",
+                "Unresolved, ambiguous, repeated, absent, or non-training allele calls remain NaN and contribute to callability abstention.",
             ],
             "artifacts": {
                 "predictions_csv": str(predictions_path),
@@ -3076,8 +4413,13 @@ class NetworkParserQueryEngine:
                 "report_json": str(out / "query_report.json"),
                 "report_txt": str(out / "query_report.txt"),
                 "fastq_processing_summary": (
-                    str(out / "fastq_query_preprocessing" / "fastq_processing_summary.json")
-                    if fastq_processing_summary is not None else None
+                    str(
+                        out
+                        / "fastq_query_preprocessing"
+                        / "fastq_processing_summary.json"
+                    )
+                    if fastq_processing_summary is not None
+                    else None
                 ),
             },
         }
@@ -3193,27 +4535,45 @@ def build_query_route_audit(
                 "sample_id": sample.get("sample_id"),
                 "predicted_level1_identity": sample.get("predicted_level1_identity"),
                 "level1_support": sample.get("level1_support"),
-                "level1_interpretation_confidence": sample.get("level1_interpretation_confidence"),
-                "level1_resolved_marker_evidence_status": sample.get("level1_resolved_marker_evidence_status"),
-                "level1_nonbaseline_evidence_status": sample.get("level1_nonbaseline_evidence_status"),
+                "level1_interpretation_confidence": sample.get(
+                    "level1_interpretation_confidence"
+                ),
+                "level1_resolved_marker_evidence_status": sample.get(
+                    "level1_resolved_marker_evidence_status"
+                ),
+                "level1_nonbaseline_evidence_status": sample.get(
+                    "level1_nonbaseline_evidence_status"
+                ),
                 "predicted_level2_identity": sample.get("predicted_level2_identity"),
                 "level2_support": sample.get("level2_support"),
                 "level2_model_source": sample.get("level2_model_source"),
                 "level2_target_label_column": sample.get("level2_target_label_column"),
-                "level2_interpretation_confidence": sample.get("level2_interpretation_confidence"),
-                "level2_resolved_marker_evidence_status": sample.get("level2_resolved_marker_evidence_status"),
-                "level2_nonbaseline_evidence_status": sample.get("level2_nonbaseline_evidence_status"),
-                "query_marker_recovery_status": sample.get("query_marker_recovery_status"),
-                "query_resolved_marker_evidence_status": sample.get("query_resolved_marker_evidence_status"),
+                "level2_interpretation_confidence": sample.get(
+                    "level2_interpretation_confidence"
+                ),
+                "level2_resolved_marker_evidence_status": sample.get(
+                    "level2_resolved_marker_evidence_status"
+                ),
+                "level2_nonbaseline_evidence_status": sample.get(
+                    "level2_nonbaseline_evidence_status"
+                ),
+                "query_marker_recovery_status": sample.get(
+                    "query_marker_recovery_status"
+                ),
+                "query_resolved_marker_evidence_status": sample.get(
+                    "query_resolved_marker_evidence_status"
+                ),
             }
         )
 
     return {
-        "mode": "two_level_query_route_audit",
+        "mode": "hierarchy_query_route_audit",
         "registry": str(registry_path),
         "query_input_type": query_input_type,
         "n_samples": int(len(report_samples)),
-        "level1_alignment_status": l1_alignment.get("alignment_status") if isinstance(l1_alignment, dict) else None,
+        "level1_alignment_status": l1_alignment.get("alignment_status")
+        if isinstance(l1_alignment, dict)
+        else None,
         "level2_alignment_by_source": alignment_by_level2_source,
         "routes": routes,
     }
@@ -3245,14 +4605,24 @@ def build_hierarchical_query_route_audit(
                         "support": step.get("support"),
                         "node_status": step.get("node_status"),
                         "node_key": step.get("node_key"),
-                        "interpretation_confidence": step.get("interpretation_confidence"),
-                        "resolved_marker_evidence_status": (step.get("feature_evidence") or {}).get("resolved_marker_evidence_status"),
-                        "nonbaseline_evidence_status": (step.get("feature_evidence") or {}).get("nonbaseline_evidence_status"),
+                        "interpretation_confidence": step.get(
+                            "interpretation_confidence"
+                        ),
+                        "resolved_marker_evidence_status": (
+                            step.get("feature_evidence") or {}
+                        ).get("resolved_marker_evidence_status"),
+                        "nonbaseline_evidence_status": (
+                            step.get("feature_evidence") or {}
+                        ).get("nonbaseline_evidence_status"),
                     }
                     for step in sample.get("hierarchy_steps", []) or []
                 ],
-                "query_marker_recovery_status": sample.get("query_marker_recovery_status"),
-                "query_resolved_marker_evidence_status": sample.get("query_resolved_marker_evidence_status"),
+                "query_marker_recovery_status": sample.get(
+                    "query_marker_recovery_status"
+                ),
+                "query_resolved_marker_evidence_status": sample.get(
+                    "query_resolved_marker_evidence_status"
+                ),
             }
         )
 
@@ -3286,7 +4656,9 @@ def write_hierarchical_text_report(report: Dict[str, Any], path: Path) -> None:
     lines.append("=" * 54)
     lines.append(f"Samples queried: {report.get('n_samples', 0)}")
     if report.get("hierarchy_label_columns"):
-        lines.append(f"Hierarchy labels: {', '.join(map(str, report.get('hierarchy_label_columns', [])))}")
+        lines.append(
+            f"Hierarchy labels: {', '.join(map(str, report.get('hierarchy_label_columns', [])))}"
+        )
     if report.get("diagnostic_question"):
         lines.append("")
         lines.append("Diagnostic question")
@@ -3302,19 +4674,33 @@ def write_hierarchical_text_report(report: Dict[str, Any], path: Path) -> None:
             lines.append("Query trained-feature recovery")
             lines.append(f"  Marker recovery: {rq.get('marker_recovery_status', 'NA')}")
             if rq.get("resolved_marker_evidence_status"):
-                lines.append(f"  Resolved marker pattern: {rq.get('resolved_marker_evidence_status', 'NA')}")
-            lines.append(f"  Nonbaseline marker evidence: {rq.get('active_marker_evidence_status', 'NA')}")
-            lines.append(f"  Resolved trained-marker calls: {rq.get('n_resolved_features', 0)}")
-            lines.append(f"  Active encoded calls: {rq.get('n_encoded_active_features', 0)}")
+                lines.append(
+                    f"  Resolved marker pattern: {rq.get('resolved_marker_evidence_status', 'NA')}"
+                )
+            lines.append(
+                f"  Nonbaseline marker evidence: {rq.get('active_marker_evidence_status', 'NA')}"
+            )
+            lines.append(
+                f"  Resolved trained-marker calls: {rq.get('n_resolved_features', 0)}"
+            )
+            lines.append(
+                f"  Active encoded calls: {rq.get('n_encoded_active_features', 0)}"
+            )
             lines.append("")
 
-        lines.append(f"Predicted hierarchy path: {sample.get('predicted_hierarchy_path', 'NA')}")
+        lines.append(
+            f"Predicted hierarchy path: {sample.get('predicted_hierarchy_path', 'NA')}"
+        )
         lines.append(f"Terminal label: {sample.get('predicted_terminal_label', 'NA')}")
-        lines.append(f"Terminal status: {sample.get('hierarchy_terminal_status', 'NA')} ({sample.get('hierarchy_terminal_reason', 'NA')})")
+        lines.append(
+            f"Terminal status: {sample.get('hierarchy_terminal_status', 'NA')} ({sample.get('hierarchy_terminal_reason', 'NA')})"
+        )
 
         for step in sample.get("hierarchy_steps", []) or []:
             lines.append("")
-            lines.append(f"Level {step.get('level_number')} — {step.get('label_column')}")
+            lines.append(
+                f"Level {step.get('level_number')} — {step.get('label_column')}"
+            )
             lines.append(f"  Prediction: {step.get('prediction')}")
             if step.get("support") is not None:
                 try:
@@ -3322,23 +4708,41 @@ def write_hierarchical_text_report(report: Dict[str, Any], path: Path) -> None:
                 except Exception:
                     lines.append(f"  Support: {step.get('support')}")
             if step.get("interpretation_confidence"):
-                lines.append(f"  Interpretation confidence: {step.get('interpretation_confidence')}")
+                lines.append(
+                    f"  Interpretation confidence: {step.get('interpretation_confidence')}"
+                )
             if step.get("confidence_note"):
                 lines.append(f"  Confidence note: {step.get('confidence_note')}")
             evidence = step.get("feature_evidence") or {}
             if evidence:
                 lines.append("  Level-specific marker evidence:")
-                lines.append(f"    Selected features: {evidence.get('n_selected_features', 'NA')}")
-                lines.append(f"    Nonbaseline features: {evidence.get('n_active_features', 'NA')}")
-                lines.append(f"    Resolved trained-marker states: {evidence.get('n_resolved_features', 'NA')}")
-                lines.append(f"    Resolved baseline states: {evidence.get('n_resolved_baseline_features', 'NA')}")
+                lines.append(
+                    f"    Selected features: {evidence.get('n_selected_features', 'NA')}"
+                )
+                lines.append(
+                    f"    Nonbaseline features: {evidence.get('n_active_features', 'NA')}"
+                )
+                lines.append(
+                    f"    Resolved trained-marker states: {evidence.get('n_resolved_features', 'NA')}"
+                )
+                lines.append(
+                    f"    Resolved baseline states: {evidence.get('n_resolved_baseline_features', 'NA')}"
+                )
                 if evidence.get("resolved_feature_fraction") is not None:
-                    lines.append(f"    Resolved feature fraction: {float(evidence.get('resolved_feature_fraction')):.4f}")
-                lines.append(f"    Marker recovery: {evidence.get('marker_recovery_status', 'NA')}")
-                lines.append(f"    Resolved marker pattern: {evidence.get('resolved_marker_evidence_status', 'NA')}")
+                    lines.append(
+                        f"    Resolved feature fraction: {float(evidence.get('resolved_feature_fraction')):.4f}"
+                    )
+                lines.append(
+                    f"    Marker recovery: {evidence.get('marker_recovery_status', 'NA')}"
+                )
+                lines.append(
+                    f"    Resolved marker pattern: {evidence.get('resolved_marker_evidence_status', 'NA')}"
+                )
             if step.get("supporting_markers"):
                 lines.append("  Supporting markers:")
-                lines.extend(_hierarchy_marker_lines(step.get("supporting_markers", [])))
+                lines.extend(
+                    _hierarchy_marker_lines(step.get("supporting_markers", []))
+                )
             if step.get("decision_path"):
                 lines.append("  Decision path:")
                 for rule in step.get("decision_path", []):
@@ -3355,6 +4759,7 @@ def write_hierarchical_text_report(report: Dict[str, Any], path: Path) -> None:
 
 def write_hierarchical_readable_html_report(report: Dict[str, Any], path: Path) -> None:
     """Write a browser-readable report for arbitrary-depth hierarchy query."""
+
     def _marker_table(markers: List[Dict[str, Any]]) -> str:
         rows: List[str] = []
         for marker in markers[:10]:
@@ -3384,7 +4789,13 @@ def write_hierarchical_readable_html_report(report: Dict[str, Any], path: Path) 
             label_col = html.escape(str(step.get("label_column", "NA")))
             pred = html.escape(str(step.get("prediction", "NA")))
             support = step.get("support")
-            support_text = "NA" if support is None else html.escape(str(round(float(support), 4))) if isinstance(support, (int, float)) else html.escape(str(support))
+            support_text = (
+                "NA"
+                if support is None
+                else html.escape(str(round(float(support), 4)))
+                if isinstance(support, (int, float))
+                else html.escape(str(support))
+            )
             evidence = step.get("feature_evidence") or {}
             markers_html = _marker_table(step.get("supporting_markers", []) or [])
             steps_html.append(
@@ -3434,7 +4845,9 @@ th {{ background: #f3f4f6; }}
 
 def _html_kv(label: str, value: Any) -> str:
     value_text = "NA" if value is None else str(value)
-    return f"<div><strong>{html.escape(label)}:</strong> {html.escape(value_text)}</div>"
+    return (
+        f"<div><strong>{html.escape(label)}:</strong> {html.escape(value_text)}</div>"
+    )
 
 
 def write_readable_html_report(report: Dict[str, Any], path: Path) -> None:
@@ -3443,7 +4856,10 @@ def write_readable_html_report(report: Dict[str, Any], path: Path) -> None:
     for sample in report.get("samples", []) or []:
         sid = html.escape(str(sample.get("sample_id", "NA")))
         marker_items: List[str] = []
-        for level_key, title in (("level1_supporting_markers", "Level 1 supporting markers"), ("level2_supporting_markers", "Level 2 supporting markers")):
+        for level_key, title in (
+            ("level1_supporting_markers", "Level 1 supporting markers"),
+            ("level2_supporting_markers", "Level 2 supporting markers"),
+        ):
             markers = sample.get(level_key, []) or []
             rows = []
             for marker in markers[:10]:
@@ -3469,27 +4885,47 @@ def write_readable_html_report(report: Dict[str, Any], path: Path) -> None:
             "<div><h3>Level 1</h3>"
             + _html_kv("Prediction", sample.get("predicted_level1_identity"))
             + _html_kv("Support", sample.get("level1_support"))
-            + _html_kv("Interpretation confidence", sample.get("level1_interpretation_confidence"))
-            + _html_kv("Resolved marker evidence", sample.get("level1_resolved_marker_evidence_status"))
+            + _html_kv(
+                "Interpretation confidence",
+                sample.get("level1_interpretation_confidence"),
+            )
+            + _html_kv(
+                "Resolved marker evidence",
+                sample.get("level1_resolved_marker_evidence_status"),
+            )
             + _html_kv("Resolved features", sample.get("level1_n_resolved_features"))
-            + _html_kv("Resolved baseline features", sample.get("level1_n_resolved_baseline_features"))
+            + _html_kv(
+                "Resolved baseline features",
+                sample.get("level1_n_resolved_baseline_features"),
+            )
             + _html_kv("Nonbaseline features", sample.get("level1_n_active_features"))
             + "</div>"
             "<div><h3>Level 2</h3>"
             + _html_kv("Prediction", sample.get("predicted_level2_identity"))
             + _html_kv("Support", sample.get("level2_support"))
             + _html_kv("Model source", sample.get("level2_model_source"))
-            + _html_kv("Interpretation confidence", sample.get("level2_interpretation_confidence"))
-            + _html_kv("Resolved marker evidence", sample.get("level2_resolved_marker_evidence_status"))
+            + _html_kv(
+                "Interpretation confidence",
+                sample.get("level2_interpretation_confidence"),
+            )
+            + _html_kv(
+                "Resolved marker evidence",
+                sample.get("level2_resolved_marker_evidence_status"),
+            )
             + _html_kv("Resolved features", sample.get("level2_n_resolved_features"))
-            + _html_kv("Resolved baseline features", sample.get("level2_n_resolved_baseline_features"))
+            + _html_kv(
+                "Resolved baseline features",
+                sample.get("level2_n_resolved_baseline_features"),
+            )
             + _html_kv("Nonbaseline features", sample.get("level2_n_active_features"))
             + "</div></div>"
             + "".join(marker_items)
             + "</section>"
         )
 
-    notes = "".join(f"<li>{html.escape(str(note))}</li>" for note in report.get("notes", []) or [])
+    notes = "".join(
+        f"<li>{html.escape(str(note))}</li>" for note in report.get("notes", []) or []
+    )
     question = html.escape(str(report.get("diagnostic_question", "")))
     document = f"""<!doctype html>
 <html lang=\"en\">
@@ -3507,7 +4943,7 @@ th {{ background: #f0f0f0; }}
 </style>
 </head>
 <body>
-<h1>NetworkParser two-level query report</h1>
+<h1>NetworkParser hierarchy query report</h1>
 <p class=\"question\"><strong>Diagnostic question:</strong> {question}</p>
 <p>Samples queried: {html.escape(str(report.get('n_samples', 0)))}</p>
 {''.join(cards)}
@@ -3522,7 +4958,7 @@ th {{ background: #f0f0f0; }}
 
 def write_text_report(report: Dict[str, Any], path: Path) -> None:
     lines: List[str] = []
-    lines.append("NetworkParser two-level query report")
+    lines.append("NetworkParser hierarchy query report")
     lines.append("=" * 42)
     lines.append(f"Samples queried: {report.get('n_samples', 0)}")
     if report.get("diagnostic_question"):
@@ -3537,25 +4973,51 @@ def write_text_report(report: Dict[str, Any], path: Path) -> None:
         if not evidence:
             return out
         out.append("  Level-specific marker evidence:")
-        out.append(f"    Selected features: {evidence.get('n_selected_features', 'NA')}")
-        out.append(f"    Nonbaseline features: {evidence.get('n_active_features', 'NA')}")
-        out.append(f"    Resolved trained-marker states: {evidence.get('n_resolved_features', 'NA')}")
-        out.append(f"    Resolved baseline states: {evidence.get('n_resolved_baseline_features', 'NA')}")
+        out.append(
+            f"    Selected features: {evidence.get('n_selected_features', 'NA')}"
+        )
+        out.append(
+            f"    Nonbaseline features: {evidence.get('n_active_features', 'NA')}"
+        )
+        out.append(
+            f"    Resolved trained-marker states: {evidence.get('n_resolved_features', 'NA')}"
+        )
+        out.append(
+            f"    Resolved baseline states: {evidence.get('n_resolved_baseline_features', 'NA')}"
+        )
         if evidence.get("resolved_feature_fraction") is not None:
-            out.append(f"    Resolved feature fraction: {float(evidence.get('resolved_feature_fraction')):.4f}")
+            out.append(
+                f"    Resolved feature fraction: {float(evidence.get('resolved_feature_fraction')):.4f}"
+            )
         if evidence.get("unique_mapped_fraction") is not None:
-            out.append(f"    Unique recovery fraction: {float(evidence.get('unique_mapped_fraction')):.4f}")
-        out.append(f"    Marker recovery: {evidence.get('marker_recovery_status', 'NA')}")
-        out.append(f"    Resolved marker pattern: {evidence.get('resolved_marker_evidence_status', 'NA')}")
-        out.append(f"    Nonbaseline evidence: {evidence.get('nonbaseline_evidence_status', evidence.get('active_marker_evidence_status', 'NA'))}")
+            out.append(
+                f"    Unique recovery fraction: {float(evidence.get('unique_mapped_fraction')):.4f}"
+            )
+        out.append(
+            f"    Marker recovery: {evidence.get('marker_recovery_status', 'NA')}"
+        )
+        out.append(
+            f"    Resolved marker pattern: {evidence.get('resolved_marker_evidence_status', 'NA')}"
+        )
+        out.append(
+            f"    Nonbaseline evidence: {evidence.get('nonbaseline_evidence_status', evidence.get('active_marker_evidence_status', 'NA'))}"
+        )
         if evidence.get("n_zero_fill_caution_features", 0):
-            out.append(f"    Zero-fill caution states: {evidence.get('n_zero_fill_caution_features')}")
+            out.append(
+                f"    Zero-fill caution states: {evidence.get('n_zero_fill_caution_features')}"
+            )
         if evidence.get("n_multi_hit_calls", 0):
-            out.append(f"    Multi-hit caution states: {evidence.get('n_multi_hit_calls')}")
+            out.append(
+                f"    Multi-hit caution states: {evidence.get('n_multi_hit_calls')}"
+            )
         if evidence.get("n_ambiguous_base_calls", 0):
-            out.append(f"    Ambiguous-base caution states: {evidence.get('n_ambiguous_base_calls')}")
+            out.append(
+                f"    Ambiguous-base caution states: {evidence.get('n_ambiguous_base_calls')}"
+            )
         if evidence.get("n_non_training_allele_calls", 0):
-            out.append(f"    Non-training-allele caution states: {evidence.get('n_non_training_allele_calls')}")
+            out.append(
+                f"    Non-training-allele caution states: {evidence.get('n_non_training_allele_calls')}"
+            )
         return out
 
     def _marker_lines(markers: List[Dict[str, Any]]) -> List[str]:
@@ -3564,7 +5026,9 @@ def write_text_report(report: Dict[str, Any], path: Path) -> None:
             role = marker.get("evidence_role") or "NA"
             extra = f" | role={role}"
             if marker.get("observed_allele"):
-                quality = marker.get("mapping_quality") or marker.get("allele_call") or ""
+                quality = (
+                    marker.get("mapping_quality") or marker.get("allele_call") or ""
+                )
                 quality_txt = f" | quality={quality}" if quality else ""
                 extra += f" | observed={marker.get('observed_allele')} | status={marker.get('mapping_status', '')}{quality_txt}"
             out.append(f"    - {marker.get('feature')} = {marker.get('value')}{extra}")
@@ -3573,28 +5037,61 @@ def write_text_report(report: Dict[str, Any], path: Path) -> None:
     for sample in report.get("samples", []):
         lines.append(f"Sample: {sample.get('sample_id')}")
         lines.append("-" * (8 + len(str(sample.get("sample_id", "")))))
-        if sample.get("fasta_mapping_quality") or sample.get("vcf_mapping_quality") or sample.get("raw_sequence_mapping_quality"):
-            rq = sample.get("fasta_mapping_quality") or sample.get("vcf_mapping_quality") or sample.get("raw_sequence_mapping_quality") or {}
-            label = "FASTA context recovery" if sample.get("fasta_mapping_quality") else "VCF trained-feature recovery"
+        if (
+            sample.get("fasta_mapping_quality")
+            or sample.get("vcf_mapping_quality")
+            or sample.get("raw_sequence_mapping_quality")
+        ):
+            rq = (
+                sample.get("fasta_mapping_quality")
+                or sample.get("vcf_mapping_quality")
+                or sample.get("raw_sequence_mapping_quality")
+                or {}
+            )
+            label = (
+                "FASTA context recovery"
+                if sample.get("fasta_mapping_quality")
+                else "VCF trained-feature recovery"
+            )
             lines.append(label)
             lines.append(f"  Marker recovery: {rq.get('marker_recovery_status', 'NA')}")
             if rq.get("resolved_marker_evidence_status"):
-                lines.append(f"  Resolved marker pattern: {rq.get('resolved_marker_evidence_status', 'NA')}")
-            lines.append(f"  Nonbaseline marker evidence: {rq.get('active_marker_evidence_status', 'NA')}")
-            lines.append(f"  Unique mapped/resolved calls: {rq.get('n_unique_mapped_calls', 0)} / {rq.get('n_feature_calls', 0)}")
+                lines.append(
+                    f"  Resolved marker pattern: {rq.get('resolved_marker_evidence_status', 'NA')}"
+                )
+            lines.append(
+                f"  Nonbaseline marker evidence: {rq.get('active_marker_evidence_status', 'NA')}"
+            )
+            lines.append(
+                f"  Unique mapped/resolved calls: {rq.get('n_unique_mapped_calls', 0)} / {rq.get('n_feature_calls', 0)}"
+            )
             if rq.get("n_resolved_features") is not None:
-                lines.append(f"  Resolved trained-marker calls: {rq.get('n_resolved_features', 0)}")
+                lines.append(
+                    f"  Resolved trained-marker calls: {rq.get('n_resolved_features', 0)}"
+                )
             if rq.get("n_resolved_baseline_features") is not None:
-                lines.append(f"  Resolved baseline calls encoded as 0: {rq.get('n_resolved_baseline_features', 0)}")
-            lines.append(f"  Active encoded calls: {rq.get('n_encoded_active_features', 0)}")
+                lines.append(
+                    f"  Resolved baseline calls encoded as 0: {rq.get('n_resolved_baseline_features', 0)}"
+                )
+            lines.append(
+                f"  Active encoded calls: {rq.get('n_encoded_active_features', 0)}"
+            )
             if rq.get("n_multi_hit_calls", 0):
-                lines.append(f"  Multi-hit contexts/coordinates filled as 0: {rq.get('n_multi_hit_calls')}")
+                lines.append(
+                    f"  Multi-hit contexts/coordinates filled as 0: {rq.get('n_multi_hit_calls')}"
+                )
             if rq.get("n_ambiguous_base_calls", 0):
-                lines.append(f"  Ambiguous-base calls filled as 0: {rq.get('n_ambiguous_base_calls')}")
+                lines.append(
+                    f"  Ambiguous-base calls filled as 0: {rq.get('n_ambiguous_base_calls')}"
+                )
             if rq.get("n_non_training_allele_calls", 0):
-                lines.append(f"  Non-training alleles filled as 0: {rq.get('n_non_training_allele_calls')}")
+                lines.append(
+                    f"  Non-training alleles filled as 0: {rq.get('n_non_training_allele_calls')}"
+                )
             if rq.get("n_unresolved_or_missing_context_calls", 0):
-                lines.append(f"  Unresolved/missing contexts filled as 0: {rq.get('n_unresolved_or_missing_context_calls')}")
+                lines.append(
+                    f"  Unresolved/missing contexts filled as 0: {rq.get('n_unresolved_or_missing_context_calls')}"
+                )
             lines.append("")
 
         lines.append("Level 1 — strain/sample placement")
@@ -3602,10 +5099,16 @@ def write_text_report(report: Dict[str, Any], path: Path) -> None:
         if sample.get("level1_support") is not None:
             lines.append(f"  Support: {float(sample.get('level1_support')):.4f}")
         if sample.get("level1_interpretation_confidence"):
-            lines.append(f"  Interpretation confidence: {sample.get('level1_interpretation_confidence')}")
+            lines.append(
+                f"  Interpretation confidence: {sample.get('level1_interpretation_confidence')}"
+            )
             if sample.get("level1_confidence_note"):
-                lines.append(f"  Confidence note: {sample.get('level1_confidence_note')}")
-        lines.extend(_evidence_lines("level1", sample.get("level1_feature_evidence") or {}))
+                lines.append(
+                    f"  Confidence note: {sample.get('level1_confidence_note')}"
+                )
+        lines.extend(
+            _evidence_lines("level1", sample.get("level1_feature_evidence") or {})
+        )
         if sample.get("level1_supporting_markers"):
             lines.append("  Supporting markers:")
             lines.extend(_marker_lines(sample.get("level1_supporting_markers", [])))
@@ -3621,12 +5124,20 @@ def write_text_report(report: Dict[str, Any], path: Path) -> None:
             lines.append(f"  Support: {float(sample.get('level2_support')):.4f}")
         lines.append(f"  Model source: {sample.get('level2_model_source')}")
         if sample.get("level2_target_label_column"):
-            lines.append(f"  Target label column: {sample.get('level2_target_label_column')}")
+            lines.append(
+                f"  Target label column: {sample.get('level2_target_label_column')}"
+            )
         if sample.get("level2_interpretation_confidence"):
-            lines.append(f"  Interpretation confidence: {sample.get('level2_interpretation_confidence')}")
+            lines.append(
+                f"  Interpretation confidence: {sample.get('level2_interpretation_confidence')}"
+            )
             if sample.get("level2_confidence_note"):
-                lines.append(f"  Confidence note: {sample.get('level2_confidence_note')}")
-        lines.extend(_evidence_lines("level2", sample.get("level2_feature_evidence") or {}))
+                lines.append(
+                    f"  Confidence note: {sample.get('level2_confidence_note')}"
+                )
+        lines.extend(
+            _evidence_lines("level2", sample.get("level2_feature_evidence") or {})
+        )
         if sample.get("level2_supporting_markers"):
             lines.append("  Supporting markers:")
             lines.extend(_marker_lines(sample.get("level2_supporting_markers", [])))
@@ -3651,18 +5162,40 @@ def write_text_report(report: Dict[str, Any], path: Path) -> None:
 # CLI
 # -----------------------------------------------------------------------------
 
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Apply trained two-level NetworkParser models to new strain/sample input.",
+        description="Apply trained hierarchical NetworkParser models to new strain/sample input.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--genomic", required=True, help="New genomic matrix file or VCF directory.")
-    parser.add_argument("--registry", required=True, help="Path to two_level_model_registry.json from training.")
-    parser.add_argument("--output_dir", required=True, help="Directory for query outputs.")
-    parser.add_argument("--config", default=None, help="Optional JSON config override file.")
-    parser.add_argument("--ref_fasta", default=None, help="Optional reference FASTA for VCF parsing context.")
-    parser.add_argument("--max_markers", type=int, default=10, help="Maximum supporting markers to show per level per sample.")
-    parser.add_argument("--n_jobs", type=int, default=None, help="Runtime worker override.")
+    parser.add_argument(
+        "--genomic", required=True, help="New genomic matrix file or VCF directory."
+    )
+    parser.add_argument(
+        "--registry",
+        required=True,
+        help="Path to hierarchy/two-level/hierarchical model registry JSON from training.",
+    )
+    parser.add_argument(
+        "--output_dir", required=True, help="Directory for query outputs."
+    )
+    parser.add_argument(
+        "--config", default=None, help="Optional JSON config override file."
+    )
+    parser.add_argument(
+        "--ref_fasta",
+        default=None,
+        help="Optional reference FASTA for VCF parsing context.",
+    )
+    parser.add_argument(
+        "--max_markers",
+        type=int,
+        default=10,
+        help="Maximum supporting markers to show per level per sample.",
+    )
+    parser.add_argument(
+        "--n_jobs", type=int, default=None, help="Runtime worker override."
+    )
     parser.add_argument(
         "--query_input_type",
         choices=["auto", "matrix", "vcf", "fasta", "raw_sequence", "fastq"],

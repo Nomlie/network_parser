@@ -1,30 +1,58 @@
+```text
 TRAINING / DISCOVERY SIDE
 -------------------------
 
-Genomic input                    Metadata input
-(VCF / matrix)                   (labels: group, phenotype, AMR profile)
-      │                                      │
-      │                                      │
-      ▼                                      ▼
-Clean genomic matrix                  Supervised labels
-sample × genomic features             sample → target label
-      │                                      │
-      └───────────────┬──────────────────────┘
-                      ▼
+Genomic input                         Metadata input
+(VCF / matrix)                        (labels: group, phenotype,
+                                      AMR profile, terminal endpoint)
+      │                                       │
+      │                                       │
+      ▼                                       ▼
+Clean genomic matrix                   Supervised labels
+sample × genomic features              sample → target label(s)
+      │                                       │
+      │                                       │
+      └────────────────┬──────────────────────┘
+                       ▼
+          Sample / metadata alignment
+          retain samples with both:
+          valid genomic features + valid labels
+                       │
+                       ▼
         Central statistical feature filtering
-        χ² / Fisher / RF-FDR / permutation-FDR
-                      │
-                      ▼
+        χ²-FDR / Fisher-FDR / RF-FDR /
+        permutation-FDR
+                       │
+                       ▼
               Filtered matrix
-      only retained genomic features enter modelling
-                      │
-                      ▼
-        Level 1 and Level 2 model training
-                      │
-                      ▼
+      only statistically retained genomic features
+      continue into downstream modelling
+                       │
+                       ▼
+        Ranked feature-panel separability check
+        evaluate compact top-N feature panels
+        from the statistically filtered feature set
+                       │
+                       ▼
+             Model-ready feature panel
+      compact selected matrix for training and querying
+                       │
+                       ▼
+        Level 1 / Level 2 / recursive hierarchy training
+        Level 1: strain / lineage / group placement
+        Level 2+: AMR phenotype / resistance profile /
+                  terminal endpoint prediction
+                       │
+                       ▼
+        Per-node model training and fallback handling
+        train branch-specific models where support is sufficient
+        record skipped / deterministic / fallback nodes explicitly
+                       │
+                       ▼
        Selected feature lists saved in registry
-                      │
-                      ▼
+       per trained level / node / fallback model
+                       │
+                       ▼
         Selected-feature manifest saved
         ┌────────────────────────────────────────────┐
         │ Feature_ID                                 │
@@ -36,52 +64,170 @@ sample × genomic features             sample → target label
         │ context sequence around marker             │
         │ marker-centre offset                       │
         │ gene / region annotation                   │
+        │ trained level / hierarchy node             │
+        │ parent branch / model route                │
+        │ feature source: central filter + panel     │
         └────────────────────────────────────────────┘
-                      │
-                      ▼
+                       │
+                       ▼
               Query-ready model registry
+        ┌────────────────────────────────────────────┐
+        │ trained model files                        │
+        │ selected features per model                │
+        │ selected-feature manifests                 │
+        │ hierarchy structure                        │
+        │ fallback model records                     │
+        │ label encoders / class mappings            │
+        │ training configuration summary             │
+        │ feature-filtering summaries                │
+        │ feature-panel summaries                    │
+        └────────────────────────────────────────────┘
+                       │
+                       ▼
+        Optional portable model bundle
+        registry + models + selected-marker metadata
 
 
 QUERY / INFERENCE SIDE
 ----------------------
 
 New query sample
-(matrix, VCF-derived matrix, or raw FASTA sequence)
-                      │
-                      ▼
-          Load saved model registry
-          "Which features do the trained models need?"
-                      │
-                      ▼
+(matrix, VCF, raw FASTA sequence, or FASTQ reads)
+                       │
+                       ▼
+        If FASTQ query:
+        FASTQ → alignment → sorted BAM → VCF
+        then continue through the VCF query route
+                       │
+                       ▼
+          Load saved model registry / bundle
+          "Which trained models exist?"
+          "Which hierarchy route should be followed?"
+          "Which selected features does each model need?"
+                       │
+                       ▼
           Load selected-feature manifest
           "What does each feature mean biologically?"
-                      │
-                      ▼
+          "How should each feature be reconstructed?"
+                       │
+                       ▼
+        Build query feature representation
+        depending on query input type:
+
+        Matrix query:
+          align query columns to trained selected features
+
+        VCF query:
+          recover trained marker states from query VCF
+
+        FASTA query:
+          map saved context sequence to query DNA
+                       │
+                       ▼
         For raw FASTA query:
-        map saved context sequence to query DNA
-                      │
-                      ▼
-        Extract nucleotide at marker centre
-                      │
-                      ▼
+        extract nucleotide at marker centre
+                       │
+                       ▼
         Compare observed nucleotide with:
         REF / ALT / baseline allele from manifest
-                      │
-                      ▼
+                       │
+                       ▼
         Encode using the same training rule
-        baseline = 0, known non-baseline = 1
-                      │
-                      ▼
+        baseline match = 0
+        known non-baseline / ALT match = 1
+        unresolved or missing trained marker = 0 with warning
+                       │
+                       ▼
         Build one-sample selected-feature matrix
-        same columns/order expected by trained model
-                      │
-                      ▼
+        same columns and order expected by trained model
+                       │
+                       ▼
         Apply saved Level 1 model
         strain / lineage / group placement
-                      │
-                      ▼
-        Apply saved Level 2 model
-        AMR phenotype / resistance-profile prediction
-                      │
-                      ▼
+                       │
+                       ▼
+        Select next model from registry
+        branch-specific Level 2 model if available
+        otherwise configured global / terminal fallback
+                       │
+                       ▼
+        Apply saved Level 2 or recursive hierarchy model
+        AMR phenotype / resistance-profile /
+        terminal endpoint prediction
+                       │
+                       ▼
+        Marker-evidence audit
+        ┌────────────────────────────────────────────┐
+        │ resolved active marker evidence            │
+        │ resolved baseline marker evidence          │
+        │ missing trained features filled as 0       │
+        │ unresolved context / allele calls          │
+        │ query coverage against selected features   │
+        │ branch-specific marker recovery            │
+        └────────────────────────────────────────────┘
+                       │
+                       ▼
         Prediction report + marker evidence report
+        ┌────────────────────────────────────────────┐
+        │ predicted route                            │
+        │ predicted label / terminal endpoint        │
+        │ model support / confidence-like support    │
+        │ marker recovery summary                    │
+        │ alignment summary                          │
+        │ fallback / skipped-node audit              │
+        │ compact TSV / CSV / JSON / HTML outputs    │
+        └────────────────────────────────────────────┘
+
+
+VALIDATION / REPORTING SIDE
+---------------------------
+
+Saved predictions + labelled metadata
+                       │
+                       ▼
+        Evaluation without retraining
+        no statistical filtering, model fitting,
+        or feature selection is rerun here
+                       │
+                       ▼
+        Performance diagnostics
+        ┌────────────────────────────────────────────┐
+        │ balanced accuracy                          │
+        │ sensitivity / specificity                  │
+        │ precision / PPV                            │
+        │ NPV                                        │
+        │ macro / weighted F1                        │
+        │ confusion matrix                           │
+        │ branch-level hierarchy diagnostics         │
+        └────────────────────────────────────────────┘
+                       │
+                       ▼
+        Optional leakage-aware repeated CV
+        split first → filter inside training fold →
+        select panel inside training fold →
+        train inside training fold →
+        evaluate held-out fold
+                       │
+                       ▼
+        Robust inference summaries
+        fold-wise performance + feature stability
+
+
+NETWORK / GNN OUTPUT SIDE
+-------------------------
+
+Selected feature panels + trained registry + query evidence
+                       │
+                       ▼
+        Network-ready outputs
+        ┌────────────────────────────────────────────┐
+        │ ranked selected marker table               │
+        │ sample-feature matrix                      │
+        │ marker membership per trained level/node   │
+        │ feature overlap between hierarchy levels   │
+        │ sample-feature network                     │
+        │ feature adjacency matrix                   │
+        │ sample-feature adjacency matrix            │
+        │ node metadata for downstream GNN use       │
+        └────────────────────────────────────────────┘
+```

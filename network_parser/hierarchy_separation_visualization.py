@@ -32,7 +32,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 import pandas as pd
 from scipy.cluster.hierarchy import dendrogram, leaves_list, linkage
-from scipy.spatial.distance import pdist, squareform
+from scipy.spatial.distance import squareform
 
 try:
     import matplotlib
@@ -41,7 +41,7 @@ try:
     import matplotlib.pyplot as plt
 
     HAVE_MATPLOTLIB = True
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover
     plt = None  # type: ignore
     HAVE_MATPLOTLIB = False
 
@@ -49,7 +49,7 @@ try:
     from sklearn.metrics import silhouette_score
 
     HAVE_SKLEARN_SILHOUETTE = True
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover
     silhouette_score = None  # type: ignore
     HAVE_SKLEARN_SILHOUETTE = False
 
@@ -59,7 +59,7 @@ try:
         parse_visualization_label_columns,
         write_sample_hierarchy_visualizations,
     )
-except Exception:  # pragma: no cover - supports direct source-tree execution
+except ImportError:  # pragma: no cover - supports direct source-tree execution
     from result_visualization import (  # type: ignore
         build_aligned_metadata_hierarchy_frame,
         parse_visualization_label_columns,
@@ -108,8 +108,14 @@ def _coerce_binary_matrix(X: pd.DataFrame) -> pd.DataFrame:
 
     X_local = X.copy()
     X_local.index = X_local.index.astype(str)
-    X_num = X_local.apply(pd.to_numeric, errors="coerce").fillna(0)
-    return (X_num > 0).astype(int)
+    # Preserve non-callable NaN for pairwise-complete distances.
+    X_num = X_local.apply(pd.to_numeric, errors="coerce")
+    # Drop samples/features that have no evidence at all. Remaining NaNs are
+    # handled pairwise in ``build_feature_space_distances``.
+    X_num = X_num.dropna(axis=0, how="all").dropna(axis=1, how="all")
+    row_ok = X_num.notna().mean(axis=1) >= 0.5
+    X_num = X_num.loc[row_ok]
+    return X_num.where(X_num.isna(), (X_num > 0).astype(float))
 
 
 def _leaf_font_size(n_samples: int) -> float:
@@ -196,15 +202,43 @@ def build_feature_space_distances(
     sample_ids = X_bin.index.astype(str).tolist()
 
     if X_bin.shape[0] < 2:
-        raise ValueError("At least two samples are required for sample separation distances.")
+        raise ValueError(
+            "At least two samples are required for sample separation distances."
+        )
 
-    condensed = pdist(X_bin.values.astype(bool), metric=metric)
+    values = X_bin.to_numpy(dtype=float)
+    pairwise: List[float] = []
+    for left in range(values.shape[0] - 1):
+        for right in range(left + 1, values.shape[0]):
+            jointly_callable = np.isfinite(values[left]) & np.isfinite(values[right])
+            if not jointly_callable.any():
+                pairwise.append(float("nan"))
+                continue
+            a = values[left, jointly_callable].astype(bool)
+            b = values[right, jointly_callable].astype(bool)
+            if metric == "hamming":
+                pairwise.append(float(np.mean(a != b)))
+            else:
+                union = np.logical_or(a, b)
+                pairwise.append(
+                    0.0
+                    if not union.any()
+                    else float(np.logical_and(a != b, union).sum() / union.sum())
+                )
+    condensed = np.asarray(pairwise, dtype=float)
+    if not np.isfinite(condensed).all():
+        raise ValueError(
+            "At least one sample pair has no jointly callable selected features; "
+            "refusing to treat missing states as reference for clustering."
+        )
     square = squareform(condensed)
     distance_df = pd.DataFrame(square, index=sample_ids, columns=sample_ids)
-    return distance_df, condensed, X_bin.values.astype(bool)
+    return distance_df, condensed, X_bin.to_numpy(dtype=float)
 
 
-def _nearest_neighbor_agreement(distance_array: np.ndarray, labels: Sequence[str]) -> Optional[float]:
+def _nearest_neighbor_agreement(
+    distance_array: np.ndarray, labels: Sequence[str]
+) -> Optional[float]:
     labels_arr = np.asarray([str(x) for x in labels], dtype=object)
     n = int(distance_array.shape[0])
     if n < 2 or len(set(labels_arr.tolist())) < 2:
@@ -290,7 +324,7 @@ def build_per_level_separation_summary(
         if col not in labels_df.columns:
             continue
 
-        labels = labels_df[col].astype(str).fillna("[missing]").tolist()
+        labels = labels_df[col].fillna("[missing]").astype(str).tolist()
         counts = pd.Series(labels).value_counts(dropna=False)
         sep = _within_between_distance_summary(distance_array, labels)
 
@@ -302,8 +336,12 @@ def build_per_level_separation_summary(
                 "n_labels": int(counts.shape[0]),
                 "min_label_count": int(counts.min()) if not counts.empty else 0,
                 "max_label_count": int(counts.max()) if not counts.empty else 0,
-                "nearest_neighbor_label_agreement": _nearest_neighbor_agreement(distance_array, labels),
-                "silhouette_score_precomputed_distance": _silhouette_from_precomputed(distance_array, labels),
+                "nearest_neighbor_label_agreement": _nearest_neighbor_agreement(
+                    distance_array, labels
+                ),
+                "silhouette_score_precomputed_distance": _silhouette_from_precomputed(
+                    distance_array, labels
+                ),
                 "mean_within_label_distance": sep["mean_within_distance"],
                 "mean_between_label_distance": sep["mean_between_distance"],
                 "between_within_distance_ratio": sep["between_within_distance_ratio"],
@@ -402,7 +440,11 @@ def write_sample_separation_dendrograms(
     ordered_sample_ids = X_bin.index.astype(str).tolist()
     labels_df = labels_df.copy()
     labels_df["sample_id"] = labels_df["sample_id"].astype(str)
-    labels_df = labels_df.set_index("sample_id", drop=False).reindex(ordered_sample_ids).reset_index(drop=True)
+    labels_df = (
+        labels_df.set_index("sample_id", drop=False)
+        .reindex(ordered_sample_ids)
+        .reset_index(drop=True)
+    )
 
     visualized_columns = [col for col in hierarchy_columns if col in labels_df.columns]
     labels_df["leaf_label_full_hierarchy"] = labels_df.apply(
@@ -431,8 +473,7 @@ def write_sample_separation_dendrograms(
             "leaf_rank": range(1, len(leaf_order) + 1),
             "sample_id": [ordered_sample_ids[i] for i in leaf_order],
             "leaf_label_full_hierarchy": [
-                str(labels_df.iloc[i]["leaf_label_full_hierarchy"])
-                for i in leaf_order
+                str(labels_df.iloc[i]["leaf_label_full_hierarchy"]) for i in leaf_order
             ],
         }
     )
@@ -464,7 +505,12 @@ def write_sample_separation_dendrograms(
     # One dendrogram per hierarchy level.  These make it easier to see which
     # levels separate cleanly in the final selected feature space.
     for col in visualized_columns:
-        safe_col = "".join(ch if ch.isalnum() or ch in {"_", "-"} else "_" for ch in str(col)).strip("_") or "level"
+        safe_col = (
+            "".join(
+                ch if ch.isalnum() or ch in {"_", "-"} else "_" for ch in str(col)
+            ).strip("_")
+            or "level"
+        )
         level_png = out / f"{prefix}_dendrogram_by_{safe_col}.png"
         level_svg = out / f"{prefix}_dendrogram_by_{safe_col}.svg"
         level_labels = (
@@ -506,7 +552,9 @@ def write_sample_separation_dendrograms(
         "matrix_type": "final_selected_binary_feature_matrix",
         "matplotlib_available": bool(HAVE_MATPLOTLIB),
         "sklearn_silhouette_available": bool(HAVE_SKLEARN_SILHOUETTE),
-        "max_samples_for_visualization": int(max_samples) if max_samples is not None else None,
+        "max_samples_for_visualization": int(max_samples)
+        if max_samples is not None
+        else None,
         "artifacts": artifacts,
     }
 
@@ -547,7 +595,9 @@ def _table_to_html(df: pd.DataFrame, max_rows: int = 100) -> str:
 
     suffix = ""
     if int(df.shape[0]) > max_rows:
-        suffix = f"<p class='muted'>Showing first {max_rows} of {int(df.shape[0])} rows.</p>"
+        suffix = (
+            f"<p class='muted'>Showing first {max_rows} of {int(df.shape[0])} rows.</p>"
+        )
     return f"<table><thead><tr>{headers}</tr></thead><tbody>{''.join(rows)}</tbody></table>{suffix}"
 
 
@@ -579,8 +629,16 @@ def write_combined_hierarchy_separation_html(
         level = str(row.get("level_name", ""))
         png = None
         if isinstance(per_level_artifacts, dict):
-            png = per_level_artifacts.get(level, {}).get("png") if isinstance(per_level_artifacts.get(level, {}), dict) else None
-        img = f"<img src='{html.escape(Path(png).name)}' alt='Dendrogram by {html.escape(level)}' />" if png else "<p class='muted'>Image unavailable.</p>"
+            png = (
+                per_level_artifacts.get(level, {}).get("png")
+                if isinstance(per_level_artifacts.get(level, {}), dict)
+                else None
+            )
+        img = (
+            f"<img src='{html.escape(Path(png).name)}' alt='Dendrogram by {html.escape(level)}' />"
+            if png
+            else "<p class='muted'>Image unavailable.</p>"
+        )
         per_level_cards.append(
             "<section class='card'>"
             f"<h2>Level {html.escape(str(row.get('level_index', '')))}: {html.escape(level)}</h2>"
@@ -596,8 +654,8 @@ def write_combined_hierarchy_separation_html(
 
     full_img = (
         f"<img src='{html.escape(full_png_rel)}' alt='Full hierarchy dendrogram' />"
-        if full_png_rel else
-        "<p class='muted'>Full dendrogram image unavailable. Check the TSV/JSON artifacts.</p>"
+        if full_png_rel
+        else "<p class='muted'>Full dendrogram image unavailable. Check the TSV/JSON artifacts.</p>"
     )
 
     content = f"""<!doctype html>
@@ -731,7 +789,9 @@ def write_hierarchy_sample_separation_report(
         include_missing=include_missing,
         max_categories_per_level=max_categories_per_level,
     )
-    visualized_columns = list(hierarchy_summary.get("visualized_columns", parsed_columns))
+    visualized_columns = list(
+        hierarchy_summary.get("visualized_columns", parsed_columns)
+    )
 
     # Metadata aligned to selected matrix order for sample separation.
     X_selected = X_selected.copy()
@@ -759,8 +819,7 @@ def write_hierarchy_sample_separation_report(
     )
 
     per_level_summary_path = (
-        separation_summary.get("artifacts", {})
-        .get("per_level_separation_summary_tsv")
+        separation_summary.get("artifacts", {}).get("per_level_separation_summary_tsv")
         if isinstance(separation_summary.get("artifacts", {}), dict)
         else None
     )
@@ -782,7 +841,9 @@ def write_hierarchy_sample_separation_report(
     )
 
     summary = {
-        "status": "success" if separation_summary.get("status") in {"success", "partial_success"} else separation_summary.get("status", "unknown"),
+        "status": "success"
+        if separation_summary.get("status") in {"success", "partial_success"}
+        else separation_summary.get("status", "unknown"),
         "description": "Combined label hierarchy and final selected-feature sample/strain separation report.",
         "visualized_columns": visualized_columns,
         "label_alignment": label_alignment_summary,
