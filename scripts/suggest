@@ -1,0 +1,55 @@
+I scanned 65 source/workflow scripts—about 51,000 lines—without changing anything. There are several substantial performance opportunities.
+The main findings, in priority order:
+The logged presence filter is not slow; matrix construction immediately afterward is.
+The filter at [data_loader.py (line 1702)](/Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/network_parser/data_loader.py:1702) is only a dictionary comprehension. The next loop at [data_loader.py (line 1773)](/Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/network_parser/data_loader.py:1773) evaluates every sample against every retained feature:
+10,974 × 31,064 = 340,898,336 Python iterations.
+Each absent feature also constructs an AlleleCall object at [vcf_call_semantics.py (line 1061)](/Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/network_parser/vcf_call_semantics.py:1061). With your current assume_absent_variant_is_reference=true, this could instead preallocate a zero-filled NumPy matrix and update only explicit VCF calls through a coordinate-to-column index. Alternate alleles at one position would still remain separate columns. A small parity benchmark of this approach was approximately 13.2× faster than the current cell-by-cell implementation.
+
+Matrix construction creates several redundant, very large representations.
+After the dense loop, the code simultaneously holds Python lists, allele strings, binary strings and a float64 DataFrame at [data_loader.py (line 1891)](/Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/network_parser/data_loader.py:1891) and [data_loader.py (line 1914)](/Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/network_parser/data_loader.py:1914). The float64 matrix alone is about 2.73 GB for this cohort.
+A compact numeric matrix—uint8 plus a missingness mask, or at least float32—would reduce memory substantially. FASTA/binary strings could be generated only while writing rather than retained for every sample.
+
+Artifact redundancy detection adds roughly another gigabyte of temporary data.
+[data_loader.py (line 3066)](/Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/network_parser/data_loader.py:3066) converts the entire matrix into an encoded array, transposes it, and creates a separate bytes object for every feature. At your dimensions, those representations are roughly 341 MB each.
+Exact pattern grouping could use packed bits or chunked column hashes with collision verification. The configured sampling controls are currently ignored at [data_loader.py (line 1043)](/Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/network_parser/data_loader.py:1043).
+
+Chi-square filtering is implemented as 31,064 separate pandas operations—and is repeated at hierarchy nodes.
+[statistical_validation_branch.py (line 274)](/Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/network_parser/statistical_validation_branch.py:274) repeatedly performs index intersections, masks, pd.crosstab, SciPy calls and mutual information calculations, once per feature.
+Since the matrix is binary, all contingency counts can be computed in NumPy chunks for every feature simultaneously, while preserving feature-specific missingness. Chi-square, Cramér’s V and mutual information can then be calculated from those counts. Fisher testing only needs per-feature calls for applicable 2×2 tables.
+This matters particularly because filtering is invoked at each hierarchy target at [hierarchy_protocol.py (line 2218)](/Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/network_parser/hierarchy_protocol.py:2218).
+
+The validation workflow rebuilds the same VCF matrix once per label.
+The experiment script launches four independent cross-validation commands at [02_Lineage_family_Lineage_AMR_profile.sh (line 83)](/Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/scripts/testing_scripts/02_Lineage_family_Lineage_AMR_profile.sh:83). Every command reloads and reconstructs the same 10,974-genome cohort.
+A canonical raw matrix could be built once and reused by training and all CV labels. Supervised filtering must remain fold-local to prevent leakage, but VCF parsing and raw matrix encoding do not need to be repeated.
+
+Each trainable hierarchy node runs a large stack of model fits.
+With defaults, a node performs approximately:
+Four panel sizes × five folds: 20 fits
+Six model probes × five folds: 30 fits
+Five-fold out-of-fold threshold selection: at least 5 more fits
+Optional decision-tree bootstrap: another 100–150 trees
+Panel scoring occurs at [feature_panel_selection.py (line 984)](/Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/network_parser/feature_panel_selection.py:984), model probing at [model_selector.py (line 278)](/Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/network_parser/model_selector.py:278), and OOF threshold fitting at [ml_protocol.py (line 1648)](/Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/network_parser/ml_protocol.py:1648).
+Opportunities include sequentially stopping at the first passing panel when using smallest_passing, dataset-aware exclusion/downsampling of RBF SVC, staged model screening, and reusing folds and numeric preprocessing.
+
+Hierarchy parallelism can create concurrent full-matrix copies.
+Every node begins with X.loc[...].copy() at [hierarchy_protocol.py (line 2087)](/Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/network_parser/hierarchy_protocol.py:2087), while child nodes may run concurrently. Worker budgeting assumes 4 GB per worker at [utils.py (line 1095)](/Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/network_parser/utils.py:1095), rather than measuring the actual matrix and model requirements.
+Shared immutable NumPy storage plus row indices would avoid many copies. Worker limits should be calculated from actual matrix bytes.
+
+CSV checkpoint hashing and output cause repeated full-matrix serialization.
+sha256_dataframe first turns the entire DataFrame into one in-memory CSV byte string at [utils.py (line 550)](/Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/network_parser/utils.py:550). The single-label pipeline hashes the same matrices multiple times and also writes several CSV checkpoints.
+Chunked numeric hashing or hashing an already-written Parquet/Arrow artifact would be considerably faster and use less peak memory.
+
+The shared missingness layer repeatedly copies and converts numeric matrices.
+[matrix_contract.py (line 160)](/Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/network_parser/matrix_contract.py:160) copies the matrix, converts every column individually, and then converts the whole result again. Training preparation calls this during both fitting and transformation. Mode calculation and imputation also loop column-by-column.
+Numeric matrices could bypass coercion, and binary modes/imputation could be vectorized.
+
+Several secondary paths also have worthwhile improvements.
+Recursive query inference performs pandas alignment and prediction one sample at a time; breadth-first batching by hierarchy node would be faster: [query_engine.py (line 3142)](/Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/network_parser/query_engine.py:3142).
+Exact FASTA mapping repeatedly scans the complete genome for every feature: [sequence_query_encoder.py (line 269)](/Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/network_parser/sequence_query_encoder.py:269). Multi-pattern indexing or batched BLAST would scale better.
+Sample-separation visualization uses Python O(samples² × features) loops: [hierarchy_separation_visualization.py (line 209)](/Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/network_parser/hierarchy_separation_visualization.py:209).
+Panel annotation scans the whole catalogue per panel row: [panel_annotation.py (line 439)](/Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/network_parser/panel_annotation.py:439). Normalized joins/indexed lookups would be faster.
+Decision-tree feature stability and pair stability fit separate bootstrap tree sets: [decision_tree_branch.py (line 711)](/Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/network_parser/decision_tree_branch.py:711) and [decision_tree_branch.py (line 981)](/Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/network_parser/decision_tree_branch.py:981). The first set of trees could retain path information for reuse.
+FASTQ alignment statistics trigger three additional complete alignment scans per sample at [fastq_processor.py (line 816)](/Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/network_parser/fastq_processor.py:816).
+
+There is also a defect in the intended chi-square permutation fast path: it passes an ndarray at [statistical_validation_branch.py (line 605)](/Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/network_parser/statistical_validation_branch.py:605), but the receiving function calls DataFrame methods at [statistical_validation_branch.py (line 637)](/Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/network_parser/statistical_validation_branch.py:637). That path would fail before delivering its intended speedup.
+The best implementation order would be: sparse coordinate-based matrix construction, vectorized chi-square testing, reusable cohort-matrix caching, reduced artifact/checkpoint duplication, then model-screening reductions. No project files or running processes were changed.

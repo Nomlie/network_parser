@@ -1,0 +1,8 @@
+{
+  "_comment": "Query already-called Chinese VCFs. AFRO-matched absence-as-REF.",
+  "min_gq_per_sample": 0,
+  "assume_absent_variant_is_reference": true,
+  "min_feature_recovery_fraction": 0.5,
+  "min_callable_fraction": 0.5,
+  "enforce_query_callability_gates": true
+}

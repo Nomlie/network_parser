@@ -249,7 +249,9 @@ def resolve_column_case_insensitive(meta_df: pd.DataFrame, column_name: str) -> 
     return meta_columns_lower[key]
 
 
-def resolve_stratify_column(meta_df: pd.DataFrame, stratify_by: Optional[str]) -> Optional[str]:
+def resolve_stratify_column(
+    meta_df: pd.DataFrame, stratify_by: Optional[str]
+) -> Optional[str]:
     """Resolve stratification column case-insensitively."""
     if stratify_by is None:
         return None
@@ -402,9 +404,7 @@ def stratified_sample(
     if len(selected) < min(n_total, len(meta_df)):
         selected_set = set(selected)
         remaining = [
-            sid
-            for sid in meta_df.index.astype(str).tolist()
-            if sid not in selected_set
+            sid for sid in meta_df.index.astype(str).tolist() if sid not in selected_set
         ]
         rng.shuffle(remaining)
 
@@ -488,7 +488,9 @@ def select_samples(
     )
 
     if real_stratify_col:
-        logger.info("Performing balanced stratified sampling by '%s'", real_stratify_col)
+        logger.info(
+            "Performing balanced stratified sampling by '%s'", real_stratify_col
+        )
         selected_ids = stratified_sample(
             meta_df=meta_valid,
             stratify_col=real_stratify_col,

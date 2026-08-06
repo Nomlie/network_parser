@@ -1,0 +1,49 @@
+#!/bin/bash
+#PBS -l select=1:ncpus=24:mem=120GB
+#PBS -P RCHPC
+#PBS -l walltime=96:00:00
+#PBS -m abe
+#PBS -M nmfuphi@csir.co.za
+#PBS -N np_cv_11
+#PBS -o /mnt/lustre/users/nmfuphi/phDproject/Results/pbs_logs/11_leakage_aware_cv.out
+#PBS -e /mnt/lustre/users/nmfuphi/phDproject/Results/pbs_logs/11_leakage_aware_cv.err
+#
+# Leakage-aware CV only (same resources as main hierarchy PBS).
+# Run AFTER train job completes (or with independent prepare; uses train partition).
+#
+#   qsub pbs_11_leakage_aware_cv.pbs
+#   qsub -v RUN_DIR=/mnt/lustre/.../Hierarchy_Lineage_AMR_Resistance_Profile_seeded_01 \
+#        pbs_11_leakage_aware_cv.pbs
+#   qsub -v SEED_KNOWN_MARKERS=0 pbs_11_leakage_aware_cv.pbs
+#
+set -euo pipefail
+
+if [[ -n "${PBS_O_WORKDIR:-}" ]]; then
+  cd "${PBS_O_WORKDIR}"
+fi
+
+CLUSTER_SCRIPTS="${CLUSTER_SCRIPTS:-/home/nmfuphi/network_parser/scripts/testing_scripts_cluster}"
+if [[ ! -d "${CLUSTER_SCRIPTS}" ]]; then
+  CLUSTER_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fi
+
+# shellcheck source=/dev/null
+source "${CLUSTER_SCRIPTS}/00_env_cluster.sh"
+# shellcheck source=/dev/null
+source "${CLUSTER_SCRIPTS}/00_config.sh"
+
+mkdir -p "${PBS_LOG_DIR}" "${BASE_OUT}"
+
+export N_JOBS="${N_JOBS:-24}"
+export SEED_KNOWN_MARKERS="${SEED_KNOWN_MARKERS:-1}"
+export RUN_PANEL_ANNOTATION_AFTER_CV="${RUN_PANEL_ANNOTATION_AFTER_CV:-0}"
+export PROJECT_ROOT
+export PYTHON_BIN="${PYTHON_BIN:-python}"
+# Optional: export RUN_DIR / RUN_NAME_OVERRIDE from qsub -v
+
+cd "${PROJECT_ROOT}"
+echo "Standalone leakage-aware CV"
+echo "  SEED_KNOWN_MARKERS=${SEED_KNOWN_MARKERS}"
+echo "  RUN_DIR=${RUN_DIR:-default from seed/run name}"
+bash "${CLUSTER_SCRIPTS}/11_leakage_aware_cv.sh"
+echo "Finished CV at $(date)"

@@ -1,0 +1,10 @@
+{
+  "_comment": "AFRO VCF callability + WHO catalogue seed for phenotype hierarchy stages (AMR / profile). known_markers_path must exist on the compute node (default lustre meta catalogue).",
+  "min_gq_per_sample": 0,
+  "assume_absent_variant_is_reference": true,
+  "seed_known_markers": true,
+  "known_markers_path": "/mnt/lustre/users/nmfuphi/phDproject/Data/meta/resistance_catalogue.tsv",
+  "seed_known_markers_mode": "force_include",
+  "seed_known_markers_stage_substrings": "amr,resistance,pheno,profile,resistant,susceptible",
+  "seed_known_markers_max": null
+}

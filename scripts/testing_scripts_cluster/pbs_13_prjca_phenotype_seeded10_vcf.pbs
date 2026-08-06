@@ -1,0 +1,43 @@
+#!/bin/bash
+#PBS -l select=1:ncpus=24:mem=120GB
+#PBS -P RCHPC
+#PBS -l walltime=48:00:00
+#PBS -m abe
+#PBS -M nmfuphi@csir.co.za
+#PBS -N np_prjca_pheno10
+#PBS -o /mnt/lustre/users/nmfuphi/phDproject/Results/pbs_logs/13_prjca_phenotype_seeded10_vcfs.out
+#PBS -e /mnt/lustre/users/nmfuphi/phDproject/Results/pbs_logs/13_prjca_phenotype_seeded10_vcfs.err
+#
+# Query Phenotype_AMR_Profile_seeded_10 on existing Chinese VCFs + evaluate.
+# No FASTQ re-calling. Labels: AMR_binary, Resistance_Profile_Collapsed.
+#
+#   qsub pbs_13_prjca_phenotype_seeded10_vcf.pbs
+#   qsub -v ARM=control pbs_13_prjca_phenotype_seeded10_vcf.pbs
+#   qsub -v LIMIT=20 pbs_13_prjca_phenotype_seeded10_vcf.pbs
+#
+set -euo pipefail
+
+if [[ -n "${PBS_O_WORKDIR:-}" ]]; then
+  cd "${PBS_O_WORKDIR}"
+fi
+
+CLUSTER_SCRIPTS="${CLUSTER_SCRIPTS:-/home/nmfuphi/network_parser/scripts/testing_scripts_cluster}"
+if [[ ! -d "${CLUSTER_SCRIPTS}" ]]; then
+  CLUSTER_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fi
+
+# shellcheck source=/dev/null
+source "${CLUSTER_SCRIPTS}/00_env_cluster.sh"
+# shellcheck source=/dev/null
+source "${CLUSTER_SCRIPTS}/00_config.sh"
+
+mkdir -p "${PBS_LOG_DIR}"
+
+export N_JOBS="${N_JOBS:-24}"
+export ARM="${ARM:-seeded}"
+export PROJECT_ROOT
+export PYTHON_BIN="${PYTHON_BIN:-python}"
+
+cd "${PROJECT_ROOT}"
+bash "${CLUSTER_SCRIPTS}/13_prjca_phenotype_seeded10_vcf_query.sh"
+echo "Finished at $(date)"

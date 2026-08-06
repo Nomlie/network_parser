@@ -1,0 +1,54 @@
+#!/bin/bash
+#PBS -l select=1:ncpus=24:mem=120GB
+#PBS -P RCHPC
+#PBS -l walltime=96:00:00
+#PBS -m abe
+#PBS -M nmfuphi@csir.co.za
+#PBS -N np_hier_01_seeded
+#PBS -o /mnt/lustre/users/nmfuphi/phDproject/Results/pbs_logs/01_Lineage_AMR_Resistance_Profile_seeded.out
+#PBS -e /mnt/lustre/users/nmfuphi/phDproject/Results/pbs_logs/01_Lineage_AMR_Resistance_Profile_seeded.err
+#
+# Primary hierarchy train+query+evaluate with WHO catalogue seed on phenotype
+# stages. Leakage-aware CV is a SEPARATE job: pbs_11_leakage_aware_cv.pbs
+#
+#   mkdir -p /mnt/lustre/users/nmfuphi/phDproject/Results/pbs_logs
+#   cd /home/nmfuphi/network_parser/scripts/testing_scripts_cluster
+#   qsub pbs_01_Lineage_AMR_Resistance_Profile.pbs
+#
+# Unseeded control:
+#   qsub -v SEED_KNOWN_MARKERS=0 pbs_01_Lineage_AMR_Resistance_Profile.pbs
+#
+set -euo pipefail
+
+if [[ -n "${PBS_O_WORKDIR:-}" ]]; then
+  cd "${PBS_O_WORKDIR}"
+fi
+
+CLUSTER_SCRIPTS="${CLUSTER_SCRIPTS:-/home/nmfuphi/network_parser/scripts/testing_scripts_cluster}"
+if [[ ! -d "${CLUSTER_SCRIPTS}" ]]; then
+  CLUSTER_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fi
+
+# shellcheck source=/dev/null
+source "${CLUSTER_SCRIPTS}/00_env_cluster.sh"
+# shellcheck source=/dev/null
+source "${CLUSTER_SCRIPTS}/00_config.sh"
+
+mkdir -p "${PBS_LOG_DIR}" "${BASE_OUT}"
+
+export N_JOBS="${N_JOBS:-24}"
+export HIERARCHY_RESUME="${HIERARCHY_RESUME:-0}"
+# CV is not run in this job (use pbs_11_*)
+export RUN_LEAKAGE_AWARE_CV=0
+export RUN_PANEL_ANNOTATION="${RUN_PANEL_ANNOTATION:-1}"
+export GLOBAL_FALLBACK_LABELS="${GLOBAL_FALLBACK_LABELS:-none}"
+export SEED_KNOWN_MARKERS="${SEED_KNOWN_MARKERS:-1}"
+export PROJECT_ROOT
+export PYTHON_BIN="${PYTHON_BIN:-python}"
+
+cd "${PROJECT_ROOT}"
+echo "Experiment 01 (seeded phenotype panels by default): Lineage → AMR → Profile"
+echo "  SEED_KNOWN_MARKERS=${SEED_KNOWN_MARKERS}"
+echo "  RUN_LEAKAGE_AWARE_CV=0 (use pbs_11_leakage_aware_cv.pbs for CV)"
+bash "${CLUSTER_SCRIPTS}/01_Lineage_AMR_Resistance_Profile.sh"
+echo "Finished at $(date)"

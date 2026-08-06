@@ -16,16 +16,21 @@ Example
 python add_test_hierarchy_column.py \
     --input metadata.csv \
     --source-col Lineage_clean \
-    --output-col Lineage_Supergroup_Test \
-    --strategy frequency_bins
+    --output-col Lineage_Supergroup \
+    --strategy mtb_lineage_supergroup
 
 Then use:
-    --hierarchy_labels Lineage_Supergroup_Test Lineage_clean AMR_binary
+    --hierarchy_labels Lineage_Supergroup Lineage_clean AMR_binary
 
 Notes
 -----
 This creates a TESTING column. It should not be interpreted as a validated
 biological taxonomy unless you define and justify the grouping rules.
+
+Prefer --strategy mtb_lineage_supergroup for MTB hierarchy experiments.
+The older frequency_bins strategy groups by sample count only and can assign
+lineages to biologically/genomically incoherent parents (e.g. lineage 3 with
+lineage 1/6 instead of lineage 2/4), which degrades Level-1 supergroup accuracy.
 """
 
 from __future__ import annotations
@@ -38,6 +43,29 @@ from typing import Dict, Iterable, Optional
 
 import pandas as pd
 
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+DEFAULT_MTB_SUPERGROUP_MAP_PATH = (
+    SCRIPT_DIR.parent.parent.parent
+    / "Data"
+    / "AFRO_TB"
+    / "metadata"
+    / "lineage_supergroup_map.default.json"
+)
+
+# Coarse MTB supergroups for AFRO-TB hierarchy testing.
+# lineage 3 is grouped with lineage 2/4 because held-out query routing and SNP
+# signal place it with the major Afro-European/EAI cluster, not with lineage 1/6.
+DEFAULT_MTB_AFRO_SUPERGROUP_MAP: Dict[str, str] = {
+    "lineage 2": "test_common_parent",
+    "lineage 3": "test_common_parent",
+    "lineage 4": "test_common_parent",
+    "lineage 1": "test_intermediate_parent",
+    "lineage 6": "test_intermediate_parent",
+    "lineage 5": "test_low_support_parent",
+    "lineage 7": "test_low_support_parent",
+    "lineage BOV_AFRI": "test_low_support_parent",
+}
 
 DEFAULT_MISSING_TOKENS = {
     "",
@@ -124,7 +152,9 @@ def load_manual_map(path: Path) -> Dict[str, str]:
 
     mapping_df = read_table(path)
     if mapping_df.shape[1] < 2:
-        raise ValueError("Mapping table must contain at least two columns: source,parent")
+        raise ValueError(
+            "Mapping table must contain at least two columns: source,parent"
+        )
 
     source_col = "source" if "source" in mapping_df.columns else mapping_df.columns[0]
     parent_col = "parent" if "parent" in mapping_df.columns else mapping_df.columns[1]
@@ -136,6 +166,41 @@ def load_manual_map(path: Path) -> Dict[str, str]:
     }
 
 
+def load_default_mtb_supergroup_map() -> Dict[str, str]:
+    """Load the project default MTB lineage supergroup map when available."""
+    if DEFAULT_MTB_SUPERGROUP_MAP_PATH.exists():
+        with DEFAULT_MTB_SUPERGROUP_MAP_PATH.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        return {
+            str(k).strip(): str(v).strip()
+            for k, v in payload.items()
+            if not str(k).startswith("_")
+        }
+    return dict(DEFAULT_MTB_AFRO_SUPERGROUP_MAP)
+
+
+def make_lineage_supergroup(
+    labels: pd.Series,
+    *,
+    mapping: Dict[str, str],
+    missing_label: str,
+    unmapped_parent: str,
+) -> pd.Series:
+    """
+    Assign MTB lineage labels to coarse supergroups using an explicit map.
+
+    Unlike frequency_bins, this keeps phylogenetically / genomically related
+    lineages under the same parent so Level-1 hierarchy models can learn
+    separable SNP structure.
+    """
+    return make_manual_groups(
+        labels,
+        mapping=mapping,
+        missing_label=missing_label,
+        unmapped_parent=unmapped_parent,
+    )
+
+
 def make_frequency_bins(
     labels: pd.Series,
     *,
@@ -145,10 +210,10 @@ def make_frequency_bins(
     prefix: str,
 ) -> pd.Series:
     """
-    Group labels into coarse parents based on source-label frequency.
+    Group labels into coarse parents based on source-label frequency only.
 
-    This is useful for testing hierarchy mechanics because it creates parent
-    classes with different support levels without hard-coding label names.
+    Warning: this does NOT guarantee genomic coherence between sibling lineages.
+    For MTB hierarchy experiments, prefer --strategy mtb_lineage_supergroup.
     """
     if not 0 <= mid_quantile <= 1 or not 0 <= high_quantile <= 1:
         raise ValueError("Quantiles must be between 0 and 1.")
@@ -202,7 +267,11 @@ def make_prefix_groups(
             return f"{prefix}_unknown_parent"
         parent_core = "_".join(parts[:prefix_parts])
         parent_core = re.sub(r"[^A-Za-z0-9_]+", "_", parent_core).strip("_")
-        return f"{prefix}_{parent_core}_parent" if parent_core else f"{prefix}_unknown_parent"
+        return (
+            f"{prefix}_{parent_core}_parent"
+            if parent_core
+            else f"{prefix}_unknown_parent"
+        )
 
     return labels.map(assign).astype(str)
 
@@ -215,6 +284,7 @@ def make_manual_groups(
     unmapped_parent: str,
 ) -> pd.Series:
     """Group labels using a user-provided mapping."""
+
     def assign(value: str) -> str:
         if value == missing_label:
             return unmapped_parent
@@ -225,7 +295,9 @@ def make_manual_groups(
 
 def default_output_path(input_path: Path, output_col: str) -> Path:
     """Build a safe default output filename."""
-    safe_col = re.sub(r"[^A-Za-z0-9_.-]+", "_", output_col).strip("_") or "test_hierarchy"
+    safe_col = (
+        re.sub(r"[^A-Za-z0-9_.-]+", "_", output_col).strip("_") or "test_hierarchy"
+    )
     suffix = "".join(input_path.suffixes) or ".csv"
     stem = input_path.name
     for s in input_path.suffixes:
@@ -241,32 +313,93 @@ def parse_args() -> argparse.Namespace:
         )
     )
     parser.add_argument("--input", required=True, help="Input metadata CSV/TSV file.")
-    parser.add_argument("--output", default=None, help="Output metadata CSV/TSV file. Default: input_with_<output_col>.")
-    parser.add_argument("--sep", default=None, help="Optional input separator override, e.g. ',' or '\\t'.")
+    parser.add_argument(
+        "--output",
+        default=None,
+        help="Output metadata CSV/TSV file. Default: input_with_<output_col>.",
+    )
+    parser.add_argument(
+        "--sep",
+        default=None,
+        help="Optional input separator override, e.g. ',' or '\\t'.",
+    )
 
-    parser.add_argument("--source-col", default="Lineage_clean", help="Column used to derive the test parent label.")
-    parser.add_argument("--output-col", default="Lineage_Supergroup_Test", help="Name of the new parent label column.")
+    parser.add_argument(
+        "--source-col",
+        default="Lineage_clean",
+        help="Column used to derive the test parent label.",
+    )
+    parser.add_argument(
+        "--output-col",
+        default="Lineage_Supergroup_Test",
+        help="Name of the new parent label column.",
+    )
 
     parser.add_argument(
         "--strategy",
-        choices=["frequency_bins", "prefix", "manual_map"],
-        default="frequency_bins",
+        choices=["mtb_lineage_supergroup", "frequency_bins", "prefix", "manual_map"],
+        default="mtb_lineage_supergroup",
         help=(
-            "Grouping strategy: frequency_bins = support-based test parents; "
+            "Grouping strategy: mtb_lineage_supergroup = explicit MTB lineage map "
+            "(recommended); frequency_bins = support-based bins only; "
             "prefix = first token(s) of source label; manual_map = use mapping file."
         ),
     )
-    parser.add_argument("--high-quantile", type=float, default=0.75, help="High-support quantile for frequency_bins.")
-    parser.add_argument("--mid-quantile", type=float, default=0.40, help="Middle-support quantile for frequency_bins.")
-    parser.add_argument("--prefix-parts", type=int, default=1, help="Number of leading tokens to use for prefix strategy.")
-    parser.add_argument("--mapping-file", default=None, help="JSON/CSV/TSV source->parent mapping for manual_map strategy.")
+    parser.add_argument(
+        "--high-quantile",
+        type=float,
+        default=0.75,
+        help="High-support quantile for frequency_bins.",
+    )
+    parser.add_argument(
+        "--mid-quantile",
+        type=float,
+        default=0.40,
+        help="Middle-support quantile for frequency_bins.",
+    )
+    parser.add_argument(
+        "--prefix-parts",
+        type=int,
+        default=1,
+        help="Number of leading tokens to use for prefix strategy.",
+    )
+    parser.add_argument(
+        "--mapping-file",
+        default=None,
+        help=(
+            "JSON/CSV/TSV source->parent mapping for manual_map, or override map "
+            "for mtb_lineage_supergroup."
+        ),
+    )
 
-    parser.add_argument("--test-prefix", default="test", help="Prefix added to generated parent labels.")
-    parser.add_argument("--missing-label", default="unknown", help="Internal label for missing source values.")
-    parser.add_argument("--unmapped-parent", default="test_unmapped_parent", help="Parent label for unmapped manual_map values.")
-    parser.add_argument("--lowercase", action="store_true", help="Lowercase source labels before grouping.")
-    parser.add_argument("--keep-hyphen", action="store_true", help="Do not replace '-' with '_' in source labels.")
-    parser.add_argument("--overwrite", action="store_true", help="Allow replacing an existing output column.")
+    parser.add_argument(
+        "--test-prefix", default="test", help="Prefix added to generated parent labels."
+    )
+    parser.add_argument(
+        "--missing-label",
+        default="unknown",
+        help="Internal label for missing source values.",
+    )
+    parser.add_argument(
+        "--unmapped-parent",
+        default="test_unmapped_parent",
+        help="Parent label for unmapped manual_map values.",
+    )
+    parser.add_argument(
+        "--lowercase",
+        action="store_true",
+        help="Lowercase source labels before grouping.",
+    )
+    parser.add_argument(
+        "--keep-hyphen",
+        action="store_true",
+        help="Do not replace '-' with '_' in source labels.",
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Allow replacing an existing output column.",
+    )
     parser.add_argument("--summary", default=None, help="Optional JSON summary path.")
     return parser.parse_args()
 
@@ -275,7 +408,11 @@ def main() -> None:
     args = parse_args()
 
     input_path = Path(args.input)
-    output_path = Path(args.output) if args.output else default_output_path(input_path, args.output_col)
+    output_path = (
+        Path(args.output)
+        if args.output
+        else default_output_path(input_path, args.output_col)
+    )
 
     df = read_table(input_path, sep=args.sep)
 
@@ -297,7 +434,21 @@ def main() -> None:
         replace_hyphen=not bool(args.keep_hyphen),
     )
 
-    if args.strategy == "frequency_bins":
+    mapping_used: Optional[Dict[str, str]] = None
+
+    if args.strategy == "mtb_lineage_supergroup":
+        mapping_used = (
+            load_manual_map(Path(args.mapping_file))
+            if args.mapping_file
+            else load_default_mtb_supergroup_map()
+        )
+        parent = make_lineage_supergroup(
+            source,
+            mapping=mapping_used,
+            missing_label=args.missing_label,
+            unmapped_parent=args.unmapped_parent,
+        )
+    elif args.strategy == "frequency_bins":
         parent = make_frequency_bins(
             source,
             missing_label=args.missing_label,
@@ -314,7 +465,9 @@ def main() -> None:
         )
     elif args.strategy == "manual_map":
         if not args.mapping_file:
-            raise ValueError("--mapping-file is required when --strategy manual_map is used.")
+            raise ValueError(
+                "--mapping-file is required when --strategy manual_map is used."
+            )
         mapping = load_manual_map(Path(args.mapping_file))
         parent = make_manual_groups(
             source,
@@ -328,6 +481,14 @@ def main() -> None:
     df[args.output_col] = parent
     write_table(df, output_path)
 
+    lineage_parent_crosswalk = (
+        df.groupby([args.source_col, args.output_col], dropna=False)
+        .size()
+        .reset_index(name="n_samples")
+        .sort_values([args.output_col, args.source_col])
+        .to_dict(orient="records")
+    )
+
     summary = {
         "status": "success",
         "input": str(input_path),
@@ -338,12 +499,26 @@ def main() -> None:
         "rows": int(df.shape[0]),
         "source_unique_labels": int(source.nunique(dropna=False)),
         "parent_unique_labels": int(parent.nunique(dropna=False)),
-        "parent_distribution": {str(k): int(v) for k, v in parent.value_counts(dropna=False).to_dict().items()},
+        "parent_distribution": {
+            str(k): int(v)
+            for k, v in parent.value_counts(dropna=False).to_dict().items()
+        },
+        "lineage_parent_crosswalk": lineage_parent_crosswalk,
+        "mapping_file": str(args.mapping_file) if args.mapping_file else None,
+        "mapping_used": mapping_used,
         "recommended_hierarchy_example": f"--hierarchy_labels {args.output_col} {args.source_col} <terminal_label>",
-        "note": "This column is intended for testing hierarchy mechanics, not as a validated biological label unless manually defined and justified.",
+        "note": (
+            "This column is intended for testing hierarchy mechanics, not as a validated "
+            "biological label unless manually defined and justified. For MTB, prefer "
+            "mtb_lineage_supergroup over frequency_bins to avoid incoherent lineage parents."
+        ),
     }
 
-    summary_path = Path(args.summary) if args.summary else output_path.with_suffix(output_path.suffix + ".summary.json")
+    summary_path = (
+        Path(args.summary)
+        if args.summary
+        else output_path.with_suffix(output_path.suffix + ".summary.json")
+    )
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     with summary_path.open("w", encoding="utf-8") as handle:
         json.dump(summary, handle, indent=2)
@@ -352,7 +527,9 @@ def main() -> None:
     print(f"Wrote metadata: {output_path}")
     print(f"Wrote summary:  {summary_path}")
     print(f"Added column:   {args.output_col}")
-    print(f"Use example:    --hierarchy_labels {args.output_col} {args.source_col} <terminal_label>")
+    print(
+        f"Use example:    --hierarchy_labels {args.output_col} {args.source_col} <terminal_label>"
+    )
 
 
 if __name__ == "__main__":
