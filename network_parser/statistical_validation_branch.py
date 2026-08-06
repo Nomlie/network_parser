@@ -34,7 +34,6 @@ import pandas as pd
 from joblib import Parallel, delayed
 from scipy import stats
 from scipy.stats import chi2_contingency, fisher_exact
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import mutual_info_score
 from sklearn.tree import DecisionTreeClassifier
 from statsmodels.stats.multitest import multipletests
@@ -44,28 +43,32 @@ try:
     from network_parser.feature_selection import (
         rf_fdr_feature_selection as _shared_rf_fdr_feature_selection,
     )
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover
     from config import NetworkParserConfig  # type: ignore
     from feature_selection import (  # type: ignore
         rf_fdr_feature_selection as _shared_rf_fdr_feature_selection,
     )
 try:
-    from network_parser.feature_selection import rf_fdr_feature_selection as _rf_fdr_select
-except Exception:  # pragma: no cover
+    from network_parser.feature_selection import (
+        rf_fdr_feature_selection as _rf_fdr_select,
+    )
+except ImportError:  # pragma: no cover
     try:
         from feature_selection import rf_fdr_feature_selection as _rf_fdr_select  # type: ignore
-    except Exception:  # pragma: no cover
+    except ImportError:  # pragma: no cover
         _rf_fdr_select = None  # type: ignore
 
 logger = logging.getLogger(__name__)
 
 try:
     from network_parser.utils import progress_iter
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover
     try:
         from utils import progress_iter  # type: ignore
-    except Exception:  # pragma: no cover
-        progress_iter = lambda iterable, **kwargs: iterable  # type: ignore
+    except ImportError:  # pragma: no cover
+
+        def progress_iter(iterable, **kwargs):  # type: ignore
+            return iterable
 
 
 class StatisticalValidatorBranch:
@@ -88,6 +91,7 @@ class StatisticalValidatorBranch:
         self.n_permutations = int(getattr(self.config, "n_permutation_tests", 500))
         self.n_jobs = int(getattr(self.config, "n_jobs", -1))
         logger.info("Initialized StatisticalValidatorBranch.")
+
     # ------------------------------------------------------------------
     # RF-FDR central pre-ML / pre-tree feature filtering
     # ------------------------------------------------------------------
@@ -106,14 +110,18 @@ class StatisticalValidatorBranch:
         Purpose
         -------
         Keep exactly one RF-FDR implementation in the codebase so that
-        single-label and two-level protocols behave consistently.
+        single-label and hierarchy protocols behave consistently.
 
         This method is PRE-ML / PRE-tree. It does not perform decision-tree
         construction, interaction mining, or bootstrap confidence scoring.
         """
         self._validate_feature_inputs(genomic_df, labels)
 
-        out_dir = Path(output_dir) if output_dir is not None else Path("central_feature_filtering")
+        out_dir = (
+            Path(output_dir)
+            if output_dir is not None
+            else Path("central_feature_filtering")
+        )
 
         result = _shared_rf_fdr_feature_selection(
             X=genomic_df,
@@ -125,6 +133,7 @@ class StatisticalValidatorBranch:
 
         result.setdefault("method", "rf_fdr")
         return result
+
     # ------------------------------------------------------------------
     # Central pre-ML / pre-tree feature filtering
     # ------------------------------------------------------------------
@@ -200,7 +209,9 @@ class StatisticalValidatorBranch:
                 "input_features": int(genomic_df.shape[1]),
                 "tested_features": int(len(assoc)),
                 "retained_features": int(len(retained_features)),
-                "retention_fraction": float(len(retained_features) / max(1, genomic_df.shape[1])),
+                "retention_fraction": float(
+                    len(retained_features) / max(1, genomic_df.shape[1])
+                ),
                 "used_fallback_unfiltered_matrix": bool(used_fallback),
             },
         }
@@ -253,14 +264,26 @@ class StatisticalValidatorBranch:
         )
 
         # Memory-aware chunking
-        chunk_size = max(500, min(2000, n_features // (abs(self.n_jobs) * 2) if self.n_jobs != 1 else 1000))
+        chunk_size = max(
+            500,
+            min(
+                2000, n_features // (abs(self.n_jobs) * 2) if self.n_jobs != 1 else 1000
+            ),
+        )
 
         def test_feature(feature: str):
             try:
                 feature_series = data[feature]
-                valid_mask = ~labels.isna()
+                common_index = feature_series.index.intersection(labels.index)
+                feature_series = feature_series.loc[common_index]
+                local_labels = labels.loc[common_index]
+
+                # NaN represents a non-callable genotype, not evidence for the
+                # baseline state.  Test each feature using only sample/label
+                # pairs for which both values are observed.
+                valid_mask = ~(feature_series.isna() | local_labels.isna())
                 feature_series = feature_series.loc[valid_mask]
-                local_labels = labels.loc[valid_mask]
+                local_labels = local_labels.loc[valid_mask]
 
                 contingency = pd.crosstab(feature_series, local_labels)
 
@@ -293,11 +316,15 @@ class StatisticalValidatorBranch:
                     "contingency_table": contingency.to_dict(),
                 }
             except Exception as exc:
-                logger.warning("Association testing failed for feature '%s': %s", feature, exc)
+                logger.warning(
+                    "Association testing failed for feature '%s': %s", feature, exc
+                )
                 return feature, None
 
         features = list(data.columns)
-        batch_size = int(getattr(self.config, "association_test_batch_size", chunk_size))
+        batch_size = int(
+            getattr(self.config, "association_test_batch_size", chunk_size)
+        )
         batch_size = max(50, min(batch_size, chunk_size))
 
         logger.info(
@@ -386,7 +413,9 @@ class StatisticalValidatorBranch:
         y = y.loc[valid_label_mask].copy()
 
         if X.empty or X.shape[1] == 0:
-            raise ValueError(f"{stage_name}: empty feature matrix – cannot run chi2 permutation-FDR.")
+            raise ValueError(
+                f"{stage_name}: empty feature matrix – cannot run chi2 permutation-FDR."
+            )
         if y.nunique(dropna=True) < 2:
             raise ValueError(
                 f"{stage_name}: chi2 permutation-FDR requires at least two label classes "
@@ -488,7 +517,9 @@ class StatisticalValidatorBranch:
             str(row["feature"]): {k: v for k, v in row.items() if k != "feature"}
             for row in feature_records
         }
-        results_json_path.write_text(json.dumps(feature_results, indent=2, default=self._json_default))
+        results_json_path.write_text(
+            json.dumps(feature_results, indent=2, default=self._json_default)
+        )
 
         summary = {
             "method": "chi2_perm_fdr",
@@ -514,14 +545,16 @@ class StatisticalValidatorBranch:
                 "summary_json": str(summary_json_path),
             },
         }
-        summary_json_path.write_text(json.dumps(summary, indent=2, default=self._json_default))
+        summary_json_path.write_text(
+            json.dumps(summary, indent=2, default=self._json_default)
+        )
 
         logger.info(
             "%s chi2 permutation-FDR complete | retained_features=%d / %d | empirical_p_resolution=%.6g",
             stage_name,
             int(X_filtered.shape[1]),
             int(X.shape[1]),
-            float(summary["empirical_p_resolution"]),
+            float(str(summary["empirical_p_resolution"])),
         )
 
         return {
@@ -545,17 +578,45 @@ class StatisticalValidatorBranch:
         """Dispatch to a binary-matrix fast path when possible."""
         X_numeric = X.apply(pd.to_numeric, errors="coerce")
         numeric_values = X_numeric.to_numpy(dtype=float, copy=False)
-        non_missing_values = np.unique(numeric_values[~np.isnan(numeric_values)]) if numeric_values.size else np.array([])
-        is_binary_matrix = len(non_missing_values) > 0 and set(map(float, non_missing_values)).issubset({0.0, 1.0})
+        non_missing_values = (
+            np.unique(numeric_values[~np.isnan(numeric_values)])
+            if numeric_values.size
+            else np.array([])
+        )
+        is_binary_matrix = len(non_missing_values) > 0 and set(
+            map(float, non_missing_values)
+        ).issubset({0.0, 1.0})
 
         if is_binary_matrix:
-            return self._chi2_permutation_binary_results(
-                X_numeric.fillna(0).astype(np.int8),
-                y,
-                n_permutations,
-                rng,
-                stage_name,
-            )
+            # Do not fillna(0): non-callable NaNs are not baseline evidence.
+            # Use complete cases for the permutation path when any NaNs exist.
+            if X_numeric.isna().any().any():
+                X_complete = X_numeric.dropna(axis=0, how="any")
+                y_complete = y.loc[X_complete.index]
+                if X_complete.shape[0] < 4 or y_complete.nunique() < 2:
+                    logger.warning(
+                        "%s chi2 permutation-FDR: insufficient complete cases after "
+                        "dropping non-callable genotypes; using feature-wise complete pairs.",
+                        stage_name,
+                    )
+                    # Fall back to generic path which can handle per-feature missingness.
+                    is_binary_matrix = False
+                else:
+                    return self._chi2_permutation_binary_results(
+                        X_complete.to_numpy(dtype=float),
+                        y_complete,
+                        n_permutations,
+                        rng,
+                        stage_name,
+                    )
+            if is_binary_matrix:
+                return self._chi2_permutation_binary_results(
+                    X_numeric.to_numpy(dtype=float),
+                    y,
+                    n_permutations,
+                    rng,
+                    stage_name,
+                )
 
         logger.info(
             "%s chi2 permutation-FDR using generic categorical path. "
@@ -593,18 +654,28 @@ class StatisticalValidatorBranch:
                     out[:, k] = 0.0
             return out
 
-        def chi2_stats_from_counts1(counts1: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        def chi2_stats_from_counts1(
+            counts1: np.ndarray,
+        ) -> Tuple[np.ndarray, np.ndarray]:
             row1 = counts1.sum(axis=1)
             row0 = float(n_samples) - row1
             counts0 = class_counts.reshape(1, -1) - counts1
 
-            expected1 = row1.reshape(-1, 1) * class_counts.reshape(1, -1) / float(n_samples)
-            expected0 = row0.reshape(-1, 1) * class_counts.reshape(1, -1) / float(n_samples)
+            expected1 = (
+                row1.reshape(-1, 1) * class_counts.reshape(1, -1) / float(n_samples)
+            )
+            expected0 = (
+                row0.reshape(-1, 1) * class_counts.reshape(1, -1) / float(n_samples)
+            )
 
             stat = np.zeros(counts1.shape[0], dtype=np.float64)
             with np.errstate(divide="ignore", invalid="ignore"):
-                part1 = np.where(expected1 > 0, ((counts1 - expected1) ** 2) / expected1, 0.0)
-                part0 = np.where(expected0 > 0, ((counts0 - expected0) ** 2) / expected0, 0.0)
+                part1 = np.where(
+                    expected1 > 0, ((counts1 - expected1) ** 2) / expected1, 0.0
+                )
+                part0 = np.where(
+                    expected0 > 0, ((counts0 - expected0) ** 2) / expected0, 0.0
+                )
             stat = part1.sum(axis=1) + part0.sum(axis=1)
 
             valid = (row0 > 0) & (row1 > 0) & (n_classes >= 2)
@@ -670,7 +741,9 @@ class StatisticalValidatorBranch:
     ) -> pd.DataFrame:
         """Generic categorical chi-square permutation test, feature by feature."""
         feature_names = list(map(str, X.columns))
-        base_seeds = rng.integers(0, 2**31 - 1, size=len(feature_names), dtype=np.int64)
+        base_seeds = rng.integers(
+            0, 2**31 - 1, size=len(feature_names), dtype=np.int64
+        )
 
         def chi2_stat_from_table(table: np.ndarray) -> float:
             table = np.asarray(table, dtype=np.float64)
@@ -681,7 +754,9 @@ class StatisticalValidatorBranch:
             col_sum = table.sum(axis=0, keepdims=True)
             expected = row_sum @ col_sum / n
             with np.errstate(divide="ignore", invalid="ignore"):
-                stat = np.where(expected > 0, ((table - expected) ** 2) / expected, 0.0).sum()
+                stat = np.where(
+                    expected > 0, ((table - expected) ** 2) / expected, 0.0
+                ).sum()
             return float(stat)
 
         def process_feature(feature: str, seed: int) -> Optional[Dict[str, Any]]:
@@ -777,7 +852,9 @@ class StatisticalValidatorBranch:
         """
         Apply multiple testing correction across per-feature p-values.
         """
-        method = method or str(getattr(self.config, "multiple_testing_method", "fdr_bh"))
+        method = method or str(
+            getattr(self.config, "multiple_testing_method", "fdr_bh")
+        )
 
         p_values = [res["p_value"] for res in test_results.values() if "p_value" in res]
         features = [f for f, res in test_results.items() if "p_value" in res]
@@ -852,14 +929,20 @@ class StatisticalValidatorBranch:
 
                 dt = DecisionTreeClassifier(
                     max_depth=(getattr(self.config, "max_depth", None) or 5),
-                    min_samples_split=max(2, int(getattr(self.config, "min_group_size", 2))),
-                    min_samples_leaf=max(1, int(getattr(self.config, "min_group_size", 2)) // 2),
+                    min_samples_split=max(
+                        2, int(getattr(self.config, "min_group_size", 2))
+                    ),
+                    min_samples_leaf=max(
+                        1, int(getattr(self.config, "min_group_size", 2)) // 2
+                    ),
                     random_state=i,
                 )
                 dt.fit(boot_data[features], boot_labels)
 
                 importances = dict(zip(features, dt.feature_importances_))
-                sorted_feats = sorted(importances.items(), key=lambda x: x[1], reverse=True)
+                sorted_feats = sorted(
+                    importances.items(), key=lambda x: x[1], reverse=True
+                )
                 rankings = {f: rank for rank, (f, _) in enumerate(sorted_feats, 1)}
                 return importances, rankings
             except Exception:
@@ -893,11 +976,13 @@ class StatisticalValidatorBranch:
 
             stability = float(np.mean(ranks <= half_rank)) if ranks.size else 0.0
             mean_imp = float(np.mean(imps)) if imps.size else 0.0
-            ci = (
-                tuple(map(float, np.percentile(imps, [2.5, 97.5])))
-                if imps.size
-                else (0.0, 0.0)
-            )
+            if imps.size:
+                percentiles = np.asarray(
+                    np.percentile(imps, [2.5, 97.5]), dtype=float
+                ).ravel()
+                ci = (float(percentiles[0]), float(percentiles[1]))
+            else:
+                ci = (0.0, 0.0)
 
             if imps.size > 1 and not np.allclose(imps, 0.0):
                 _, p_value = stats.ttest_1samp(imps, 0.0)
@@ -918,7 +1003,9 @@ class StatisticalValidatorBranch:
             p.mkdir(parents=True, exist_ok=True)
             (p / "bootstrap_results.json").write_text(json.dumps(results, indent=2))
 
-        logger.info("Bootstrap validation complete | evaluated_features=%d", len(results))
+        logger.info(
+            "Bootstrap validation complete | evaluated_features=%d", len(results)
+        )
         return results
 
     # ------------------------------------------------------------------
@@ -943,7 +1030,9 @@ class StatisticalValidatorBranch:
         ]
 
         if not valid_interactions:
-            logger.warning("No valid interaction pairs available for permutation testing.")
+            logger.warning(
+                "No valid interaction pairs available for permutation testing."
+            )
             return {}
 
         logger.info(
@@ -969,7 +1058,9 @@ class StatisticalValidatorBranch:
                     "significant": bool(p_value < self.alpha),
                 }
             except Exception as exc:
-                logger.warning("Interaction permutation testing failed for %s: %s", pair, exc)
+                logger.warning(
+                    "Interaction permutation testing failed for %s: %s", pair, exc
+                )
                 return pair, None
 
         raw_out = Parallel(n_jobs=self.n_jobs)(
@@ -994,9 +1085,13 @@ class StatisticalValidatorBranch:
         if output_dir:
             p = Path(output_dir)
             p.mkdir(parents=True, exist_ok=True)
-            (p / "interaction_permutation_results.json").write_text(json.dumps(out, indent=2))
+            (p / "interaction_permutation_results.json").write_text(
+                json.dumps(out, indent=2)
+            )
 
-        logger.info("Permutation interaction testing complete | valid_pairs=%d", len(out))
+        logger.info(
+            "Permutation interaction testing complete | valid_pairs=%d", len(out)
+        )
         return out
 
     # ------------------------------------------------------------------
@@ -1151,10 +1246,20 @@ class StatisticalValidatorBranch:
         Interaction strength proxy:
           MI(label ; joint feature state) - [MI(label ; f1) + MI(label ; f2)]
         """
-        mi1 = float(mutual_info_score(labels, data[f1]))
-        mi2 = float(mutual_info_score(labels, data[f2]))
+        first = pd.to_numeric(data[f1], errors="coerce").reset_index(drop=True)
+        second = pd.to_numeric(data[f2], errors="coerce").reset_index(drop=True)
+        target = pd.Series(labels).reset_index(drop=True)
+        valid = first.notna() & second.notna() & target.notna()
+        if int(valid.sum()) < 2:
+            return 0.0
 
-        combined = data[f1].astype(str) + "_" + data[f2].astype(str)
-        mi_comb = float(mutual_info_score(labels, combined))
+        first = first.loc[valid]
+        second = second.loc[valid]
+        target = target.loc[valid]
+        mi1 = float(mutual_info_score(target, first))
+        mi2 = float(mutual_info_score(target, second))
+
+        combined = first.astype(str) + "_" + second.astype(str)
+        mi_comb = float(mutual_info_score(target, combined))
 
         return float(mi_comb - (mi1 + mi2))

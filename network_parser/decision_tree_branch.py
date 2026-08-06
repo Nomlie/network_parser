@@ -2,26 +2,22 @@
 """
 Decision Tree discovery branch (NetworkParser).
 
-Updated role in pipeline
-------------------------
-This branch now assumes that statistical filtering has already happened
-upstream in the central feature-filtering stage.
-
 Default flow:
     aligned + centrally filtered matrix
-        -> decision tree
-        -> tree hierarchy extraction
-        -> post-tree confidence scoring
-        -> path-based epistatic interaction mining
+        -> capacity-constrained decision tree
+        -> tree hierarchy extraction (min-depth root features)
+        -> post-tree evidence fields (MI, Cramér's V, bootstrap stability)
+        -> tree-path interaction candidates (+ optional validation)
 
-Backward compatibility:
-    A legacy internal prefilter is still available, but it is OFF by default.
+Evidence fields are reported separately. Any weighted mixture is an explicit
+``evidence_score``, not calibrated probability confidence.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any, Set
@@ -37,31 +33,49 @@ from statsmodels.stats.multitest import multipletests
 
 try:
     from network_parser.config import NetworkParserConfig
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover - package vs source-tree layout
     from config import NetworkParserConfig  # type: ignore
 
 
 logger = logging.getLogger(__name__)
+
+# Explicit missing tokens only — no global punctuation rewriting (Phase 6).
+_MISSING_LABEL_TOKENS = frozenset(
+    {
+        "",
+        "-",
+        "NA",
+        "N/A",
+        "None",
+        "nan",
+        "NaN",
+        "NULL",
+        "null",
+        ".",
+    }
+)
 
 
 def normalize_labels(
     labels: pd.Series,
     drop_missing: bool = True,
     lowercase: bool = False,
+    **kwargs,
 ) -> pd.Series:
     """
-    Normalize labels using the same general strategy used elsewhere in the pipeline.
+    Normalize labels without silent punctuation rewriting.
+
+    Matches the NetworkParser policy: strip, map missing tokens, optional
+    lowercase. Does not rewrite ``-`` to ``_`` (that can merge distinct classes).
     """
     if not isinstance(labels, pd.Series):
         raise TypeError("labels must be a pandas Series")
 
     clean = labels.astype(str).str.strip()
-    missing_tokens = {"", "-", "NA", "N/A", "None", "nan", "NaN"}
-    clean = clean.replace(missing_tokens, pd.NA)
-    clean = clean.str.replace("-", "_", regex=False)
+    clean = clean.replace(set(_MISSING_LABEL_TOKENS), pd.NA)
 
     if lowercase:
-        clean = clean.str.lower()
+        clean = clean.map(lambda v: v.lower() if isinstance(v, str) else v)
 
     if drop_missing:
         clean = clean[~clean.isna()]
@@ -90,24 +104,24 @@ def log_feature_summary(name: str, features: List[str], max_show: int = 3) -> No
 @dataclass
 class DecisionTreeBranchArtifacts:
     rules_txt: str = "decision_tree_rules.txt"
-    confidence_json: str = "feature_confidence.json"
-    interactions_json: str = "epistatic_interactions.json"
+    confidence_json: str = (
+        "feature_evidence.json"  # legacy filename still written below
+    )
+    evidence_json: str = "feature_evidence.json"
+    interactions_json: str = "tree_path_interaction_candidates.json"
+    # Legacy alias path still produced for older readers
+    legacy_confidence_json: str = "feature_confidence.json"
+    legacy_interactions_json: str = "epistatic_interactions.json"
 
 
 class DecisionTreeBranch:
     """
     Decision tree interpretability branch.
 
-    Output dict structure:
-      {
-        "discovered_features": [...],
-        "root_features": [...],
-        "branch_features": [...],
-        "decision_trees": {"accuracy": float, "rules": str, "n_classes": int},
-        "feature_confidence": {feature: {...}},
-        "epistatic_interactions": [ {...}, ... ],
-        "prefiltered_features": [...]
-      }
+    Output includes separate evidence fields (MI, Cramér's V, bootstrap
+    stability) and an optional documented ``evidence_score`` mixture. Tree-path
+    interaction candidates are never labelled as biological epistasis unless
+    validation gates pass (and even then status is ``validated_candidate``).
     """
 
     def __init__(
@@ -117,7 +131,8 @@ class DecisionTreeBranch:
     ):
         self.config = config
         self.artifacts = artifacts or DecisionTreeBranchArtifacts()
-        np.random.seed(int(getattr(self.config, "random_state", 42)))
+        # Local RNG only — never mutate the process-global NumPy state.
+        self._rng = np.random.default_rng(int(getattr(self.config, "random_state", 42)))
 
     # ------------------------------------------------------------------
     # Public entry
@@ -159,7 +174,9 @@ class DecisionTreeBranch:
             raise ValueError("No valid features provided for decision-tree discovery.")
 
         if len(valid_features) < len(all_features):
-            logger.warning("Some requested features were not found in data and were ignored.")
+            logger.warning(
+                "Some requested features were not found in data and were ignored."
+            )
 
         # Defensive sample alignment
         if not data.index.equals(labels.index):
@@ -197,22 +214,26 @@ class DecisionTreeBranch:
 
         X = data.loc[:, prefiltered].copy()
 
-        # NaN handling
-        total_nan = int(X.isna().sum().sum())
-        if total_nan > 0:
-            logger.info("Imputing NaNs (%d) -> treating as baseline (0).", total_nan)
-            X = X.fillna(0)
-
-        # Ensure numeric tree input
-        for col in X.columns:
-            X[col] = pd.to_numeric(X[col], errors="coerce")
-
-        if int(X.isna().sum().sum()) > 0:
-            logger.info(
-                "Coercion produced NaNs; filling remaining missing values with 0 before tree fitting."
+        # Matrix contract: coerce to float; impute only via fitted train policy.
+        try:
+            from network_parser.matrix_contract import (
+                MissingnessPolicy,
+                prepare_for_sklearn,
             )
-            X = X.fillna(0)
+        except ImportError:  # pragma: no cover
+            from matrix_contract import MissingnessPolicy, prepare_for_sklearn  # type: ignore
 
+        policy = MissingnessPolicy.from_config(self.config)
+        # Trees need dense input: impute with train-fit baseline/mode (explicit).
+        X, miss_state, miss_audit = prepare_for_sklearn(X, policy=policy)
+        logger.info(
+            "Decision-tree missingness prep | strategy=%s | n_nan_before=%s | dropped_features=%d",
+            policy.impute_strategy,
+            miss_audit.get("transform", miss_audit).get(
+                "n_nan_before_impute", miss_audit.get("n_nan_before_impute")
+            ),
+            len(miss_state.dropped_features),
+        )
         X = X.astype(np.float64)
 
         # Drop invariant / near-monomorphic columns after final coercion
@@ -246,11 +267,11 @@ class DecisionTreeBranch:
         # Analyze hierarchy
         analysis = self._analyze_tree_structure(dt, feature_names=list(X.columns))
 
-        # Confidence scoring
-        confidence = self._compute_confidence(dt, X, y, analysis)
+        # Evidence fields (not probability confidence)
+        evidence = self._compute_feature_evidence(dt, X, y, analysis)
 
-        # Interaction mining
-        interactions = self._mine_epistatic_interactions(
+        # Tree-path interaction candidates (+ validation status)
+        interactions = self._mine_tree_path_interaction_candidates(
             dt=dt,
             feature_names=list(X.columns),
             X=X,
@@ -261,14 +282,33 @@ class DecisionTreeBranch:
             "discovered_features": analysis["features"],
             "root_features": analysis["root_features"],
             "branch_features": analysis["branch_features"],
+            "feature_min_depths": analysis.get("min_depths", {}),
             "decision_trees": {
-                "training_accuracy": float(accuracy_score(y, dt.predict(X))),
+                "training_fit_accuracy": float(accuracy_score(y, dt.predict(X))),
+                "training_accuracy": float(
+                    accuracy_score(y, dt.predict(X))
+                ),  # legacy alias
                 "rules": export_text(dt, feature_names=list(X.columns)),
                 "n_classes": n_classes,
+                "max_depth_config": getattr(self.config, "max_depth", None),
+                "min_samples_leaf": int(getattr(self.config, "min_samples_leaf", 2)),
+                "tree_depth": int(dt.get_depth()),
+                "n_leaves": int(dt.get_n_leaves()),
             },
-            "feature_confidence": confidence,
-            "epistatic_interactions": interactions,
+            "feature_evidence": evidence,
+            "tree_path_interaction_candidates": interactions,
             "prefiltered_features": prefiltered,
+            # Versioned deprecated aliases (planned removal: schema v2.0).
+            "deprecated": {
+                "removal_target": "2.0",
+                "feature_confidence": evidence,
+                "epistatic_interactions": interactions,
+                "note": (
+                    "feature_confidence and epistatic_interactions are deprecated aliases. "
+                    "Use feature_evidence and tree_path_interaction_candidates. "
+                    "evidence_score is not confidence; interactions are not epistasis claims."
+                ),
+            },
         }
 
         self._export_results(results, output_dir)
@@ -292,7 +332,11 @@ class DecisionTreeBranch:
         Kept only for backward compatibility. In the updated architecture,
         central filtering should happen before this branch is called.
         """
-        alpha = float(alpha if alpha is not None else getattr(self.config, "prefilter_alpha", 0.05))
+        alpha = float(
+            alpha
+            if alpha is not None
+            else getattr(self.config, "prefilter_alpha", 0.05)
+        )
         min_nonmissing = float(getattr(self.config, "min_nonmissing_prefilter", 0.20))
         min_maf = float(getattr(self.config, "min_maf_prefilter", 0.0))
         max_features = getattr(self.config, "max_prefiltered_features", 10000)
@@ -368,12 +412,20 @@ class DecisionTreeBranch:
                 p_values.append(float(p))
                 valid.append(feat)
             except Exception:
-                logger.warning("Legacy DT prefilter skipped feature '%s' due to test error.", feat)
+                logger.warning(
+                    "Legacy DT prefilter skipped feature '%s' due to test error.", feat
+                )
 
         if not p_values:
-            logger.warning("Legacy DT prefilter found no valid p-values; falling back to variance ranking.")
+            logger.warning(
+                "Legacy DT prefilter found no valid p-values; falling back to variance ranking."
+            )
             variances = data[pre_candidates].apply(pd.to_numeric, errors="coerce").var()
-            n_take = min(5000, len(pre_candidates)) if max_features is None else min(int(max_features), len(pre_candidates))
+            n_take = (
+                min(5000, len(pre_candidates))
+                if max_features is None
+                else min(int(max_features), len(pre_candidates))
+            )
             return variances.nlargest(n_take).index.tolist()
 
         try:
@@ -383,9 +435,15 @@ class DecisionTreeBranch:
             significant = valid.copy()
 
         if not significant:
-            logger.warning("Legacy DT prefilter retained no FDR-significant features; falling back to variance ranking.")
+            logger.warning(
+                "Legacy DT prefilter retained no FDR-significant features; falling back to variance ranking."
+            )
             variances = data[pre_candidates].apply(pd.to_numeric, errors="coerce").var()
-            n_take = min(5000, len(pre_candidates)) if max_features is None else min(int(max_features), len(pre_candidates))
+            n_take = (
+                min(5000, len(pre_candidates))
+                if max_features is None
+                else min(int(max_features), len(pre_candidates))
+            )
             significant = variances.nlargest(n_take).index.tolist()
 
         if max_features is not None and len(significant) > int(max_features):
@@ -402,22 +460,32 @@ class DecisionTreeBranch:
     # ------------------------------------------------------------------
     # Tree building
     # ------------------------------------------------------------------
-    def _build_tree(self, X: pd.DataFrame, y: np.ndarray) -> DecisionTreeClassifier:
-        dt = DecisionTreeClassifier(
-            max_depth=getattr(self.config, "max_depth", None),
-            min_samples_split=int(getattr(self.config, "min_samples_split", 2)),
-            min_samples_leaf=int(getattr(self.config, "min_samples_leaf", 1)),
-            random_state=int(getattr(self.config, "random_state", 42)),
-        )
-        dt.fit(X, y)
+    def _tree_params(self) -> Dict[str, Any]:
+        """Capacity-constrained tree parameters (no unrestricted leaf=1 trees)."""
+        max_depth = getattr(self.config, "max_depth", 12)
+        if max_depth is None:
+            max_depth = 12
+        return {
+            "max_depth": int(max_depth),
+            "min_samples_split": int(getattr(self.config, "min_samples_split", 4)),
+            "min_samples_leaf": max(
+                2, int(getattr(self.config, "min_samples_leaf", 2))
+            ),
+            "random_state": int(getattr(self.config, "random_state", 42)),
+        }
 
+    def _build_tree(self, X: pd.DataFrame, y: np.ndarray) -> DecisionTreeClassifier:
+        params = self._tree_params()
+        dt = DecisionTreeClassifier(**params)
+        dt.fit(X, y)
         logger.info(
-            "Built decision tree | depth=%d | leaves=%d | features_used=%d",
+            "Built decision tree | depth=%d | leaves=%d | features_used=%d | max_depth=%s | min_leaf=%d",
             int(dt.get_depth()),
             int(dt.get_n_leaves()),
             int(X.shape[1]),
+            params["max_depth"],
+            params["min_samples_leaf"],
         )
-
         return dt
 
     # ------------------------------------------------------------------
@@ -428,28 +496,19 @@ class DecisionTreeBranch:
         dt: DecisionTreeClassifier,
         feature_names: List[str],
     ) -> Dict[str, Any]:
+        """Root features by minimum depth (not average depth); deterministic order."""
         tree_ = dt.tree_
-        root_features: Set[str] = set()
-        branch_features: Set[str] = set()
         feature_depths: Dict[str, List[int]] = defaultdict(list)
 
         def traverse(node_id: int, depth: int = 0) -> None:
             feat_idx = int(tree_.feature[node_id])
             if feat_idx == -2:
                 return
-
             if feat_idx >= 0:
                 feat = feature_names[feat_idx]
                 feature_depths[feat].append(depth)
-
-                if depth <= 1:
-                    root_features.add(feat)
-                else:
-                    branch_features.add(feat)
-
             left = int(tree_.children_left[node_id])
             right = int(tree_.children_right[node_id])
-
             if left != -1:
                 traverse(left, depth + 1)
             if right != -1:
@@ -457,27 +516,32 @@ class DecisionTreeBranch:
 
         traverse(0)
 
-        # Mean-depth reclassification
-        for feat, depths in feature_depths.items():
-            mean_depth = float(np.mean(depths)) if depths else 999.0
-            if mean_depth <= 1.5:
-                root_features.add(feat)
-                branch_features.discard(feat)
-            else:
-                branch_features.add(feat)
-                root_features.discard(feat)
+        min_depths = {
+            feat: int(min(depths)) if depths else 999
+            for feat, depths in feature_depths.items()
+        }
+        root_features = sorted(
+            [f for f, d in min_depths.items() if d <= 1],
+            key=lambda f: (min_depths[f], f),
+        )
+        branch_features = sorted(
+            [f for f, d in min_depths.items() if d > 1],
+            key=lambda f: (min_depths[f], f),
+        )
+        all_feats = sorted(set(root_features) | set(branch_features))
 
         return {
-            "root_features": list(root_features),
-            "branch_features": list(branch_features),
-            "features": list(root_features | branch_features),
-            "depths": dict(feature_depths),
+            "root_features": root_features,
+            "branch_features": branch_features,
+            "features": all_feats,
+            "depths": {k: sorted(v) for k, v in sorted(feature_depths.items())},
+            "min_depths": dict(sorted(min_depths.items())),
         }
 
     # ------------------------------------------------------------------
-    # Confidence scoring
+    # Genuine bootstrap stability + separate evidence fields
     # ------------------------------------------------------------------
-    def _compute_confidence(
+    def _compute_feature_evidence(
         self,
         dt: DecisionTreeClassifier,
         X: pd.DataFrame,
@@ -485,89 +549,242 @@ class DecisionTreeBranch:
         analysis: Dict[str, Any],
     ) -> Dict[str, Any]:
         """
-        Confidence function:
-            confidence = 0.4 * mutual_information
-                       + 0.4 * bootstrap_stability
-                       + 0.2 * Cramer's V
+        Per-feature evidence with separate fields:
+
+        - mutual_info
+        - cramers_v
+        - bootstrap_stability = selection_count / B
+        - evidence_score = optional documented weighted mixture (NOT probability)
+
+        Bootstrap: B independent cohort resamples; fit a tree each time; record
+        whether each feature was used (feature_importances_ > 0) and min depth.
         """
-        del dt  # kept in signature for future expansion
+        del dt
+        B = int(
+            getattr(
+                self.config,
+                "n_bootstrap_resamples",
+                getattr(self.config, "n_bootstrap", 100),
+            )
+        )
+        frac = float(
+            getattr(
+                self.config,
+                "bootstrap_cohort_sample_fraction",
+                getattr(self.config, "bootstrap_sample_fraction", 1.0),
+            )
+        )
+        features = list(analysis.get("features", []))
+        min_depths = analysis.get("min_depths", {})
+        root_set = set(analysis.get("root_features", []))
 
-        root_feats = list(analysis.get("root_features", []))
-        branch_feats = list(analysis.get("branch_features", []))
+        stability = self._bootstrap_feature_stability(
+            X, y, features, n_resamples=B, sample_fraction=frac
+        )
+        successful_B = int(stability.get("__meta__", {}).get("n_successful_fits", 0))
+        skipped_single = int(
+            stability.get("__meta__", {}).get("n_skipped_single_class", 0)
+        )
+        requested_B = int(stability.get("__meta__", {}).get("n_requested_resamples", B))
+        min_success = int(
+            getattr(self.config, "bootstrap_min_successful_resamples", 20)
+        )
+        if successful_B < min_success:
+            logger.warning(
+                "Bootstrap stability: only %d successful fits of %d requested "
+                "(skipped_single_class=%d). Minimum recommended=%d. "
+                "Stability denominators use successful fits only.",
+                successful_B,
+                requested_B,
+                skipped_single,
+                min_success,
+            )
 
-        confidences: Dict[str, Any] = {}
+        evidence: Dict[str, Any] = {}
+        for feat in sorted(features):
+            # Pairwise-complete MI / Cramér's V (drop NaN feature rows)
+            try:
+                xf = pd.to_numeric(X[feat], errors="coerce")
+                mask = xf.notna()
+                if mask.sum() >= 2 and len(np.unique(y[mask.to_numpy()])) >= 2:
+                    mi = float(
+                        mutual_info_score(y[mask.to_numpy()], xf.loc[mask].to_numpy())
+                    )
+                else:
+                    mi = 0.0
+            except Exception:
+                mi = 0.0
+            try:
+                xf = pd.to_numeric(X[feat], errors="coerce")
+                mask = xf.notna()
+                table = pd.crosstab(xf.loc[mask], pd.Series(y, index=X.index).loc[mask])
+                cv = float(self._cramers_v(table)) if min(table.shape) > 1 else 0.0
+            except Exception:
+                cv = 0.0
 
-        for feats, ftype in [(root_feats, "root"), (branch_feats, "branch")]:
-            for feat in feats:
-                try:
-                    mi = float(mutual_info_score(y, X[feat]))
+            stab = stability.get(feat, {})
+            sel_count = int(stab.get("selection_count", 0))
+            # Denominator = successful fitted bootstrap resamples (not requested B)
+            denom = int(stab.get("n_successful_fits", successful_B))
+            stab_frac = float(sel_count / denom) if denom > 0 else 0.0
+            ci_low, ci_high = self._wilson_interval(sel_count, denom)
 
-                    stability_values = []
-                    outer = int(getattr(self.config, "bootstrap_outer_iters", 5))
-                    per_iter = int(getattr(self.config, "bootstrap_samples_per_iter", 100))
+            # Documented mixture — NOT calibrated confidence / probability
+            evidence_score = float(
+                0.4 * min(1.0, mi) + 0.4 * stab_frac + 0.2 * min(1.0, cv)
+            )
 
-                    for _ in range(max(1, outer)):
-                        stability_values.append(
-                            self._bootstrap_importance(X, y, feat, n=per_iter)
-                        )
+            evidence[feat] = {
+                "type": "root" if feat in root_set else "branch",
+                "min_tree_depth": int(min_depths.get(feat, 999)),
+                "mutual_info": mi,
+                "cramers_v": cv,
+                "bootstrap_stability": stab_frac,
+                "bootstrap_selection_count": sel_count,
+                "bootstrap_denominator": denom,
+                "bootstrap_n_requested_resamples": requested_B,
+                "bootstrap_n_successful_fits": successful_B,
+                "bootstrap_n_skipped_single_class": skipped_single,
+                "bootstrap_stability_ci95": {"low": ci_low, "high": ci_high},
+                "bootstrap_min_depth_mean": stab.get("min_depth_mean"),
+                "bootstrap_min_depth_median": stab.get("min_depth_median"),
+                "evidence_score": evidence_score,
+                "evidence_score_definition": (
+                    "0.4*clip(mutual_info,0,1)+0.4*bootstrap_stability+0.2*clip(cramers_v,0,1); "
+                    "arbitrary documented weighting; not a calibrated probability or confidence."
+                ),
+                # Deprecated aliases (removal planned v2.0) — not preferred
+                "stability": stab_frac,
+            }
+        evidence["__bootstrap_meta__"] = {
+            "n_requested_resamples": requested_B,
+            "n_successful_fits": successful_B,
+            "n_skipped_single_class": skipped_single,
+            "denominator_policy": "successful_fits_only",
+            "min_successful_resamples": min_success,
+            "warning_insufficient_successful_fits": bool(successful_B < min_success),
+        }
+        return evidence
 
-                    stability = float(np.mean(stability_values)) if stability_values else 0.0
-
-                    table = pd.crosstab(X[feat], pd.Series(y, index=X.index))
-                    cv = float(self._cramers_v(table)) if table.shape[1] > 1 else 0.0
-
-                    conf = float(mi * 0.4 + stability * 0.4 + cv * 0.2)
-
-                    confidences[feat] = {
-                        "type": ftype,
-                        "mutual_info": mi,
-                        "stability": stability,
-                        "cramers_v": cv,
-                        "confidence": conf,
-                    }
-                except Exception as exc:
-                    logger.warning("Confidence computation failed for feature '%s': %s", feat, exc)
-
-        return confidences
-
-    def _bootstrap_importance(
+    def _bootstrap_feature_stability(
         self,
         X: pd.DataFrame,
         y: np.ndarray,
-        target_feat: str,
-        n: int = 100,
-    ) -> float:
+        features: List[str],
+        *,
+        n_resamples: int,
+        sample_fraction: float,
+    ) -> Dict[str, Dict[str, Any]]:
         """
-        Bootstrap tree importance for a target feature.
+        B independent cohort bootstrap trees.
+
+        Stability denominator is the number of *successful* multi-class fits,
+        not the requested resample count.
         """
-        if X.shape[0] == 0:
-            return 0.0
+        n = int(X.shape[0])
+        if n == 0 or n_resamples <= 0:
+            meta: Dict[str, Any] = {
+                "n_requested_resamples": max(0, n_resamples),
+                "n_successful_fits": 0,
+                "n_skipped_single_class": 0,
+            }
+            out: Dict[str, Dict[str, Any]] = {
+                f: {
+                    "selection_count": 0,
+                    "n_successful_fits": 0,
+                    "n_bootstrap_resamples": 0,
+                    "min_depths": [],
+                }
+                for f in features
+            }
+            out["__meta__"] = meta
+            return out
 
-        sample_size = max(1, min(int(n), int(X.shape[0])))
-        boot_idx = np.random.choice(len(X), sample_size, replace=True)
-        Xb = X.iloc[boot_idx]
-        yb = y[boot_idx]
+        sample_size = max(1, int(round(n * float(sample_fraction))))
+        params = self._tree_params()
+        feature_list = list(X.columns.astype(str))
+        selection_count = {f: 0 for f in features}
+        min_depth_lists: Dict[str, List[int]] = {f: [] for f in features}
+        n_success = 0
+        n_skipped = 0
 
-        if len(np.unique(yb)) < 2:
-            return 0.0
+        for b in range(int(n_resamples)):
+            boot_idx = self._rng.choice(n, size=sample_size, replace=True)
+            Xb = X.iloc[boot_idx]
+            yb = y[boot_idx]
+            if len(np.unique(yb)) < 2:
+                n_skipped += 1
+                continue
+            rs = int(self._rng.integers(0, 2**31 - 1))
+            dt_b = DecisionTreeClassifier(
+                max_depth=params["max_depth"],
+                min_samples_split=params["min_samples_split"],
+                min_samples_leaf=params["min_samples_leaf"],
+                random_state=rs,
+            )
+            try:
+                dt_b.fit(Xb, yb)
+            except Exception:
+                n_skipped += 1
+                continue
+            n_success += 1
+            used = set()
+            tree_ = dt_b.tree_
+            depths_this: Dict[str, List[int]] = defaultdict(list)
 
-        dt = DecisionTreeClassifier(
-            max_depth=getattr(self.config, "max_depth", None),
-            min_samples_split=int(getattr(self.config, "min_samples_split", 2)),
-            min_samples_leaf=int(getattr(self.config, "min_samples_leaf", 1)),
-            random_state=int(getattr(self.config, "random_state", 42)),
-        )
-        dt.fit(Xb, yb)
+            def walk(node_id: int, depth: int) -> None:
+                feat_idx = int(tree_.feature[node_id])
+                if feat_idx == -2:
+                    return
+                if feat_idx >= 0:
+                    fname = feature_list[feat_idx]
+                    used.add(fname)
+                    depths_this[fname].append(depth)
+                left = int(tree_.children_left[node_id])
+                right = int(tree_.children_right[node_id])
+                if left != -1:
+                    walk(left, depth + 1)
+                if right != -1:
+                    walk(right, depth + 1)
 
-        try:
-            feat_idx = list(X.columns).index(target_feat)
-        except ValueError:
-            return 0.0
+            walk(0, 0)
+            for f in features:
+                if f in used:
+                    selection_count[f] += 1
+                    if depths_this.get(f):
+                        min_depth_lists[f].append(int(min(depths_this[f])))
 
-        if feat_idx >= len(dt.feature_importances_):
-            return 0.0
+        out = {}
+        for f in features:
+            depths = min_depth_lists[f]
+            out[f] = {
+                "selection_count": int(selection_count[f]),
+                "n_successful_fits": int(n_success),
+                "n_bootstrap_resamples": int(n_success),  # successful-fit denominator
+                "min_depth_mean": float(np.mean(depths)) if depths else None,
+                "min_depth_median": float(np.median(depths)) if depths else None,
+            }
+        out["__meta__"] = {
+            "n_requested_resamples": int(n_resamples),
+            "n_successful_fits": int(n_success),
+            "n_skipped_single_class": int(n_skipped),
+        }
+        return out
 
-        return float(dt.feature_importances_[feat_idx])
+    @staticmethod
+    def _wilson_interval(
+        successes: int, n: int, z: float = 1.96
+    ) -> Tuple[Optional[float], Optional[float]]:
+        if n <= 0:
+            return None, None
+        successes = max(0, min(int(successes), int(n)))
+        phat = successes / n
+        denom = 1.0 + (z * z) / n
+        centre = (phat + (z * z) / (2.0 * n)) / denom
+        margin = (
+            z * math.sqrt((phat * (1.0 - phat) / n) + (z * z) / (4.0 * n * n))
+        ) / denom
+        return float(max(0.0, centre - margin)), float(min(1.0, centre + margin))
 
     @staticmethod
     def _cramers_v(table: pd.DataFrame) -> float:
@@ -582,9 +799,9 @@ class DecisionTreeBranch:
             return 0.0
 
     # ------------------------------------------------------------------
-    # Interaction mining
+    # Tree-path interaction candidates (not biological epistasis claims)
     # ------------------------------------------------------------------
-    def _mine_epistatic_interactions(
+    def _mine_tree_path_interaction_candidates(
         self,
         dt: DecisionTreeClassifier,
         feature_names: List[str],
@@ -592,41 +809,39 @@ class DecisionTreeBranch:
         y: np.ndarray,
     ) -> List[Dict[str, Any]]:
         """
-        Mine interactions by walking tree paths and scoring the last two features
-        by mutual-information-derived synergy.
+        Mine co-occurring features along tree paths as interaction *candidates*.
+
+        Validation requires joint support, bootstrap co-selection stability,
+        association test with FDR correction. Status is never "biological_epistasis".
         """
         tree_ = dt.tree_
-        interactions: List[Dict[str, Any]] = []
+        raw: List[Dict[str, Any]] = []
 
         def traverse(node_id: int, path: List[str]) -> None:
-            if int(tree_.feature[node_id]) == -2:
-                return
-
             feat_idx = int(tree_.feature[node_id])
+            if feat_idx == -2:
+                return
             new_path = path
-
             if feat_idx >= 0:
                 feat = feature_names[feat_idx]
                 new_path = path + [feat]
-
                 if len(new_path) >= 2:
                     f1, f2 = new_path[-2], new_path[-1]
-                    strength = float(self._epistasis_strength(X, y, f1, f2))
-
-                    if strength > float(getattr(self.config, "epistasis_strength_threshold", 0.05)):
-                        interactions.append(
-                            {
-                                "features": [f1, f2],
-                                "strength": strength,
-                                "path_depth": int(len(new_path) - 1),
-                                "support": int(tree_.n_node_samples[node_id]),
-                                "type": "conditional" if len(new_path) > 2 else "pairwise",
-                            }
-                        )
-
+                    strength = float(self._path_synergy_score(X, y, f1, f2))
+                    raw.append(
+                        {
+                            "features": sorted([f1, f2]),
+                            "synergy_score": strength,
+                            "path_depth": int(len(new_path) - 1),
+                            "node_support": int(tree_.n_node_samples[node_id]),
+                            "path_type": "conditional"
+                            if len(new_path) > 2
+                            else "pairwise",
+                            "candidate_kind": "tree_path_interaction_candidate",
+                        }
+                    )
             left = int(tree_.children_left[node_id])
             right = int(tree_.children_right[node_id])
-
             if left != -1:
                 traverse(left, new_path)
             if right != -1:
@@ -634,40 +849,270 @@ class DecisionTreeBranch:
 
         traverse(0, [])
 
-        # Deduplicate on ordered feature pair, keeping strongest score
-        best_by_pair: Dict[Tuple[str, str], Dict[str, Any]] = {}
-        for item in interactions:
+        # Aggregate candidates by unordered pair
+        by_pair: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        for item in raw:
             pair = tuple(item["features"])
-            prev = best_by_pair.get(pair)
-            if prev is None or float(item["strength"]) > float(prev["strength"]):
-                best_by_pair[pair] = item
+            prev = by_pair.get(pair)  # type: ignore[arg-type]
+            if prev is None or float(item["synergy_score"]) > float(
+                prev["synergy_score"]
+            ):
+                by_pair[pair] = item  # type: ignore[index]
 
-        deduped = list(best_by_pair.values())
-        deduped.sort(key=lambda d: d["strength"], reverse=True)
+        candidates = list(by_pair.values())
+        # Bootstrap co-selection stability for pairs
+        pair_stability = self._bootstrap_pair_stability(
+            X, y, [tuple(c["features"]) for c in candidates]
+        )
 
-        return deduped[: int(getattr(self.config, "max_epistatic_interactions", 50))]
+        min_joint = int(getattr(self.config, "interaction_min_joint_support", 10))
+        min_stab = float(
+            getattr(self.config, "interaction_min_bootstrap_stability", 0.5)
+        )
+        fdr_alpha = float(getattr(self.config, "interaction_fdr_alpha", 0.05))
+        strength_gate = float(
+            getattr(self.config, "epistasis_strength_threshold", 0.05)
+        )
 
-    @staticmethod
-    def _epistasis_strength(
+        pvals: List[float] = []
+        for c in candidates:
+            f1, f2 = c["features"]
+            joint = self._joint_support(X, f1, f2)
+            c["joint_support"] = int(joint)
+            key = tuple(sorted([f1, f2]))
+            stab = pair_stability.get(key, {})
+            c["pair_bootstrap_stability"] = stab.get("stability", 0.0)
+            c["pair_bootstrap_selection_count"] = stab.get("selection_count", 0)
+            c["pair_bootstrap_denominator"] = stab.get(
+                "n_successful_fits", stab.get("n_bootstrap_resamples", 0)
+            )
+            c["pair_stability_definition"] = stab.get(
+                "definition",
+                "fraction of successful bootstrap trees where the pair co-occurs on a root-to-leaf path",
+            )
+            # Association of joint state vs label (pairwise-complete)
+            p = self._joint_label_association_pvalue(X, y, f1, f2)
+            c["association_pvalue"] = p
+            pvals.append(p if p is not None and np.isfinite(p) else 1.0)
+
+        if pvals:
+            reject, p_adj, _, _ = multipletests(pvals, alpha=fdr_alpha, method="fdr_bh")
+        else:
+            reject, p_adj = [], []
+
+        for i, c in enumerate(candidates):
+            c["association_pvalue_fdr"] = float(p_adj[i]) if len(p_adj) else None
+            passes = (
+                float(c.get("synergy_score", 0.0)) > strength_gate
+                and int(c.get("joint_support", 0)) >= min_joint
+                and float(c.get("pair_bootstrap_stability", 0.0)) >= min_stab
+                and bool(reject[i])
+                if len(reject)
+                else False
+            )
+            c["validation_status"] = (
+                "validated_candidate" if passes else "unvalidated_candidate"
+            )
+            c["biological_epistasis_claim"] = False
+            c["note"] = (
+                "Tree-path interaction candidate only. "
+                "Not a claim of biological epistasis."
+            )
+
+        candidates.sort(
+            key=lambda d: (
+                0 if d.get("validation_status") == "validated_candidate" else 1,
+                -float(d.get("synergy_score", 0.0)),
+                d["features"][0],
+                d["features"][1],
+            )
+        )
+        limit = int(
+            getattr(
+                self.config,
+                "max_tree_path_interaction_candidates",
+                getattr(self.config, "max_epistatic_interactions", 50),
+            )
+        )
+        return candidates[:limit]
+
+    def _bootstrap_pair_stability(
+        self,
         X: pd.DataFrame,
         y: np.ndarray,
-        f1: str,
-        f2: str,
-    ) -> float:
+        pairs: List[Tuple[str, str]],
+    ) -> Dict[Tuple[str, str], Dict[str, Any]]:
         """
-        Synergy proxy:
-            MI(y ; joint_state(f1,f2)) - [MI(y ; f1) + MI(y ; f2)]
+        Path co-occurrence stability: count successful bootstrap trees where the
+        pair appears on the *same* root-to-leaf path (not merely both used anywhere
+        in the tree).
         """
-        mi1 = float(mutual_info_score(y, X[f1]))
-        mi2 = float(mutual_info_score(y, X[f2]))
-        combined = X[f1].astype(str) + "_" + X[f2].astype(str)
-        mi_comb = float(mutual_info_score(y, combined))
+        B = int(getattr(self.config, "n_bootstrap_resamples", 50))
+        B = min(B, 50)  # pair stability can be expensive; cap for practicality
+        frac = float(getattr(self.config, "bootstrap_cohort_sample_fraction", 1.0))
+        n = int(X.shape[0])
+
+        def pair_key(pair: Tuple[str, str]) -> Tuple[str, str]:
+            first, second = pair
+            return (first, second) if first <= second else (second, first)
+
+        empty = {
+            pair_key(p): {
+                "selection_count": 0,
+                "stability": 0.0,
+                "n_successful_fits": 0,
+                "n_bootstrap_resamples": 0,
+                "n_requested_resamples": B,
+                "n_skipped_single_class": 0,
+                "definition": "path_cooccurrence_on_successful_fits",
+            }
+            for p in pairs
+        }
+        if n == 0 or B <= 0 or not pairs:
+            return empty
+
+        sample_size = max(1, int(round(n * frac)))
+        params = self._tree_params()
+        feature_list = list(X.columns.astype(str))
+        counts = {pair_key(p): 0 for p in pairs}
+        n_success = 0
+        n_skipped = 0
+
+        for _ in range(B):
+            boot_idx = self._rng.choice(n, size=sample_size, replace=True)
+            Xb = X.iloc[boot_idx]
+            yb = y[boot_idx]
+            if len(np.unique(yb)) < 2:
+                n_skipped += 1
+                continue
+            rs = int(self._rng.integers(0, 2**31 - 1))
+            dt_b = DecisionTreeClassifier(
+                max_depth=params["max_depth"],
+                min_samples_split=params["min_samples_split"],
+                min_samples_leaf=params["min_samples_leaf"],
+                random_state=rs,
+            )
+            try:
+                dt_b.fit(Xb, yb)
+            except Exception:
+                n_skipped += 1
+                continue
+            n_success += 1
+            tree_ = dt_b.tree_
+            path_pairs: Set[Tuple[str, str]] = set()
+
+            def walk(node_id: int, path: List[str]) -> None:
+                feat_idx = int(tree_.feature[node_id])
+                left = int(tree_.children_left[node_id])
+                right = int(tree_.children_right[node_id])
+                # Leaf: record all unordered pairs on this root-to-leaf path
+                if feat_idx == -2 or (left == right == -1):
+                    for i in range(len(path)):
+                        for j in range(i + 1, len(path)):
+                            path_pairs.add(pair_key((path[i], path[j])))
+                    return
+                new_path = path
+                if feat_idx >= 0:
+                    new_path = path + [feature_list[feat_idx]]
+                if left != -1:
+                    walk(left, new_path)
+                if right != -1:
+                    walk(right, new_path)
+
+            walk(0, [])
+            for p in counts:
+                if p in path_pairs:
+                    counts[p] += 1
+
+        denom = max(0, n_success)
+        return {
+            p: {
+                "selection_count": int(c),
+                "n_successful_fits": int(denom),
+                "n_bootstrap_resamples": int(denom),
+                "n_requested_resamples": int(B),
+                "n_skipped_single_class": int(n_skipped),
+                "stability": float(c / denom) if denom else 0.0,
+                "definition": "path_cooccurrence_on_successful_fits",
+            }
+            for p, c in counts.items()
+        }
+
+    @staticmethod
+    def _joint_support(X: pd.DataFrame, f1: str, f2: str) -> int:
+        if f1 not in X.columns or f2 not in X.columns:
+            return 0
+        # Count samples where both markers are non-baseline (typically 1)
+        # Pairwise-complete association: drop rows where either feature is non-callable.
+        a = pd.to_numeric(X[f1], errors="coerce")
+        b = pd.to_numeric(X[f2], errors="coerce")
+        both = a.notna() & b.notna()
+        a = a.loc[both]
+        b = b.loc[both]
+        if a.empty:
+            return 0
+        return int(((a != 0) & (b != 0)).sum())
+
+    @staticmethod
+    def _joint_label_association_pvalue(
+        X: pd.DataFrame, y: np.ndarray, f1: str, f2: str
+    ) -> Optional[float]:
+        try:
+            a = pd.to_numeric(X[f1], errors="coerce")
+            b = pd.to_numeric(X[f2], errors="coerce")
+            both = a.notna() & b.notna()
+            if both.sum() < 4:
+                return 1.0
+            joint = a.loc[both].astype(str) + "_" + b.loc[both].astype(str)
+            y_s = pd.Series(y, index=X.index).loc[both]
+            table = pd.crosstab(joint, y_s)
+            if table.shape[0] < 2 or table.shape[1] < 2:
+                return 1.0
+            if table.shape == (2, 2):
+                _, p = fisher_exact(table.values)
+                return float(p)
+            _, p, _, _ = chi2_contingency(table.values)
+            return float(p)
+        except Exception:
+            return 1.0
+
+    @staticmethod
+    def _path_synergy_score(X: pd.DataFrame, y: np.ndarray, f1: str, f2: str) -> float:
+        """MI synergy proxy for path co-occurrence (not epistasis claim)."""
+        first = pd.to_numeric(X[f1], errors="coerce").reset_index(drop=True)
+        second = pd.to_numeric(X[f2], errors="coerce").reset_index(drop=True)
+        target = pd.Series(y).reset_index(drop=True)
+        valid = first.notna() & second.notna() & target.notna()
+        if int(valid.sum()) < 2:
+            return 0.0
+        first = first.loc[valid]
+        second = second.loc[valid]
+        target = target.loc[valid]
+        mi1 = float(mutual_info_score(target, first))
+        mi2 = float(mutual_info_score(target, second))
+        combined = first.astype(str) + "_" + second.astype(str)
+        mi_comb = float(mutual_info_score(target, combined))
         return float(mi_comb - (mi1 + mi2))
+
+    # Compatibility wrappers (planned removal v2.0). Prefer the non-epistasis names.
+    def _mine_epistatic_interactions(self, *args, **kwargs):
+        """Deprecated alias of ``_mine_tree_path_interaction_candidates`` (removal_target=2.0)."""
+        logger.warning(
+            "Deprecated: _mine_epistatic_interactions; use "
+            "_mine_tree_path_interaction_candidates (not biological epistasis)."
+        )
+        return self._mine_tree_path_interaction_candidates(*args, **kwargs)
+
+    def _epistasis_strength(self, X, y, f1, f2):
+        """Deprecated alias of ``_path_synergy_score`` (removal_target=2.0)."""
+        return self._path_synergy_score(X, y, f1, f2)
 
     # ------------------------------------------------------------------
     # Export + Summary
     # ------------------------------------------------------------------
-    def _export_results(self, results: Dict[str, Any], output_dir: Optional[str]) -> None:
+    def _export_results(
+        self, results: Dict[str, Any], output_dir: Optional[str]
+    ) -> None:
         if not output_dir:
             return
 
@@ -678,55 +1123,102 @@ class DecisionTreeBranch:
             results["decision_trees"]["rules"],
             encoding="utf-8",
         )
-        (out / self.artifacts.confidence_json).write_text(
-            json.dumps(results["feature_confidence"], indent=2),
-            encoding="utf-8",
+        evidence = results.get("feature_evidence", {})
+        if not evidence and isinstance(results.get("deprecated"), dict):
+            evidence = results["deprecated"].get("feature_confidence", {})
+        interactions = results.get("tree_path_interaction_candidates", [])
+        if not interactions and isinstance(results.get("deprecated"), dict):
+            interactions = results["deprecated"].get("epistatic_interactions", [])
+
+        (out / self.artifacts.evidence_json).write_text(
+            json.dumps(evidence, indent=2), encoding="utf-8"
         )
         (out / self.artifacts.interactions_json).write_text(
-            json.dumps(results["epistatic_interactions"], indent=2),
+            json.dumps(interactions, indent=2), encoding="utf-8"
+        )
+        # Deprecated filenames for compatibility (planned removal v2.0)
+        deprecated_blob = results.get("deprecated") or {
+            "removal_target": "2.0",
+            "feature_confidence": evidence,
+            "epistatic_interactions": interactions,
+        }
+        (out / self.artifacts.legacy_confidence_json).write_text(
+            json.dumps(
+                {
+                    "deprecated": True,
+                    "removal_target": "2.0",
+                    "use_instead": self.artifacts.evidence_json,
+                    "payload": deprecated_blob.get("feature_confidence", evidence),
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        (out / self.artifacts.legacy_interactions_json).write_text(
+            json.dumps(
+                {
+                    "deprecated": True,
+                    "removal_target": "2.0",
+                    "use_instead": self.artifacts.interactions_json,
+                    "note": "Not biological epistasis; tree-path interaction candidates only.",
+                    "payload": deprecated_blob.get(
+                        "epistatic_interactions", interactions
+                    ),
+                },
+                indent=2,
+            ),
             encoding="utf-8",
         )
 
     def _print_summary(self, results: Dict[str, Any]) -> None:
-        def _shorten_feature_name(name: str, max_len: int = 60) -> str:
-            s = str(name)
-            if len(s) <= max_len:
-                return s
-
-            keep = max_len - 3
-            left = keep // 2
-            right = keep - left
-            return f"{s[:left]}...{s[-right:]}"
-
         tree = results["decision_trees"]
         root_features = results.get("root_features", [])
         branch_features = results.get("branch_features", [])
-        interactions = results.get("epistatic_interactions", [])
-        confidence_map = results.get("feature_confidence", {})
+        interactions = results.get(
+            "tree_path_interaction_candidates",
+            results.get("epistatic_interactions", []),
+        )
+        evidence_map = results.get(
+            "feature_evidence", results.get("feature_confidence", {})
+        )
 
         print("\n" + "=" * 70)
         print("FEATURE DISCOVERY SUMMARY (DecisionTree Branch)")
         print("=" * 70)
-        training_accuracy = tree.get("training_accuracy", tree.get("accuracy", float("nan")))
-        print(
-            f"Tree Training Accuracy: {training_accuracy:.3f} | "
-            f"Classes: {tree['n_classes']}"
+        training_accuracy = tree.get(
+            "training_fit_accuracy", tree.get("training_accuracy", float("nan"))
         )
-        print(f"Root Features: {len(root_features)} | Branch Features: {len(branch_features)}")
+        print(
+            f"Tree Training-Fit Accuracy: {training_accuracy:.3f} | "
+            f"Classes: {tree['n_classes']} | Depth: {tree.get('tree_depth', '?')}"
+        )
+        print(
+            f"Root Features (min depth≤1): {len(root_features)} | Branch Features: {len(branch_features)}"
+        )
 
         if root_features:
-            root_conf = [
-                confidence_map.get(feat, {}).get("confidence", float("nan"))
+            root_scores = [
+                evidence_map.get(feat, {}).get("evidence_score", float("nan"))
                 for feat in root_features
             ]
-            finite_conf = [float(x) for x in root_conf if np.isfinite(float(x))]
-            if finite_conf:
-                print(f"Mean Root Feature Confidence: {float(np.mean(finite_conf)):.3f}")
-            print("  Exact feature identifiers were written to artifacts and DEBUG logs.")
+            finite = [float(x) for x in root_scores if np.isfinite(float(x))]
+            if finite:
+                print(f"Mean Root Feature Evidence Score: {float(np.mean(finite)):.3f}")
+            print(
+                "  Evidence fields (MI, Cramér V, bootstrap) written separately; not probability confidence."
+            )
         else:
             print("  No root features identified.")
 
-        print(f"Epistatic Interactions: {len(interactions)}")
+        n_val = sum(
+            1
+            for i in interactions
+            if i.get("validation_status") == "validated_candidate"
+        )
+        print(
+            f"Tree-path interaction candidates: {len(interactions)} "
+            f"(validated_candidate={n_val}; not biological epistasis claims)"
+        )
         print("=" * 70 + "\n")
 
     # ------------------------------------------------------------------
@@ -748,21 +1240,29 @@ class DecisionTreeBranch:
 
     def _drop_post_impute_monomorphic(self, X: pd.DataFrame) -> List[str]:
         """
-        Drop invariant / near-monomorphic columns after final coercion and imputation.
+        Drop invariant columns using nunique / value counts (not clipped mean).
         """
         if X.empty:
             return []
 
-        # Mean-based rule assumes binary-ish encoding and matches the current pipeline design
-        col_means = X.mean().clip(0, 1)
-        too_rare = (col_means < 0.001) | (col_means > 0.999)
+        kept: List[str] = []
+        dropped = 0
+        for col in X.columns:
+            series = pd.to_numeric(X[col], errors="coerce")
+            nunique = int(series.nunique(dropna=True))
+            if nunique <= 1:
+                dropped += 1
+                continue
+            # Near-monomorphic: dominant state ≥ 99.9% of non-null samples
+            vc = series.value_counts(dropna=True)
+            if len(vc) and float(vc.iloc[0]) / max(1, int(vc.sum())) >= 0.999:
+                dropped += 1
+                continue
+            kept.append(col)
 
-        if bool(too_rare.any()):
-            drop_cols = too_rare[too_rare].index.tolist()
+        if dropped:
             logger.info(
-                "Dropping %d invariant / near-monomorphic features before tree fitting.",
-                len(drop_cols),
+                "Dropping %d invariant / near-monomorphic features before tree fitting (nunique/value-count rule).",
+                dropped,
             )
-
-        kept = [c for c in X.columns if c not in set(too_rare[too_rare].index.tolist())]
         return kept

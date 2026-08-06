@@ -1,506 +1,509 @@
-digraph NetworkParser_Flow_Detailed {
-  // ─────────────────────────────────────────────────────────────
-  // NetworkParser — detailed, script-faithful pipeline flow
-  // Updated: replaces UNION-of-matrix logic + bcftools-merge logic
-  // with DataLoader's per-sample parse → cohort merge → baseline → encode
-  // (i.e., the DataLoader_Flow_AlignedToCode design).
-  // ─────────────────────────────────────────────────────────────
-
-  rankdir=TB;
-  labelloc="t";
-  fontsize=20;
-  fontname="Helvetica,Arial,sans-serif";
-  label="NetworkParser — Detailed Pipeline Flow \nInput → Matrix construction → Pre-tree statistical filtering → Decision tree → Post-tree confidence + epistasis → Optional validation → Final JSON";
-
-  graph [splines=ortho, nodesep=0.45, ranksep=0.7];
-  node  [shape=box, style="rounded,filled", fontname="Helvetica,Arial,sans-serif", fontsize=10, penwidth=1.15, fillcolor="#eef5ff"];
-  edge  [fontname="Helvetica,Arial,sans-serif", fontsize=9, penwidth=1.1, arrowsize=0.9, color="#444"];
-
-  // ─────────────────────────────────────────────────────────────
-  // STAGE 0 — CLI
-  // ─────────────────────────────────────────────────────────────
-  subgraph cluster_cli {
-    label="Stage 0 — CLI entry (cli.py)";
-    labelloc="t";
-    fontsize=14;
-    style="rounded";
-    color="#c9d7f0";
-
-    cli_args [label=<
-      <B>Parse CLI args</B><BR ALIGN="LEFT"/>
-      • --genomic: file OR directory (VCF/VCF.gz/CSV/TSV)<BR ALIGN="LEFT"/>
-      • --meta: optional metadata table (CSV/TSV)<BR ALIGN="LEFT"/>
-      • --label: metadata column for phenotype / group<BR ALIGN="LEFT"/>
-      • --known_markers: optional marker list<BR ALIGN="LEFT"/>
-      • --ref_fasta: optional FASTA for normalization (optional / context)<BR ALIGN="LEFT"/>
-      • --config: JSON overrides<BR ALIGN="LEFT"/>
-      • --validate_statistics / --validate_interactions flags
-    >];
-
-    cli_cfg [label=<
-      <B>Load config</B><BR ALIGN="LEFT"/>
-      NetworkParserConfig() defaults<BR ALIGN="LEFT"/>
-      Apply JSON overrides
-    >];
-
-    cli_call [label=<
-      <B>Call pipeline</B><BR ALIGN="LEFT"/>
-      run_networkparser_analysis(...) → NetworkParser.run_pipeline(...)
-    >];
-
-    cli_args -> cli_cfg -> cli_call;
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  // ORCHESTRATOR
-  // ─────────────────────────────────────────────────────────────
-  subgraph cluster_orch {
-    label="Orchestrator (network_parser.py)";
-    labelloc="t";
-    fontsize=14;
-    style="rounded";
-    color="#c9d7f0";
-
-    np_init [label=<
-      <B>Instantiate components</B><BR ALIGN="LEFT"/>
-      • DataLoader(config)<BR ALIGN="LEFT"/>
-      • EnhancedDecisionTreeBuilder(config)<BR ALIGN="LEFT"/>
-      • StatisticalValidator(config)
-    >];
-
-    np_run [label=<
-      <B>run_pipeline()</B><BR ALIGN="LEFT"/>
-      1) Build genomic matrix (DataLoader)<BR ALIGN="LEFT"/>
-      2) Load metadata + labels<BR ALIGN="LEFT"/>
-      3) Discover features + interactions (tree-based)<BR ALIGN="LEFT"/>
-      4) Optional validation (if flags)<BR ALIGN="LEFT"/>
-      5) Save final JSON report
-    >];
-
-    cli_call -> np_init -> np_run;
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  // STAGE 1 — DATA LOADER (UPDATED)
-  // ─────────────────────────────────────────────────────────────
-  subgraph cluster_loader {
-    label="Stage 1 — Matrix construction (data_loader.py) — per-sample parse → cohort merge → baseline → encode";
-    labelloc="t";
-    fontsize=14;
-    style="rounded";
-    color="#d7e3f7";
-
-    dl_route [label=<
-      <B>load_genomic_matrix(genomic_path)</B><BR ALIGN="LEFT"/>
-      Route by input type:<BR ALIGN="LEFT"/>
-      • directory → folder-of-VCFs mode<BR ALIGN="LEFT"/>
-      • .vcf / .vcf.gz → single-VCF mode (treated as single-sample or already-cohort VCF)<BR ALIGN="LEFT"/>
-      • .csv / .tsv → prebuilt matrix mode<BR ALIGN="LEFT"/>
-    >];
-
-    // Directory mode: no VCF merge, no UNION-of-sites
-    dl_dir [label=<
-      <B>Directory input</B><BR ALIGN="LEFT"/>
-      Collect *.vcf / *.vcf.gz<BR ALIGN="LEFT"/>
-      (no bcftools merge; no union-of-sites pass)
-    >];
-
-    dl_par [label=<
-      <B>Parallel per-sample parsing</B><BR ALIGN="LEFT"/>
-      Parallel(n_jobs): parse each VCF independently<BR ALIGN="LEFT"/>
-      Output per sample: {(chrom,pos) → (ref, called)}
-    > shape=ellipse fillcolor="#FFD48A"];
-
-    iter0 [label=<
-      <B>iter_sample_calls()</B><BR ALIGN="LEFT"/>
-      stream records from a single sample VCF<BR ALIGN="LEFT"/>
-      apply record-level gates + choose allele
-    > fillcolor="#fff7db"];
-
-    gate_snp [label=<
-      <B>is_snp_like?</B><BR ALIGN="LEFT"/>
-      single-base REF &amp; ALT<BR ALIGN="LEFT"/>
-      (optionally enforce biallelic-only)
-    > shape=diamond fillcolor="#fff7db"];
-
-    gate_info [label=<
-      <B>passes_info_qc?</B><BR ALIGN="LEFT"/>
-      QUAL + INFO(DP, MQ, MQ0F) thresholds<BR ALIGN="LEFT"/>
-      (config-driven)
-    > shape=diamond fillcolor="#fff7db"];
-
-    choose0 [label=<
-      <B>choose_called_allele()</B><BR ALIGN="LEFT"/>
-      Prefer GT when available (FORMAT)<BR ALIGN="LEFT"/>
-      Else treat ALT presence as called<BR ALIGN="LEFT"/>
-      Fallback to REF when needed
-    >];
-
-    store0 [label=<
-      <B>Store sample calls</B><BR ALIGN="LEFT"/>
-      (chrom,pos) → (ref, called)
-    >];
-
-    discard [label="discard record" fillcolor="#E9E9E9" fontcolor="gray35"];
-
-    // Cohort merge (within DataLoader)
-    merge_calls [label=<
-      <B>Cohort merge + carrier counts</B><BR ALIGN="LEFT"/>
-      Merge all per-sample call maps<BR ALIGN="LEFT"/>
-      Count carriers only where called ≠ ref
-    > fillcolor="#E7F2FF"];
-
-    bial_cons [label=<
-      <B>Optional ALT consistency gate</B><BR ALIGN="LEFT"/>
-      If biallelic-only, enforce consistent ALT per site<BR ALIGN="LEFT"/>
-      (discard conflicting ALT)
-    > shape=diamond fillcolor="#F2FAFF"];
-
-    pres [label=<
-      <B>Cohort presence filter</B><BR ALIGN="LEFT"/>
-      keep sites where carrier_count ≥ min_sample_presence
-    > shape=diamond fillcolor="#F2FAFF"];
-
-    sort_sites [label=<
-      <B>Sort retained sites</B><BR ALIGN="LEFT"/>
-      sort by chrom, pos
-    > fillcolor="#E7F2FF"];
-
-    // Baseline + encoding
-    refline [label=<
-      <B>Build ref_line</B><BR ALIGN="LEFT"/>
-      join REF bases across ordered sites
-    > fillcolor="#D7F7D7"];
-
-    alleles [label=<
-      <B>Build per-sample allele strings</B><BR ALIGN="LEFT"/>
-      called if valid else fallback REF<BR ALIGN="LEFT"/>
-      also collect per-position base counts (Counter)
-    > fillcolor="#D7F7D7"];
-
-    baseQ [label=<
-      <B>Choose baseline</B><BR ALIGN="LEFT"/>
-      ancestral_allele == 'Y' ? REF : MODE
-    > shape=diamond fillcolor="#ECFFEC"];
-
-    base_ref [label="baseline = ref_line" fillcolor="#D7F7D7"];
-    base_mode [label="baseline = per-position mode base" fillcolor="#D7F7D7"];
-
-    encode [label=<
-      <B>Binary encode</B><BR ALIGN="LEFT"/>
-      0 = matches baseline<BR ALIGN="LEFT"/>
-      1 = differs
-    > fillcolor="#CFF7F7"];
-
-    varids [label=<
-      <B>Variant IDs</B><BR ALIGN="LEFT"/>
-      CHROM:POS:REF:ALT
-    > fillcolor="#CFF7F7"];
-
-    build_df [label=<
-      <B>Build DataFrame</B><BR ALIGN="LEFT"/>
-      rows = samples<BR ALIGN="LEFT"/>
-      cols = variant IDs<BR ALIGN="LEFT"/>
-      values ∈ {0,1}
-    > fillcolor="#CFF7F7"];
-
-    // Light preprocessing (DataLoader only)
-    pre0 [label=<
-      <B>_preprocess_binary_matrix()</B><BR ALIGN="LEFT"/>
-      optional: drop invariant cols (all 0 / all 1)<BR ALIGN="LEFT"/>
-      optional: min_minor_count filter
-    > fillcolor="#FFE0F0"];
-
-    compactQ [label="use_integer_variant_ids?" shape=diamond fillcolor="#EDEDED"];
-    compactY [label="rename → v0,v1,... + save lookup" fillcolor="#EDEDED"];
-    compactN [label="keep full variant IDs" fillcolor="#EDEDED"];
-
-    outQ [label="output_dir provided?" shape=diamond fillcolor="#FFE7E0"];
-    write_all [label=<
-      <B>_write_all_artifacts()</B><BR ALIGN="LEFT"/>
-      • SNP table (minimal or annotated if ref/gbk available)<BR ALIGN="LEFT"/>
-      • alleles.fasta + binary.fasta<BR ALIGN="LEFT"/>
-      • filtered.tsv (+ optional context)<BR ALIGN="LEFT"/>
-      • matrices/* (filtered derivatives)<BR ALIGN="LEFT"/>
-      • config snapshot
-    > fillcolor="#FFD6C9"];
-
-    dl_return [label="Return binary DataFrame\n(samples × variants, 0/1)" shape=ellipse fillcolor="#D7F7D7"];
-
-    // Wiring (Stage 1)
-    np_run -> dl_route;
-
-    dl_route -> dl_dir [label="if directory"];
-    dl_dir -> dl_par;
-    dl_par -> iter0 [label="for each sample VCF"];
-    iter0 -> gate_snp;
-    gate_snp -> discard [label="no" style=dashed color="gray50"];
-    gate_snp -> gate_info [label="yes"];
-    gate_info -> discard [label="no" style=dashed color="gray50"];
-    gate_info -> choose0 [label="yes"];
-    choose0 -> store0;
-
-    store0 -> merge_calls [label="all samples done"];
-    merge_calls -> bial_cons;
-    bial_cons -> pres [label="ok"];
-
-    pres -> sort_sites [label="kept"];
-    pres -> discard [label="none left" style=dashed color="gray50"];
-
-    sort_sites -> refline -> alleles -> baseQ;
-    baseQ -> base_ref [label="Y"];
-    baseQ -> base_mode [label="mode"];
-    base_ref -> encode;
-    base_mode -> encode;
-    encode -> varids -> build_df -> pre0;
-
-    pre0 -> compactQ;
-    compactQ -> compactY [label="yes"];
-    compactQ -> compactN [label="no"];
-
-    compactY -> outQ;
-    compactN -> outQ;
-
-    outQ -> write_all [label="yes"];
-    outQ -> dl_return [label="no"];
-    write_all -> dl_return;
-
-    // Single-VCF mode: reuses the same parse→encode logic (no merge-VCFs step)
-    dl_single [label=<
-      <B>Single VCF input</B><BR ALIGN="LEFT"/>
-      Treat as a single-sample VCF (or already-cohort VCF parsed similarly)<BR ALIGN="LEFT"/>
-      Reuse iter_sample_calls() → encode pipeline
-    > fillcolor="#FFF1C9"];
-
-    dl_route -> dl_single [label="if .vcf/.vcf.gz"];
-    dl_single -> iter0;
-
-    // Prebuilt matrix mode
-    mat0 [label=<
-      <B>CSV/TSV matrix mode</B><BR ALIGN="LEFT"/>
-      Load sample × feature matrix as-is<BR ALIGN="LEFT"/>
-      (assumes already numeric/binary)
-    >];
-
-    dl_route -> mat0 [label="if .csv/.tsv"];
-
-    // Metadata + known markers
-    meta0 [label=<
-      <B>load_metadata(meta_path)</B><BR ALIGN="LEFT"/>
-      Read CSV/TSV<BR ALIGN="LEFT"/>
-      Index = "Sample" column if present else first column<BR ALIGN="LEFT"/>
-      Save metadata.normalized.csv
-    > fillcolor="#e9fff2"];
-
-    km0 [label=<
-      <B>load_known_markers(known_markers_path)</B><BR ALIGN="LEFT"/>
-      Accept .txt (one per line) OR .csv/.tsv<BR ALIGN="LEFT"/>
-      Column "marker" or first column<BR ALIGN="LEFT"/>
-      Save known_markers.normalized.txt
-    > fillcolor="#e9fff2"];
-
-    dl_route -> meta0 [style=dashed, label="if --meta"];
-    dl_route -> km0   [style=dashed, label="if --known_markers"];
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  // STAGE 2 — DISCOVERY (pre-tree filtering + decision tree)
-  // ─────────────────────────────────────────────────────────────
-  subgraph cluster_discovery {
-    label="Stage 2 — Feature discovery (decision_tree_builder.py)";
-    labelloc="t";
-    fontsize=14;
-    style="rounded";
-    color="#d7e3f7";
-
-    disc_in [label=<
-      <B>Inputs to discovery</B><BR ALIGN="LEFT"/>
-      • genomic_matrix (samples × variants)<BR ALIGN="LEFT"/>
-      • labels = metadata[label_column]<BR ALIGN="LEFT"/>
-      • all_features = matrix columns
-    >];
-
-    pre1 [label=<
-      <B>Pre-tree filtering (statistically defensible)</B><BR ALIGN="LEFT"/>
-      1) Missingness gate: keep features with sufficient non-missing fraction<BR ALIGN="LEFT"/>
-      2) MAF gate: keep features with MAF ≥ threshold<BR ALIGN="LEFT"/>
-      3) Per-feature association test vs label:<BR ALIGN="LEFT"/>
-         • Fisher for 2×2, else χ²<BR ALIGN="LEFT"/>
-      4) Multiple testing correction: FDR-BH<BR ALIGN="LEFT"/>
-      5) If none pass → fallback top-by-variance subset
-    >];
-
-    misslog [label=<
-      <B>Missingness reporting</B><BR ALIGN="LEFT"/>
-      Compute per-feature NaN fraction<BR ALIGN="LEFT"/>
-      Log counts only (avoid printing thousands)
-    > fillcolor="#fff2cc"];
-
-    impute0 [label=<
-      <B>Impute missing for tree fit</B><BR ALIGN="LEFT"/>
-      NaN → 0 (treat missing as baseline)<BR ALIGN="LEFT"/>
-      Drop near-monomorphic after imputation
-    >];
-
-    tree0 [label=<
-      <B>Train decision tree</B><BR ALIGN="LEFT"/>
-      DecisionTreeClassifier(max_depth, min_samples_split, min_samples_leaf, random_state)<BR ALIGN="LEFT"/>
-      Labels encoded with LabelEncoder
-    >];
-
-    rule0 [label=<
-      <B>Interpretability outputs</B><BR ALIGN="LEFT"/>
-      export_text(...) rules<BR ALIGN="LEFT"/>
-      Root features = depth 0<BR ALIGN="LEFT"/>
-      Branch features = depth &gt; 0
-    >];
-
-    conf0 [label=<
-      <B>Confidence scoring (post-tree)</B><BR ALIGN="LEFT"/>
-      For features used in tree:<BR ALIGN="LEFT"/>
-      • Mutual information(feature, label)<BR ALIGN="LEFT"/>
-      • Bootstrap stability of feature usage/importance<BR ALIGN="LEFT"/>
-      • Effect size proxy: Cramér’s V<BR ALIGN="LEFT"/>
-      Weighted aggregate → confidence score<BR ALIGN="LEFT"/>
-      Save feature_confidence.json
-    >];
-
-    epi0 [label=<
-      <B>Epistatic interaction mining (post-tree)</B><BR ALIGN="LEFT"/>
-      Traverse root→leaf paths<BR ALIGN="LEFT"/>
-      For adjacent feature pairs on a path:<BR ALIGN="LEFT"/>
-      • compute MI-based synergy proxy<BR ALIGN="LEFT"/>
-      • keep if ≥ epistasis_strength_threshold<BR ALIGN="LEFT"/>
-      Cap number of interactions<BR ALIGN="LEFT"/>
-      Save epistatic_interactions.json
-    >];
-
-    files0 [label=<
-      <B>Files written</B><BR ALIGN="LEFT"/>
-      • decision_tree_rules.txt<BR ALIGN="LEFT"/>
-      • feature_confidence.json<BR ALIGN="LEFT"/>
-      • epistatic_interactions.json
-    > fillcolor="#e9fff2"];
-
-    // connect discovery
-    dl_return -> disc_in [label="matrix"];
-    mat0 -> disc_in [label="matrix"];
-    meta0 -> disc_in [style=dashed, label="labels from meta[label_column]"];
-
-    disc_in -> pre1 -> misslog -> impute0 -> tree0 -> rule0 -> conf0 -> epi0 -> files0;
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  // STAGE 3 — VALIDATION (optional)
-  // ─────────────────────────────────────────────────────────────
-  subgraph cluster_validation {
-    label="Stage 3 — Optional validation (statistical_validation.py)";
-    labelloc="t";
-    fontsize=14;
-    style="rounded";
-    color="#d7e3f7";
-
-    v_in [label=<
-      <B>Validation inputs</B><BR ALIGN="LEFT"/>
-      • matrix (samples × variants)<BR ALIGN="LEFT"/>
-      • labels<BR ALIGN="LEFT"/>
-      • discovered features / interactions (from Stage 2)
-    >];
-
-    v_assoc [label=<
-      <B>Feature association tests</B><BR ALIGN="LEFT"/>
-      chi_squared_test(): χ²/Fisher + MI + Cramér’s V<BR ALIGN="LEFT"/>
-      Save chi_squared_results.json
-    >];
-
-    v_mtest [label=<
-      <B>Multiple testing correction</B><BR ALIGN="LEFT"/>
-      multiple_testing_correction(): FDR-BH / Bonferroni<BR ALIGN="LEFT"/>
-      Save multiple_testing_results.json
-    >];
-
-    v_boot [label=<
-      <B>Bootstrap validation</B><BR ALIGN="LEFT"/>
-      bootstrap_validation(): stability &amp; importance distributions<BR ALIGN="LEFT"/>
-      Save bootstrap_results.json
-    >];
-
-    v_perm [label=<
-      <B>Interaction permutation tests</B><BR ALIGN="LEFT"/>
-      permutation_test_interactions(): permutation p-values for candidate pairs<BR ALIGN="LEFT"/>
-      Save interaction_permutation_results.json
-    >];
-
-    v_note [label=<
-      <B>Implementation note</B><BR ALIGN="LEFT"/>
-      Orchestrator calls validate_features()/validate_interactions()<BR ALIGN="LEFT"/>
-      but StatisticalValidator exposes chi_squared_test(), multiple_testing_correction(),<BR ALIGN="LEFT"/>
-      bootstrap_validation(), permutation_test_interactions().<BR ALIGN="LEFT"/>
-      Wrapper methods or call-site update required for flags to work.
-    > fillcolor="#ffe6e6"];
-
-    // connect validation
-    files0 -> v_in [style=dashed, label="if flags enabled"];
-    v_in -> v_assoc -> v_mtest -> v_boot;
-    v_in -> v_perm;
-    v_note -> v_in [style=dotted];
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  // STAGE 4 — FINAL REPORT
-  // ─────────────────────────────────────────────────────────────
-  subgraph cluster_report {
-    label="Stage 4 — Final synthesis (network_parser.py + utils.py)";
-    labelloc="t";
-    fontsize=14;
-    style="rounded";
-    color="#c9d7f0";
-
-    out0 [label=<
-      <B>Assemble results dictionary</B><BR ALIGN="LEFT"/>
-      • timestamp()<BR ALIGN="LEFT"/>
-      • config snapshot vars(config)<BR ALIGN="LEFT"/>
-      • discovery outputs (features, rules, confidence, interactions)<BR ALIGN="LEFT"/>
-      • validation outputs (if executed)
-    >];
-
-    out1 [label=<
-      <B>Write final JSON</B><BR ALIGN="LEFT"/>
-      save_json(networkparser_results_&lt;timestamp&gt;.json)<BR ALIGN="LEFT"/>
-      ensure_dir(output_dir)
-    > fillcolor="#e9fff2"];
-  }
-
-  // wire final stage
-  np_run -> out0;
-  files0 -> out0;
-  v_boot -> out0 [style=dashed];
-  v_perm -> out0 [style=dashed];
-  out0 -> out1;
-
-  // ─────────────────────────────────────────────────────────────
-  // Dependency callouts (what it uses)
-  // ─────────────────────────────────────────────────────────────
-  subgraph cluster_deps {
-    label="What it uses (tools + libraries)";
-    labelloc="t";
-    fontsize=14;
-    style="rounded";
-    color="#e2e2e2";
-
-    dep_py [label=<
-      <B>Python</B><BR ALIGN="LEFT"/>
-      • pandas, numpy<BR ALIGN="LEFT"/>
-      • scikit-learn (DecisionTreeClassifier, LabelEncoder, MI)<BR ALIGN="LEFT"/>
-      • scipy.stats, statsmodels (FDR-BH etc.)<BR ALIGN="LEFT"/>
-      • joblib (parallel validation)<BR ALIGN="LEFT"/>
-      • optional: Biopython (SNP annotation / context if enabled)
-    > fillcolor="#f4f4f4"];
-  }
-
-  // connect deps lightly
-  dl_par -> dep_py [style=dotted];
-  pre1 -> dep_py [style=dotted];
-  v_assoc -> dep_py [style=dotted];
-  write_all -> dep_py [style=dotted];
+digraph NetworkParser_Workflow {
+    graph [
+        rankdir=TB,
+        bgcolor="white",
+        compound=true,
+        splines=ortho,
+        nodesep=0.55,
+        ranksep=0.75,
+        fontname="Helvetica",
+        label="NetworkParser AMR Feature-Selection and Query-Inference Workflow",
+        labelloc=t,
+        fontsize=22
+    ];
+
+    node [
+        shape=box,
+        style="rounded,filled",
+        fontname="Helvetica",
+        fontsize=11,
+        color="#4A5568",
+        fillcolor="#F7FAFC"
+    ];
+
+    edge [
+        fontname="Helvetica",
+        fontsize=10,
+        color="#4A5568",
+        arrowsize=0.8
+    ];
+
+    // ============================================================
+    // INPUTS
+    // ============================================================
+
+    subgraph cluster_inputs {
+        label="Inputs";
+        color="#A0AEC0";
+        style="rounded,dashed";
+        fontsize=14;
+
+        genomic_input [
+            label="Genomic input\nVCF directory / variant matrix / FASTA / FASTQ",
+            fillcolor="#EBF8FF"
+        ];
+
+        metadata_input [
+            label="Metadata input\nSupervised labels\nlineage / phenotype / AMR endpoint",
+            fillcolor="#EBF8FF"
+        ];
+
+        reference_input [
+            label="Reference genome / annotation\nOptional but recommended for query-ready manifests",
+            fillcolor="#EBF8FF"
+        ];
+
+        config_input [
+            label="NetworkParser configuration\nQC thresholds, filter method,\npanel settings, hierarchy labels",
+            fillcolor="#EBF8FF"
+        ];
+    }
+
+    // ============================================================
+    // PREPROCESSING
+    // ============================================================
+
+    subgraph cluster_preprocessing {
+        label="Preprocessing and Matrix Construction";
+        color="#A0AEC0";
+        style="rounded,dashed";
+        fontsize=14;
+
+        dataloader [
+            label="DataLoader",
+            fillcolor="#F0FFF4"
+        ];
+
+        vcf_qc [
+            label="VCF / matrix QC\nQUAL / depth / mapping filters\nbiallelic SNP handling where applicable",
+            fillcolor="#F0FFF4"
+        ];
+
+        binary_matrix [
+            label="Sample × genomic-feature matrix\nbinary / categorical marker states",
+            fillcolor="#F0FFF4"
+        ];
+
+        feature_manifest [
+            label="Feature manifest\nFeature ID, position, REF, ALT,\nbaseline allele, context sequence",
+            fillcolor="#F0FFF4"
+        ];
+
+        structural_cleanup [
+            label="Lightweight structural cleanup\nremove invariant features\nNaN / missing → baseline-like zero\nminor-count / presence filters",
+            fillcolor="#F0FFF4"
+        ];
+    }
+
+    genomic_input -> dataloader;
+    reference_input -> dataloader;
+    config_input -> dataloader;
+
+    dataloader -> vcf_qc;
+    vcf_qc -> binary_matrix;
+    vcf_qc -> feature_manifest;
+    binary_matrix -> structural_cleanup;
+
+    // ============================================================
+    // SUPERVISED ALIGNMENT
+    // ============================================================
+
+    subgraph cluster_alignment {
+        label="Supervised Sample Alignment";
+        color="#A0AEC0";
+        style="rounded,dashed";
+        fontsize=14;
+
+        label_normalization [
+            label="Label normalization\nclean missing / invalid labels\nstandardize label text",
+            fillcolor="#FFFAF0"
+        ];
+
+        sample_alignment [
+            label="Align genomic matrix with metadata\nkeep samples with valid labels\nand genomic features",
+            fillcolor="#FFFAF0"
+        ];
+    }
+
+    metadata_input -> label_normalization;
+    structural_cleanup -> sample_alignment;
+    label_normalization -> sample_alignment;
+
+    // ============================================================
+    // CENTRAL FEATURE FILTERING
+    // ============================================================
+
+    subgraph cluster_filtering {
+        label="Pre-Model Statistical Feature Filtering";
+        color="#A0AEC0";
+        style="rounded,dashed";
+        fontsize=14;
+
+        central_filter [
+            label="Configured central feature filter\nχ²-FDR / Fisher-FDR / RF-FDR /\npermutation-FDR",
+            fillcolor="#FFF5F5"
+        ];
+
+        association_tests [
+            label="Per-feature statistical testing\nfeature × label association",
+            fillcolor="#FFF5F5"
+        ];
+
+        multiple_testing [
+            label="Multiple-testing correction\nFDR-BH or configured correction",
+            fillcolor="#FFF5F5"
+        ];
+
+        filtered_matrix [
+            label="Statistically filtered matrix\nonly retained genomic features\ncontinue downstream",
+            fillcolor="#FFF5F5"
+        ];
+
+        filter_summary [
+            label="Filtering artifacts\nranked feature table\np-values / q-values / summary JSON",
+            fillcolor="#FFF5F5"
+        ];
+    }
+
+    sample_alignment -> central_filter;
+    config_input -> central_filter;
+
+    central_filter -> association_tests;
+    association_tests -> multiple_testing;
+    multiple_testing -> filtered_matrix;
+    multiple_testing -> filter_summary;
+
+    // ============================================================
+    // FEATURE PANEL SELECTION
+    // ============================================================
+
+    subgraph cluster_panel {
+        label="Ranked Feature-Panel Separability Check";
+        color="#A0AEC0";
+        style="rounded,dashed";
+        fontsize=14;
+
+        rank_features [
+            label="Rank retained features\nby statistical strength",
+            fillcolor="#FAF5FF"
+        ];
+
+        evaluate_panels [
+            label="Evaluate top-N feature panels\ncompact separability diagnostic",
+            fillcolor="#FAF5FF"
+        ];
+
+        selected_panel [
+            label="Selected model-ready feature panel\ncompact, interpretable matrix",
+            fillcolor="#FAF5FF"
+        ];
+
+        selected_manifest [
+            label="Selected-feature manifest\nquery-ready marker metadata",
+            fillcolor="#FAF5FF"
+        ];
+    }
+
+    filtered_matrix -> rank_features;
+    filter_summary -> rank_features;
+    rank_features -> evaluate_panels;
+    evaluate_panels -> selected_panel;
+    feature_manifest -> selected_manifest;
+    selected_panel -> selected_manifest;
+
+    // ============================================================
+    // ML PROTOCOL
+    // ============================================================
+
+    subgraph cluster_ml {
+        label="ML Protocol and Model Screening";
+        color="#A0AEC0";
+        style="rounded,dashed";
+        fontsize=14;
+
+        ml_protocol [
+            label="ML protocol matrix\naligned selected features + labels",
+            fillcolor="#FFF5F7"
+        ];
+
+        model_selector [
+            label="Model selector / diagnostic probes\nbalanced-accuracy screening\nstratified where feasible",
+            fillcolor="#FFF5F7"
+        ];
+
+        final_model [
+            label="Final trained supervised model\nsaved with selected features\nand label encoder where needed",
+            fillcolor="#FFF5F7"
+        ];
+
+        ml_summary [
+            label="ML artifacts\ntrained model\nprotocol summary\ntraining diagnostics",
+            fillcolor="#FFF5F7"
+        ];
+    }
+
+    selected_panel -> ml_protocol;
+    sample_alignment -> ml_protocol;
+    ml_protocol -> model_selector;
+    model_selector -> final_model;
+    final_model -> ml_summary;
+
+    // ============================================================
+    // HIERARCHY TRAINING
+    // ============================================================
+
+    subgraph cluster_hierarchy {
+        label="Two-Level / Recursive Hierarchy Training";
+        color="#A0AEC0";
+        style="rounded,dashed";
+        fontsize=14;
+
+        hierarchy_start [
+            label="Hierarchy label order\nlevel 1 → level 2 → terminal endpoint",
+            fillcolor="#FFFFF0"
+        ];
+
+        node_training [
+            label="Train hierarchy node\nsubset samples by parent branch\nthen repeat filtering + panel + model",
+            fillcolor="#FFFFF0"
+        ];
+
+        support_check [
+            label="Per-node support check\nsufficient labels?\nstratified CV feasible?",
+            fillcolor="#FFFFF0"
+        ];
+
+        deterministic_node [
+            label="Deterministic / skipped node\nsingle child or insufficient support",
+            fillcolor="#FFFFF0"
+        ];
+
+        fallback_model [
+            label="Fallback model where configured\nglobal or terminal fallback\nrecorded explicitly",
+            fillcolor="#FFFFF0"
+        ];
+
+        hierarchy_registry [
+            label="Hierarchy model registry\nnode models\nselected features\nselected manifests\nfallback status",
+            fillcolor="#FFFFF0"
+        ];
+    }
+
+    metadata_input -> hierarchy_start;
+    selected_panel -> node_training;
+    hierarchy_start -> node_training;
+    node_training -> support_check;
+
+    support_check -> central_filter [
+        label="trainable node",
+        ltail=cluster_hierarchy,
+        lhead=cluster_filtering
+    ];
+
+    support_check -> deterministic_node [
+        label="not trainable"
+    ];
+
+    deterministic_node -> fallback_model;
+    fallback_model -> hierarchy_registry;
+    final_model -> hierarchy_registry;
+    selected_manifest -> hierarchy_registry;
+
+    // ============================================================
+    // TRAINING OUTPUTS
+    // ============================================================
+
+    subgraph cluster_training_outputs {
+        label="Training / Discovery Outputs";
+        color="#A0AEC0";
+        style="rounded,dashed";
+        fontsize=14;
+
+        ranked_features [
+            label="Ranked feature list\nstatistical evidence + model relevance",
+            fillcolor="#F7FAFC"
+        ];
+
+        sample_feature_network [
+            label="Sample-feature network\nselected marker states per sample",
+            fillcolor="#F7FAFC"
+        ];
+
+        gnn_outputs [
+            label="GNN-ready matrices\nfeature adjacency\nsample-feature adjacency\nnode metadata",
+            fillcolor="#F7FAFC"
+        ];
+
+        model_registry [
+            label="Model registry / portable bundle\nmodels + selected-feature metadata\nquery-ready knowledge object",
+            fillcolor="#F7FAFC"
+        ];
+    }
+
+    filter_summary -> ranked_features;
+    ml_summary -> ranked_features;
+    selected_panel -> sample_feature_network;
+    sample_feature_network -> gnn_outputs;
+    hierarchy_registry -> model_registry;
+    ml_summary -> model_registry;
+    selected_manifest -> model_registry;
+
+    // ============================================================
+    // QUERY INPUTS
+    // ============================================================
+
+    subgraph cluster_query {
+        label="Query / Inference Mode";
+        color="#A0AEC0";
+        style="rounded,dashed";
+        fontsize=14;
+
+        query_input [
+            label="New query sample\nmatrix / VCF / FASTA / FASTQ",
+            fillcolor="#EBF4FF"
+        ];
+
+        fastq_bridge [
+            label="FASTQ bridge if needed\nFASTQ → alignment → BAM → VCF",
+            fillcolor="#EBF4FF"
+        ];
+
+        query_encoder [
+            label="Query feature encoder\nuses saved selected-feature manifest\nno discovery-time filtering",
+            fillcolor="#EBF4FF"
+        ];
+
+        query_alignment [
+            label="Align query to trained feature space\nmissing trained features → 0\nextra query features ignored",
+            fillcolor="#EBF4FF"
+        ];
+
+        route_prediction [
+            label="Registry-guided prediction\nLevel 1 / Level 2 / recursive hierarchy route",
+            fillcolor="#EBF4FF"
+        ];
+
+        marker_evidence [
+            label="Marker-evidence audit\nresolved active markers\nresolved baseline states\nunresolved zero-fill\ncoverage flags",
+            fillcolor="#EBF4FF"
+        ];
+
+        query_outputs [
+            label="Query outputs\nprediction CSV / compact TSV\nHTML report\nroute audit JSON\nalignment summary",
+            fillcolor="#EBF4FF"
+        ];
+    }
+
+    model_registry -> query_encoder;
+    query_input -> fastq_bridge [
+        label="if FASTQ"
+    ];
+    fastq_bridge -> query_encoder;
+    query_input -> query_encoder [
+        label="matrix / VCF / FASTA"
+    ];
+    query_encoder -> query_alignment;
+    query_alignment -> route_prediction;
+    model_registry -> route_prediction;
+    query_alignment -> marker_evidence;
+    route_prediction -> query_outputs;
+    marker_evidence -> query_outputs;
+
+    // ============================================================
+    // EVALUATION
+    // ============================================================
+
+    subgraph cluster_evaluation {
+        label="Evaluation and Leakage-Aware Validation";
+        color="#A0AEC0";
+        style="rounded,dashed";
+        fontsize=14;
+
+        holdout_eval [
+            label="Holdout evaluation\ncompare predictions to metadata truth",
+            fillcolor="#F0F5FF"
+        ];
+
+        metrics [
+            label="Performance metrics\nbalanced accuracy\nsensitivity / specificity\nF1 / PPV / NPV\nconfusion matrix",
+            fillcolor="#F0F5FF"
+        ];
+
+        repeated_cv [
+            label="Repeated cross-validation\nsplit first\nfilter inside training fold\ntrain inside training fold\nevaluate held-out fold",
+            fillcolor="#F0F5FF"
+        ];
+
+        stability [
+            label="CV feature stability\nfold-wise retained markers\naggregate robustness summary",
+            fillcolor="#F0F5FF"
+        ];
+    }
+
+    query_outputs -> holdout_eval;
+    metadata_input -> holdout_eval;
+    holdout_eval -> metrics;
+
+    sample_alignment -> repeated_cv;
+    repeated_cv -> central_filter [
+        label="inside each training fold",
+        ltail=cluster_evaluation,
+        lhead=cluster_filtering
+    ];
+    repeated_cv -> stability;
+
+    // ============================================================
+    // VISUALIZATION
+    // ============================================================
+
+    subgraph cluster_visualization {
+        label="Downstream Visualization";
+        color="#A0AEC0";
+        style="rounded,dashed";
+        fontsize=14;
+
+        training_viz [
+            label="Training visualizations\nmarker counts by level\nmarker overlap\nlevel graph\nselected-marker heatmaps",
+            fillcolor="#FFF5F7"
+        ];
+
+        query_viz [
+            label="Query visualizations\nprediction routes\nsupport summaries\nmarker quality\nroute graph",
+            fillcolor="#FFF5F7"
+        ];
+
+        separation_viz [
+            label="Feature-space separation views\nhierarchy-aware clustering\nnot a phylogenetic tree",
+            fillcolor="#FFF5F7"
+        ];
+    }
+
+    model_registry -> training_viz;
+    query_outputs -> query_viz;
+    selected_panel -> separation_viz;
+    metadata_input -> separation_viz;
+
+    // ============================================================
+    // ARCHITECTURAL NOTE
+    // ============================================================
+
+    rule_pre_filter [
+        label="Rule: statistical filtering happens BEFORE\nmodel screening and hierarchy training",
+        shape=note,
+        fillcolor="#FED7D7",
+        color="#C53030",
+        fontsize=12
+    ];
+
+    central_filter -> rule_pre_filter [
+        style=dashed,
+        arrowhead=none
+    ];
+
+    // ============================================================
+    // RANKING
+    // ============================================================
+
+    { rank=same; genomic_input; metadata_input; reference_input; config_input; }
+    { rank=same; ranked_features; sample_feature_network; gnn_outputs; model_registry; }
 }

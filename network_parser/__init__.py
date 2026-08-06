@@ -35,9 +35,15 @@ except ImportError:  # pragma: no cover
     DecisionTreeBranch = None  # type: ignore
 
 try:
-    from .two_level_protocol import TwoLevelProtocol
+    from .hierarchy_protocol import HierarchyProtocol
+
+    TwoLevelProtocol = HierarchyProtocol  # backward-compatible alias
 except ImportError:  # pragma: no cover
-    TwoLevelProtocol = None  # type: ignore
+    try:
+        from .two_level_protocol import TwoLevelProtocol, HierarchyProtocol  # type: ignore
+    except ImportError:
+        HierarchyProtocol = None  # type: ignore
+        TwoLevelProtocol = None  # type: ignore
 
 try:
     from .query_engine import NetworkParserQueryEngine
@@ -79,6 +85,7 @@ __all__ = [
     "normalize_run_artifact_dir",
     "run_networkparser_evaluation",
     "run_repeated_cv",
+    "HierarchyProtocol",
     "TwoLevelProtocol",
     "NetworkParserQueryEngine",
     "encode_raw_sequence_query",

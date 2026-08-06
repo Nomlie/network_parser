@@ -37,9 +37,39 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
+
+try:
+    from network_parser.vcf_call_semantics import (
+        AlleleCall,
+        CallSet,
+        CallState,
+        VcfQCConfig,
+        assert_unique_sample_ids,
+        build_position_index,
+        callability_gate_result,
+        encode_binary_for_feature,
+        parse_vcf_calls as shared_parse_vcf_calls,
+        resolve_feature_call,
+        sample_id_from_vcf_path,
+    )
+except ImportError:  # pragma: no cover
+    from vcf_call_semantics import (  # type: ignore
+        AlleleCall,
+        CallSet,
+        CallState,
+        VcfQCConfig,
+        assert_unique_sample_ids,
+        build_position_index,
+        callability_gate_result,
+        encode_binary_for_feature,
+        parse_vcf_calls as shared_parse_vcf_calls,
+        resolve_feature_call,
+        sample_id_from_vcf_path,
+    )
 
 FASTA_SUFFIXES = {".fa", ".fna", ".fasta", ".fas"}
 VALID_UNAMBIGUOUS_BASES = {"A", "C", "G", "T"}
@@ -49,6 +79,7 @@ _DNA_COMP = str.maketrans("ACGTNacgtn", "TGCANtgcan")
 # -----------------------------------------------------------------------------
 # Small IO helpers
 # -----------------------------------------------------------------------------
+
 
 def ensure_dir(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
@@ -110,6 +141,7 @@ def discover_fasta_inputs(path: str) -> List[Path]:
 # Manifest handling
 # -----------------------------------------------------------------------------
 
+
 def load_feature_manifest(path: Path) -> pd.DataFrame:
     manifest = pd.read_csv(path, sep="\t", dtype=str).fillna("")
     if "Feature_ID" not in manifest.columns:
@@ -118,12 +150,16 @@ def load_feature_manifest(path: Path) -> pd.DataFrame:
         elif "Position" in manifest.columns:
             manifest["Feature_ID"] = manifest["Position"].astype(str)
         else:
-            raise ValueError("Feature manifest must contain Feature_ID, feature, or Position.")
+            raise ValueError(
+                "Feature manifest must contain Feature_ID, feature, or Position."
+            )
     manifest["Feature_ID"] = manifest["Feature_ID"].astype(str)
     return manifest.drop_duplicates(subset=["Feature_ID"], keep="first")
 
 
-def manifest_rows_for_features(manifest: pd.DataFrame, features: Sequence[str]) -> List[Dict[str, str]]:
+def manifest_rows_for_features(
+    manifest: pd.DataFrame, features: Sequence[str]
+) -> List[Dict[str, str]]:
     lookup = manifest.set_index("Feature_ID", drop=False)
     rows: List[Dict[str, str]] = []
     for feature in [str(f) for f in features]:
@@ -169,9 +205,18 @@ def normalise_manifest_row(row: Dict[str, str]) -> Dict[str, str]:
     else:
         center_offset = len(context) // 2 if context else -1
 
-    ref = str(row.get("Ref_allele", row.get("REF", ref_from_id))).strip().upper() or ref_from_id
-    alt = str(row.get("Alt_allele", row.get("ALT", alt_from_id))).strip().upper() or alt_from_id
-    baseline = str(row.get("Baseline_allele", row.get("baseline_allele", ref))).strip().upper() or ref
+    ref = (
+        str(row.get("Ref_allele", row.get("REF", ref_from_id))).strip().upper()
+        or ref_from_id
+    )
+    alt = (
+        str(row.get("Alt_allele", row.get("ALT", alt_from_id))).strip().upper()
+        or alt_from_id
+    )
+    baseline = (
+        str(row.get("Baseline_allele", row.get("baseline_allele", ref))).strip().upper()
+        or ref
+    )
 
     return {
         **row,
@@ -190,6 +235,7 @@ def normalise_manifest_row(row: Dict[str, str]) -> Dict[str, str]:
 # Exact context mapping
 # -----------------------------------------------------------------------------
 
+
 def _context_hit_record(
     *,
     record_id: str,
@@ -206,7 +252,9 @@ def _context_hit_record(
     # complemented on minus-strand hits to return it in the reference-feature
     # orientation.
     subject_position = idx + center_offset + 1
-    observed = complement_base(observed_raw) if strand == "minus" else observed_raw.upper()
+    observed = (
+        complement_base(observed_raw) if strand == "minus" else observed_raw.upper()
+    )
 
     return {
         "status": "mapped_unique_context",
@@ -310,8 +358,11 @@ def find_by_flanking_context(
 # BLAST context mapping
 # -----------------------------------------------------------------------------
 
+
 def blast_available() -> bool:
-    return shutil.which("makeblastdb") is not None and shutil.which("blastn") is not None
+    return (
+        shutil.which("makeblastdb") is not None and shutil.which("blastn") is not None
+    )
 
 
 def write_context_query_fasta(rows: List[Dict[str, str]], path: Path) -> None:
@@ -376,11 +427,19 @@ def _parse_blast_hits_for_feature(
         if sstart <= send:
             subject_position = sstart + (qcenter - qstart)
             strand = "plus"
-            observed = subject_seq[subject_position - 1].upper() if 1 <= subject_position <= len(subject_seq) else ""
+            observed = (
+                subject_seq[subject_position - 1].upper()
+                if 1 <= subject_position <= len(subject_seq)
+                else ""
+            )
         else:
             subject_position = sstart - (qcenter - qstart)
             strand = "minus"
-            observed_raw = subject_seq[subject_position - 1].upper() if 1 <= subject_position <= len(subject_seq) else ""
+            observed_raw = (
+                subject_seq[subject_position - 1].upper()
+                if 1 <= subject_position <= len(subject_seq)
+                else ""
+            )
             observed = complement_base(observed_raw)
 
         if not observed:
@@ -460,7 +519,15 @@ def run_blast_context_mapping(
     write_context_query_fasta(rows, query_fasta)
 
     subprocess.run(
-        ["makeblastdb", "-in", str(sample_fasta), "-dbtype", "nucl", "-out", str(db_prefix)],
+        [
+            "makeblastdb",
+            "-in",
+            str(sample_fasta),
+            "-dbtype",
+            "nucl",
+            "-out",
+            str(db_prefix),
+        ],
         check=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -517,17 +584,15 @@ def run_blast_context_mapping(
 # Allele encoding
 # -----------------------------------------------------------------------------
 
-def encode_mapping(row: Dict[str, str], mapping: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+
+def encode_mapping(
+    row: Dict[str, str], mapping: Optional[Dict[str, Any]]
+) -> Dict[str, Any]:
     """
     Convert a mapped query nucleotide to the saved NetworkParser binary encoding.
 
-    Conservative inference rules:
-      - unresolved or missing context -> 0
-      - multi-hit/repeated context -> 0
-      - ambiguous base -> 0
-      - allele not observed during training -> 0
-      - baseline allele -> 0
-      - known non-baseline allele -> 1
+    Non-callable / unresolved states are encoded as NaN (not ordinary zero).
+    Only explicitly resolved baseline/alt alleles become 0/1.
     """
     feature_id = row["Feature_ID"]
     baseline = row.get("Baseline_allele", row.get("Ref_allele", "")).upper()
@@ -545,17 +610,52 @@ def encode_mapping(row: Dict[str, str], mapping: Optional[Dict[str, Any]]) -> Di
         "gene_annotation": row.get("Gene_annotation", ""),
         "nucleotide_change": row.get("Nucleotide_change", ""),
         "amino_acid_change": row.get("Amino_acid_change", ""),
+        "call_state": CallState.UNRESOLVED_OR_AMBIGUOUS.value,
+        "assumed_reference": False,
     }
 
     if mapping is None:
-        reason = "missing_context" if not row.get("Context_sequence") else "unresolved_context"
+        reason = (
+            "missing_context"
+            if not row.get("Context_sequence")
+            else "unresolved_context"
+        )
         return {
             **base_record,
-            "encoded_value": 0,
+            "encoded_value": float("nan"),
             "observed_allele": "",
-            "mapping_status": f"{reason}_filled_as_zero",
+            "mapping_status": f"{reason}_not_encoded_as_zero",
             "mapping_quality": reason,
             "allele_call": "not_called",
+            "call_state": CallState.UNRESOLVED_OR_AMBIGUOUS.value,
+        }
+
+    # VCF path may pass a pre-classified AlleleCall-backed mapping.
+    if mapping.get("allele_call_object") is not None or mapping.get("call_state"):
+        call_state = str(
+            mapping.get("call_state", CallState.UNRESOLVED_OR_AMBIGUOUS.value)
+        )
+        encoded = mapping.get("encoded_value", float("nan"))
+        try:
+            encoded_f = float(encoded)
+        except (TypeError, ValueError):
+            encoded_f = float("nan")
+        return {
+            **base_record,
+            "observed_allele": str(mapping.get("observed_allele", "")).upper(),
+            "subject_id": mapping.get("subject_id", ""),
+            "subject_position": mapping.get("subject_position", ""),
+            "strand": mapping.get("strand", "reference"),
+            "mapping_method": mapping.get("method", "vcf_coordinate"),
+            "mapping_quality": mapping.get("mapping_quality", call_state),
+            "n_context_hits": mapping.get("n_context_hits", 1),
+            "encoded_value": encoded_f,
+            "mapping_status": mapping.get("status", call_state),
+            "allele_call": mapping.get("allele_call", call_state),
+            "call_state": call_state,
+            "assumed_reference": bool(mapping.get("assumed_reference", False)),
+            "vcf_coordinate_match": mapping.get("vcf_coordinate_match", ""),
+            "qc_reasons": mapping.get("qc_reasons", ""),
         }
 
     observed = str(mapping.get("observed_allele", "")).upper()
@@ -585,41 +685,46 @@ def encode_mapping(row: Dict[str, str], mapping: Optional[Dict[str, Any]]) -> Di
     if raw_status.startswith("multi_hit"):
         return {
             **record,
-            "encoded_value": 0,
-            "mapping_status": f"{raw_status}_filled_as_zero",
+            "encoded_value": float("nan"),
+            "mapping_status": f"{raw_status}_not_encoded_as_zero",
             "allele_call": "not_called_multi_hit_context",
+            "call_state": CallState.UNRESOLVED_OR_AMBIGUOUS.value,
         }
 
     if not is_unambiguous_base(observed):
         return {
             **record,
-            "encoded_value": 0,
-            "mapping_status": "mapped_ambiguous_base_filled_as_zero",
+            "encoded_value": float("nan"),
+            "mapping_status": "mapped_ambiguous_base_not_encoded_as_zero",
             "allele_call": "ambiguous_base",
+            "call_state": CallState.UNRESOLVED_OR_AMBIGUOUS.value,
         }
 
     if trained_alleles and observed not in trained_alleles:
         return {
             **record,
-            "encoded_value": 0,
-            "mapping_status": "mapped_non_training_allele_filled_as_zero",
+            "encoded_value": float("nan"),
+            "mapping_status": "mapped_non_training_allele_not_encoded_as_zero",
             "allele_call": "non_training_allele",
+            "call_state": CallState.UNRESOLVED_OR_AMBIGUOUS.value,
         }
 
     if observed == baseline:
         return {
             **record,
-            "encoded_value": 0,
+            "encoded_value": 0.0,
             "mapping_status": raw_status,
             "allele_call": "baseline_match",
+            "call_state": CallState.CALLED_REFERENCE.value,
         }
 
     allele_call = "alt_match" if observed == alt else "known_nonbaseline_match"
     return {
         **record,
-        "encoded_value": 1,
+        "encoded_value": 1.0,
         "mapping_status": raw_status,
         "allele_call": allele_call,
+        "call_state": CallState.CALLED_ALTERNATE.value,
     }
 
 
@@ -627,12 +732,17 @@ def encode_mapping(row: Dict[str, str], mapping: Optional[Dict[str, Any]]) -> Di
 # Summary helpers
 # -----------------------------------------------------------------------------
 
+
 def _status_counts(calls: pd.DataFrame, column: str) -> Dict[str, int]:
     if calls.empty or column not in calls.columns:
         return {}
     return {
         str(k): int(v)
-        for k, v in calls[column].astype(str).value_counts(dropna=False).to_dict().items()
+        for k, v in calls[column]
+        .astype(str)
+        .value_counts(dropna=False)
+        .to_dict()
+        .items()
     }
 
 
@@ -642,31 +752,65 @@ def _per_sample_summary(calls: pd.DataFrame) -> List[Dict[str, Any]]:
 
     rows: List[Dict[str, Any]] = []
     for sample_id, grp in calls.groupby("sample_id", dropna=False):
-        encoded = pd.to_numeric(grp.get("encoded_value", pd.Series(dtype=int)), errors="coerce").fillna(0)
+        encoded = pd.to_numeric(
+            grp.get("encoded_value", pd.Series(dtype=float)), errors="coerce"
+        )
         mapping_status = grp.get("mapping_status", pd.Series(dtype=str)).astype(str)
         allele_call = grp.get("allele_call", pd.Series(dtype=str)).astype(str)
-        resolved_mask = allele_call.isin(["baseline_match", "alt_match", "known_nonbaseline_match"])
-        baseline_mask = allele_call.eq("baseline_match")
+        call_state = grp.get("call_state", pd.Series(dtype=str)).astype(str)
+        resolved_mask = allele_call.isin(
+            [
+                "baseline_match",
+                "alt_match",
+                "known_nonbaseline_match",
+                "assumed_reference",
+            ]
+        )
+        baseline_mask = allele_call.isin(["baseline_match", "assumed_reference"])
         nonbaseline_mask = allele_call.isin(["alt_match", "known_nonbaseline_match"])
+        callable_mask = call_state.isin(
+            [CallState.CALLED_REFERENCE.value, CallState.CALLED_ALTERNATE.value]
+        )
         rows.append(
             {
                 "sample_id": str(sample_id),
                 "n_feature_calls": int(len(grp)),
-                "n_encoded_active_features": int((encoded != 0).sum()),
+                "n_encoded_active_features": int((encoded == 1.0).sum()),
                 "n_resolved_features": int(resolved_mask.sum()),
                 "n_resolved_baseline_features": int(baseline_mask.sum()),
                 "n_resolved_nonbaseline_features": int(nonbaseline_mask.sum()),
-                "n_unique_mapped_calls": int(mapping_status.eq("mapped_unique_context").sum()),
-                "n_unresolved_or_missing_context_calls": int(mapping_status.str.contains("unresolved|missing_context", regex=True).sum()),
-                "n_multi_hit_calls": int(mapping_status.str.contains("multi_hit", regex=True).sum()),
-                "n_ambiguous_base_calls": int(mapping_status.str.contains("ambiguous_base", regex=True).sum()),
-                "n_non_training_allele_calls": int(mapping_status.str.contains("non_training_allele", regex=True).sum()),
+                "n_callable_features": int(callable_mask.sum()),
+                "n_noncallable_nan": int(encoded.isna().sum()),
+                "n_unique_mapped_calls": int(
+                    mapping_status.isin(
+                        [
+                            "mapped_unique_context",
+                            CallState.CALLED_REFERENCE.value,
+                            CallState.CALLED_ALTERNATE.value,
+                        ]
+                    ).sum()
+                ),
+                "n_unresolved_or_missing_context_calls": int(
+                    mapping_status.str.contains(
+                        "unresolved|missing|locus_not_present|filtered", regex=True
+                    ).sum()
+                ),
+                "n_multi_hit_calls": int(
+                    mapping_status.str.contains("multi_hit", regex=True).sum()
+                ),
+                "n_ambiguous_base_calls": int(
+                    mapping_status.str.contains("ambiguous_base", regex=True).sum()
+                ),
+                "n_non_training_allele_calls": int(
+                    mapping_status.str.contains("non_training_allele", regex=True).sum()
+                ),
+                "n_assumed_reference": int(allele_call.eq("assumed_reference").sum()),
                 "status_counts": _status_counts(grp, "mapping_status"),
                 "allele_call_counts": _status_counts(grp, "allele_call"),
+                "call_state_counts": _status_counts(grp, "call_state"),
             }
         )
     return rows
-
 
 
 # -----------------------------------------------------------------------------
@@ -677,14 +821,22 @@ VCF_SUFFIXES = (".vcf", ".vcf.gz")
 
 
 def _open_text_maybe_gzip(path: Path):
-    return gzip.open(path, "rt") if str(path).lower().endswith(".gz") else open(path, "r", encoding="utf-8", errors="replace")
+    return (
+        gzip.open(path, "rt")
+        if str(path).lower().endswith(".gz")
+        else open(path, "r", encoding="utf-8", errors="replace")
+    )
 
 
 def discover_vcf_inputs(path: str) -> List[Path]:
     """Return one or more VCF/VCF.GZ files for query-time encoding."""
     p = Path(path)
     if p.is_dir():
-        vcfs = [x for x in p.iterdir() if x.is_file() and x.name.lower().endswith(VCF_SUFFIXES)]
+        vcfs = [
+            x
+            for x in p.iterdir()
+            if x.is_file() and x.name.lower().endswith(VCF_SUFFIXES)
+        ]
         return sorted(vcfs)
     if p.is_file() and p.name.lower().endswith(VCF_SUFFIXES):
         return [p]
@@ -692,113 +844,21 @@ def discover_vcf_inputs(path: str) -> List[Path]:
 
 
 def _sample_id_from_vcf_path(path: Path) -> str:
-    name = path.name
-    for suffix in (".vcf.gz", ".vcf", ".bcf.gz", ".bcf"):
-        if name.lower().endswith(suffix):
-            return name[: -len(suffix)]
-    return path.stem
+    return sample_id_from_vcf_path(path)
 
 
-def _called_allele_from_vcf_record(ref: str, alts: List[str], fmt: str, sample_field: str) -> str:
-    """Best-effort single-sample allele call from a VCF row."""
-    ref = str(ref).upper()
-    alts = [str(a).upper() for a in alts if str(a).strip()]
-
-    if not fmt or not sample_field:
-        return alts[0] if alts else ref
-
-    fmt_keys = fmt.split(":")
-    sample_values = sample_field.split(":")
-    fmt_map = {k: v for k, v in zip(fmt_keys, sample_values)}
-    gt = fmt_map.get("GT", "")
-
-    if not gt or gt in {".", "./.", ".|."}:
-        return alts[0] if alts else ref
-
-    sep = "/" if "/" in gt else ("|" if "|" in gt else None)
-    tokens = gt.split(sep) if sep else [gt]
-
-    called_indices: List[int] = []
-    for token in tokens:
-        token = token.strip()
-        if token in {"", "."}:
-            continue
-        try:
-            called_indices.append(int(token))
-        except Exception:
-            continue
-
-    non_ref = [idx for idx in called_indices if idx > 0]
-    if not non_ref:
-        return ref
-
-    # For haploid/bacterial calls this should usually be a single ALT index.
-    # If heterozygous/mixed calls occur, use the first non-reference allele so
-    # query encoding remains deterministic and conservative.
-    idx = non_ref[0]
-    if 1 <= idx <= len(alts):
-        return alts[idx - 1]
-    return alts[0] if alts else ref
+def parse_vcf_calls(
+    path: Path,
+    *,
+    qc: Optional[VcfQCConfig] = None,
+) -> CallSet:
+    """Parse one VCF/VCF.GZ/gVCF using shared training/query call semantics."""
+    return shared_parse_vcf_calls(path, qc=qc or VcfQCConfig())
 
 
-def parse_vcf_calls(path: Path) -> Dict[Tuple[str, int], Dict[str, Any]]:
-    """Parse one VCF/VCF.GZ into coordinate-indexed allele calls."""
-    calls: Dict[Tuple[str, int], Dict[str, Any]] = {}
-    sample_name = _sample_id_from_vcf_path(path)
-
-    with _open_text_maybe_gzip(path) as handle:
-        for raw in handle:
-            if not raw:
-                continue
-            line = raw.rstrip("\n")
-            if line.startswith("##"):
-                continue
-            if line.startswith("#CHROM"):
-                parts = line.split("\t")
-                if len(parts) >= 10 and parts[9].strip():
-                    sample_name = parts[9].strip()
-                continue
-            if line.startswith("#"):
-                continue
-
-            parts = line.split("\t")
-            if len(parts) < 8:
-                continue
-
-            chrom = parts[0]
-            try:
-                pos = int(parts[1])
-            except Exception:
-                continue
-
-            ref = parts[3].upper()
-            alts = [a.strip().upper() for a in parts[4].split(",") if a.strip() and a.strip() != "."]
-            fmt = parts[8] if len(parts) >= 9 else ""
-            sample_field = parts[9] if len(parts) >= 10 else ""
-            called = _called_allele_from_vcf_record(ref, alts, fmt, sample_field)
-
-            calls[(chrom, pos)] = {
-                "chrom": chrom,
-                "pos": int(pos),
-                "ref": ref,
-                "alts": alts,
-                "called_allele": called,
-                "sample_name": sample_name,
-                "source_vcf": str(path),
-            }
-
-    return calls
-
-
-def _build_vcf_position_index(calls: Dict[Tuple[str, int], Dict[str, Any]]) -> Dict[int, List[Dict[str, Any]]]:
+def _build_vcf_position_index(calls: CallSet) -> Dict[int, List[AlleleCall]]:
     """Build a per-position lookup for fast contig-name fallback in VCF query mode."""
-    index: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
-    for (_, pos), payload in calls.items():
-        try:
-            index[int(pos)].append(payload)
-        except Exception:
-            continue
-    return index
+    return build_position_index(calls)
 
 
 def _manifest_coordinate_keys(row: Dict[str, str]) -> Tuple[str, int]:
@@ -816,105 +876,139 @@ def _manifest_coordinate_keys(row: Dict[str, str]) -> Tuple[str, int]:
 
 def _vcf_mapping_for_row(
     row: Dict[str, str],
-    calls: Dict[Tuple[str, int], Dict[str, Any]],
-    position_index: Optional[Dict[int, List[Dict[str, Any]]]] = None,
+    calls: CallSet,
+    position_index: Optional[Dict[int, List[AlleleCall]]] = None,
+    *,
+    qc: Optional[VcfQCConfig] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Create a mapping record for one trained feature from a VCF call set.
+    """Create a mapping record for one trained feature from a shared CallSet.
 
-    If the VCF has no record at the trained coordinate, we treat the observed
-    allele as the manifest reference allele. This is the standard inference for
-    single-sample variant-only VCFs generated against the same reference: absence
-    of a variant record means the sample carries the reference state at that
-    coordinate, subject to upstream caller coverage/QC.
+    Absence from a variant-only VCF is LOCUS_NOT_PRESENT by default (not REF).
+    Legacy absence→REF requires ``qc.assume_absent_variant_is_reference=True``.
     """
+    qc = qc or VcfQCConfig()
     sequence, pos = _manifest_coordinate_keys(row)
     if pos < 1:
         return None
 
     feature_id = str(row.get("Feature_ID", ""))
     ref = str(row.get("Ref_allele", "")).upper()
+    alt = str(row.get("Alt_allele", "")).upper()
+    baseline = str(row.get("Baseline_allele", ref)).upper() or ref
 
-    # Prefer exact contig/chromosome match, then use position-only fallback for
-    # single-reference bacterial VCFs whose CHROM naming differs from the manifest.
-    call = calls.get((sequence, pos))
-    coordinate_match = "exact_sequence_position"
-    if call is None:
-        if position_index is None:
-            position_hits = [payload for (chrom, p), payload in calls.items() if p == pos]
-        else:
-            position_hits = position_index.get(pos, [])
-        if len(position_hits) == 1:
-            call = position_hits[0]
-            coordinate_match = "position_only_fallback"
-        elif len(position_hits) > 1:
-            first = position_hits[0]
-            return {
-                "status": "multi_hit_context",
-                "method": "vcf_coordinate",
-                "subject_id": first.get("chrom", ""),
-                "subject_position": int(pos),
-                "strand": "reference",
-                "observed_allele": str(first.get("called_allele", "")).upper(),
-                "mapping_quality": "multi_vcf_records_same_position",
-                "n_context_hits": int(len(position_hits)),
-                "vcf_coordinate_match": "ambiguous_position_only",
-                "vcf_feature_id": feature_id,
-            }
+    alias_map = None
+    allow_pos_only = False
+    if qc is not None:
+        # Contig aliases may be attached as dynamic attributes on qc or via config later.
+        alias_map = getattr(qc, "contig_alias_map", None)
+        allow_pos_only = bool(getattr(qc, "allow_position_only_match", False))
+    resolved = resolve_feature_call(
+        chrom=sequence,
+        pos=pos,
+        feature_ref=ref,
+        feature_alt=alt,
+        calls=calls,
+        qc=qc,
+        position_index=position_index,
+        contig_alias_map=alias_map if isinstance(alias_map, dict) else None,
+        allow_position_only_match=allow_pos_only,
+    )
+    encoded, allele_label = encode_binary_for_feature(
+        resolved,
+        feature_ref=ref,
+        feature_alt=alt,
+        baseline_allele=baseline,
+    )
 
-    if call is None:
-        return {
-            "status": "mapped_unique_context",
-            "method": "vcf_coordinate_absent_assumed_reference",
-            "subject_id": sequence,
-            "subject_position": int(pos),
-            "strand": "reference",
-            "observed_allele": ref,
-            "mapping_quality": "absent_from_vcf_assumed_reference",
-            "n_context_hits": 1,
-            "vcf_coordinate_match": "absent_from_variant_vcf",
-            "vcf_feature_id": feature_id,
-        }
+    match_mode = "exact_sequence_position"
+    for reason in resolved.qc_reasons:
+        if reason.startswith("match="):
+            match_mode = reason.split("=", 1)[1]
+        if reason == "gvcf_ref_block":
+            match_mode = "gvcf_ref_block"
 
     return {
-        "status": "mapped_unique_context",
-        "method": "vcf_coordinate",
-        "subject_id": call.get("chrom", sequence),
+        "status": resolved.state.value,
+        "method": "vcf_coordinate_shared_semantics",
+        "subject_id": resolved.chrom or sequence,
         "subject_position": int(pos),
         "strand": "reference",
-        "observed_allele": str(call.get("called_allele", "")).upper(),
-        "mapping_quality": "vcf_record_found",
+        "observed_allele": (resolved.called_allele or "")
+        if resolved.called_allele
+        else "",
+        "mapping_quality": resolved.state.value,
         "n_context_hits": 1,
-        "vcf_ref_allele": call.get("ref", ""),
-        "vcf_alt_alleles": ",".join(call.get("alts", []) or []),
-        "vcf_coordinate_match": coordinate_match,
+        "vcf_ref_allele": resolved.ref,
+        "vcf_alt_alleles": ",".join(resolved.alts or []),
+        "vcf_coordinate_match": match_mode,
         "vcf_feature_id": feature_id,
+        "call_state": resolved.state.value,
+        "encoded_value": encoded,
+        "allele_call": allele_label,
+        "assumed_reference": bool(resolved.assumed_reference),
+        "qc_reasons": ";".join(resolved.qc_reasons),
+        "allele_call_object": resolved,
     }
 
 
 def _marker_recovery_status(unique_fraction: float) -> Tuple[str, str]:
     if unique_fraction >= 0.80:
-        return "adequate_marker_recovery", "Most selected marker coordinates/contexts were resolved in the query input."
+        return (
+            "adequate_marker_recovery",
+            "Most selected marker coordinates/contexts were resolved in the query input.",
+        )
     if unique_fraction >= 0.50:
-        return "partial_marker_recovery", "Only part of the selected marker space was resolved; interpret predictions with caution."
-    return "low_marker_recovery", "Most selected markers were unresolved or missing; prediction support is likely weak."
+        return (
+            "partial_marker_recovery",
+            "Only part of the selected marker space was resolved; interpret predictions with caution.",
+        )
+    return (
+        "low_marker_recovery",
+        "Most selected markers were unresolved or missing; prediction support is likely weak.",
+    )
 
 
-def _active_evidence_status(active_fraction: float, active_count: int) -> Tuple[str, str]:
+def _active_evidence_status(
+    active_fraction: float, active_count: int
+) -> Tuple[str, str]:
     if active_count >= 10 or active_fraction >= 0.01:
-        return "active_marker_evidence_present", "The query carries multiple non-baseline selected marker states."
+        return (
+            "active_marker_evidence_present",
+            "The query carries multiple non-baseline selected marker states.",
+        )
     if active_count > 0:
-        return "very_low_active_marker_evidence", "Only a few selected markers are non-baseline in the query."
-    return "no_active_marker_evidence", "Selected markers were recovered mainly as baseline states."
+        return (
+            "very_low_active_marker_evidence",
+            "Only a few selected markers are non-baseline in the query.",
+        )
+    return (
+        "no_active_marker_evidence",
+        "Selected markers were recovered mainly as baseline states.",
+    )
 
 
-def _resolved_marker_evidence_status(resolved_fraction: float, resolved_count: int) -> Tuple[str, str]:
+def _resolved_marker_evidence_status(
+    resolved_fraction: float, resolved_count: int
+) -> Tuple[str, str]:
     if resolved_fraction >= 0.80:
-        return "resolved_marker_evidence_present", "Most selected trained markers were resolved, including baseline states encoded as 0."
+        return (
+            "resolved_marker_evidence_present",
+            "Most selected trained markers were resolved, including baseline states encoded as 0.",
+        )
     if resolved_fraction >= 0.50:
-        return "partial_resolved_marker_evidence", "A useful fraction of selected trained markers was resolved, but some calls remain caution states."
+        return (
+            "partial_resolved_marker_evidence",
+            "A useful fraction of selected trained markers was resolved, but some calls remain caution states.",
+        )
     if resolved_count > 0:
-        return "low_resolved_marker_evidence", "Only a small fraction of selected trained markers was resolved in the query input."
-    return "no_resolved_marker_evidence", "No selected trained markers were confirmed as resolved query states."
+        return (
+            "low_resolved_marker_evidence",
+            "Only a small fraction of selected trained markers was resolved in the query input.",
+        )
+    return (
+        "no_resolved_marker_evidence",
+        "No selected trained markers were confirmed as resolved query states.",
+    )
 
 
 def _write_selected_feature_outputs(
@@ -945,7 +1039,9 @@ def _write_selected_feature_outputs(
         unique_fraction = float(item.get("n_unique_mapped_calls", 0) / n)
         active_fraction = float(item.get("n_encoded_active_features", 0) / n)
         resolved_fraction = float(item.get("n_resolved_features", 0) / n)
-        resolved_baseline_fraction = float(item.get("n_resolved_baseline_features", 0) / n)
+        resolved_baseline_fraction = float(
+            item.get("n_resolved_baseline_features", 0) / n
+        )
         recovery_status, recovery_reason = _marker_recovery_status(unique_fraction)
         active_status, active_reason = _active_evidence_status(
             active_fraction, int(item.get("n_encoded_active_features", 0))
@@ -967,24 +1063,59 @@ def _write_selected_feature_outputs(
     pd.DataFrame(per_sample).to_csv(per_sample_path, sep="\t", index=False)
 
     n_calls = int(len(calls))
-    mapping_status = calls.get("mapping_status", pd.Series(dtype=str)).astype(str) if n_calls else pd.Series(dtype=str)
-    allele_call = calls.get("allele_call", pd.Series(dtype=str)).astype(str) if n_calls else pd.Series(dtype=str)
-    encoded_values = pd.to_numeric(calls.get("encoded_value", pd.Series(dtype=int)), errors="coerce").fillna(0) if n_calls else pd.Series(dtype=int)
+    mapping_status = (
+        calls.get("mapping_status", pd.Series(dtype=str)).astype(str)
+        if n_calls
+        else pd.Series(dtype=str)
+    )
+    allele_call = (
+        calls.get("allele_call", pd.Series(dtype=str)).astype(str)
+        if n_calls
+        else pd.Series(dtype=str)
+    )
+    # Count non-baseline only among callable encodings (do not treat NaN as 0).
+    encoded_values = (
+        pd.to_numeric(
+            calls.get("encoded_value", pd.Series(dtype=float)), errors="coerce"
+        )
+        if n_calls
+        else pd.Series(dtype=float)
+    )
 
-    unique_mapped = int(mapping_status.eq("mapped_unique_context").sum()) if n_calls else 0
-    active_features = int((encoded_values != 0).sum()) if n_calls else 0
-    resolved_features = int(allele_call.isin(["baseline_match", "alt_match", "known_nonbaseline_match"]).sum()) if n_calls else 0
-    resolved_baseline_features = int(allele_call.eq("baseline_match").sum()) if n_calls else 0
-    resolved_nonbaseline_features = int(allele_call.isin(["alt_match", "known_nonbaseline_match"]).sum()) if n_calls else 0
+    unique_mapped = (
+        int(mapping_status.eq("mapped_unique_context").sum()) if n_calls else 0
+    )
+    active_features = int((encoded_values == 1.0).sum()) if n_calls else 0
+    resolved_features = (
+        int(
+            allele_call.isin(
+                ["baseline_match", "alt_match", "known_nonbaseline_match"]
+            ).sum()
+        )
+        if n_calls
+        else 0
+    )
+    resolved_baseline_features = (
+        int(allele_call.eq("baseline_match").sum()) if n_calls else 0
+    )
+    resolved_nonbaseline_features = (
+        int(allele_call.isin(["alt_match", "known_nonbaseline_match"]).sum())
+        if n_calls
+        else 0
+    )
     unique_fraction = float(unique_mapped / max(1, n_calls))
     active_fraction = float(active_features / max(1, n_calls))
     resolved_fraction = float(resolved_features / max(1, n_calls))
     resolved_baseline_fraction = float(resolved_baseline_features / max(1, n_calls))
     recovery_status, recovery_reason = _marker_recovery_status(unique_fraction)
-    active_status, active_reason = _active_evidence_status(active_fraction, active_features)
-    resolved_status, resolved_reason = _resolved_marker_evidence_status(resolved_fraction, resolved_features)
+    active_status, active_reason = _active_evidence_status(
+        active_fraction, active_features
+    )
+    resolved_status, resolved_reason = _resolved_marker_evidence_status(
+        resolved_fraction, resolved_features
+    )
 
-    summary = {
+    summary: Dict[str, Any] = {
         "mode": mode,
         "mapping_mode_requested": mapping_mode_requested,
         "blast_available": bool(blast_is_available),
@@ -1002,7 +1133,9 @@ def _write_selected_feature_outputs(
         "n_resolved_baseline_features": resolved_baseline_features,
         "resolved_baseline_feature_fraction": resolved_baseline_fraction,
         "n_resolved_nonbaseline_features": resolved_nonbaseline_features,
-        "resolved_nonbaseline_feature_fraction": float(resolved_nonbaseline_features / max(1, n_calls)),
+        "resolved_nonbaseline_feature_fraction": float(
+            resolved_nonbaseline_features / max(1, n_calls)
+        ),
         "marker_recovery_status": recovery_status,
         "marker_recovery_reason": recovery_reason,
         "active_marker_evidence_status": active_status,
@@ -1051,7 +1184,9 @@ def _enrich_vcf_per_sample_summary(rows: List[Dict[str, Any]]) -> None:
         unique_fraction = float(item.get("n_unique_mapped_calls", 0) / n)
         active_fraction = float(item.get("n_encoded_active_features", 0) / n)
         resolved_fraction = float(item.get("n_resolved_features", 0) / n)
-        resolved_baseline_fraction = float(item.get("n_resolved_baseline_features", 0) / n)
+        resolved_baseline_fraction = float(
+            item.get("n_resolved_baseline_features", 0) / n
+        )
         recovery_status, recovery_reason = _marker_recovery_status(unique_fraction)
         active_status, active_reason = _active_evidence_status(
             active_fraction, int(item.get("n_encoded_active_features", 0))
@@ -1095,16 +1230,24 @@ def _write_vcf_selected_feature_outputs_from_counts(
     unique_mapped = int(global_counts.get("n_unique_mapped_calls", 0))
     active_features = int(global_counts.get("n_encoded_active_feature_calls", 0))
     resolved_features = int(global_counts.get("n_resolved_features", 0))
-    resolved_baseline_features = int(global_counts.get("n_resolved_baseline_features", 0))
-    resolved_nonbaseline_features = int(global_counts.get("n_resolved_nonbaseline_features", 0))
+    resolved_baseline_features = int(
+        global_counts.get("n_resolved_baseline_features", 0)
+    )
+    resolved_nonbaseline_features = int(
+        global_counts.get("n_resolved_nonbaseline_features", 0)
+    )
 
     unique_fraction = float(unique_mapped / max(1, n_calls))
     active_fraction = float(active_features / max(1, n_calls))
     resolved_fraction = float(resolved_features / max(1, n_calls))
     resolved_baseline_fraction = float(resolved_baseline_features / max(1, n_calls))
     recovery_status, recovery_reason = _marker_recovery_status(unique_fraction)
-    active_status, active_reason = _active_evidence_status(active_fraction, active_features)
-    resolved_status, resolved_reason = _resolved_marker_evidence_status(resolved_fraction, resolved_features)
+    active_status, active_reason = _active_evidence_status(
+        active_fraction, active_features
+    )
+    resolved_status, resolved_reason = _resolved_marker_evidence_status(
+        resolved_fraction, resolved_features
+    )
 
     summary = {
         "mode": "vcf_manifest_coordinate_encoding",
@@ -1124,7 +1267,9 @@ def _write_vcf_selected_feature_outputs_from_counts(
         "n_resolved_baseline_features": resolved_baseline_features,
         "resolved_baseline_feature_fraction": resolved_baseline_fraction,
         "n_resolved_nonbaseline_features": resolved_nonbaseline_features,
-        "resolved_nonbaseline_feature_fraction": float(resolved_nonbaseline_features / max(1, n_calls)),
+        "resolved_nonbaseline_feature_fraction": float(
+            resolved_nonbaseline_features / max(1, n_calls)
+        ),
         "marker_recovery_status": recovery_status,
         "marker_recovery_reason": recovery_reason,
         "active_marker_evidence_status": active_status,
@@ -1139,7 +1284,8 @@ def _write_vcf_selected_feature_outputs_from_counts(
         "compact_call_table_note": (
             "For large VCF query batches, vcf_feature_calls.tsv stores non-baseline and caution calls only. "
             "Resolved baseline/reference states are retained in the selected-feature matrix and per-sample/global summaries."
-            if compact_call_table else "vcf_feature_calls.tsv contains one row per sample-feature call."
+            if compact_call_table
+            else "vcf_feature_calls.tsv contains one row per sample-feature call."
         ),
         "zero_fill_policy": {
             "unresolved_context": "encoded as 0",
@@ -1165,15 +1311,30 @@ def _should_keep_vcf_call_row(encoded: Dict[str, Any], compact: bool) -> bool:
     if not compact:
         return True
     try:
-        if int(encoded.get("encoded_value", 0)) != 0:
+        val = float(encoded.get("encoded_value", float("nan")))
+        if val == 1.0 or (isinstance(val, float) and np.isnan(val)):
             return True
     except Exception:
-        pass
+        return True
     allele_call = str(encoded.get("allele_call", ""))
     mapping_status = str(encoded.get("mapping_status", ""))
-    if allele_call not in {"baseline_match"}:
+    call_state = str(encoded.get("call_state", ""))
+    if allele_call not in {"baseline_match", "assumed_reference"}:
         return True
-    if any(token in mapping_status for token in ("multi_hit", "ambiguous_base", "non_training_allele", "missing_context", "unresolved_context")):
+    if call_state and call_state not in {CallState.CALLED_REFERENCE.value}:
+        return True
+    if any(
+        token in mapping_status
+        for token in (
+            "multi_hit",
+            "ambiguous_base",
+            "non_training_allele",
+            "missing",
+            "unresolved",
+            "filtered",
+            "locus_not_present",
+        )
+    ):
         return True
     return False
 
@@ -1184,28 +1345,32 @@ def encode_vcf_query_from_manifest(
     feature_manifest_path: str,
     features: Sequence[str],
     output_dir: str,
+    qc: Optional[VcfQCConfig] = None,
+    config: Any = None,
 ) -> Tuple[pd.DataFrame, Dict[str, Any], pd.DataFrame]:
     """Build a query matrix directly in the trained selected-feature space from VCF.
 
-    This deliberately bypasses DataLoader cohort-level artifact refinement. Query
-    mode must not rediscover, filter, or collapse features; it must reconstruct
-    the saved training feature columns and encode each selected feature using the
-    same baseline/REF/ALT rule saved in the selected-feature manifest.
+    Uses the same genotype/QC/callability semantics as training
+    (``vcf_call_semantics``). Missing/unresolved features are NaN, not 0.
 
-    Performance note
-    ----------------
-    Large VCF batches can contain millions of sample-feature calls. For those
-    batches, the matrix and summaries remain complete, while the per-call TSV is
-    compacted to non-baseline/caution rows to avoid spending most runtime writing
-    baseline-reference rows that are already represented as 0 in the matrix.
+    When callability gates fail, the summary records
+    ``prediction_action=abstain_review_unresolved``.
     """
     out = ensure_dir(Path(output_dir))
     feature_order = [str(f) for f in features]
     if not feature_order:
-        raise ValueError("At least one selected feature is required for VCF query encoding.")
+        raise ValueError(
+            "At least one selected feature is required for VCF query encoding."
+        )
+
+    if qc is None:
+        qc = VcfQCConfig.from_config(config) if config is not None else VcfQCConfig()
 
     manifest = load_feature_manifest(Path(feature_manifest_path))
-    rows = [normalise_manifest_row(r) for r in manifest_rows_for_features(manifest, feature_order)]
+    rows = [
+        normalise_manifest_row(r)
+        for r in manifest_rows_for_features(manifest, feature_order)
+    ]
     vcf_paths = discover_vcf_inputs(vcf_path)
     if not vcf_paths:
         raise ValueError("No VCF files were found for VCF query encoding.")
@@ -1220,7 +1385,7 @@ def encode_vcf_query_from_manifest(
             total_call_slots,
         )
 
-    matrix_rows: Dict[str, List[int]] = {}
+    matrix_rows: Dict[str, List[float]] = {}
     call_rows: List[Dict[str, Any]] = []
     per_sample: List[Dict[str, Any]] = []
     global_counts: Dict[str, Any] = {
@@ -1230,25 +1395,33 @@ def encode_vcf_query_from_manifest(
         "n_resolved_features": 0,
         "n_resolved_baseline_features": 0,
         "n_resolved_nonbaseline_features": 0,
+        "n_callable_features": 0,
+        "n_noncallable_nan": 0,
+        "n_assumed_reference": 0,
         "mapping_status_counts": Counter(),
         "mapping_quality_counts": Counter(),
         "allele_call_counts": Counter(),
+        "call_state_counts": Counter(),
     }
 
-    resolved_calls = {"baseline_match", "alt_match", "known_nonbaseline_match"}
+    resolved_calls = {
+        "baseline_match",
+        "alt_match",
+        "known_nonbaseline_match",
+        "assumed_reference",
+    }
     nonbaseline_calls = {"alt_match", "known_nonbaseline_match"}
+    sample_ids_seen: List[str] = []
 
     for sample_i, path in enumerate(vcf_paths, start=1):
-        calls = parse_vcf_calls(path)
+        calls = parse_vcf_calls(path, qc=qc)
         position_index = _build_vcf_position_index(calls)
-        sample_id = _sample_id_from_vcf_path(path)
-        # Prefer sample name from VCF header if available.
-        for payload in calls.values():
-            if payload.get("sample_name"):
-                sample_id = str(payload["sample_name"])
-                break
+        sample_id = str(calls.sample_name or _sample_id_from_vcf_path(path))
+        sample_ids_seen.append(sample_id)
 
-        values: List[int] = []
+        values: List[float] = []
+        sample_states: List[CallState] = []
+        n_assumed = 0
         sample_counts: Dict[str, Any] = {
             "sample_id": sample_id,
             "n_feature_calls": 0,
@@ -1256,65 +1429,122 @@ def encode_vcf_query_from_manifest(
             "n_resolved_features": 0,
             "n_resolved_baseline_features": 0,
             "n_resolved_nonbaseline_features": 0,
+            "n_callable_features": 0,
+            "n_noncallable_nan": 0,
             "n_unique_mapped_calls": 0,
             "n_unresolved_or_missing_context_calls": 0,
             "n_multi_hit_calls": 0,
             "n_ambiguous_base_calls": 0,
             "n_non_training_allele_calls": 0,
+            "n_assumed_reference": 0,
             "status_counts": Counter(),
             "allele_call_counts": Counter(),
+            "call_state_counts": Counter(),
         }
 
         for row in rows:
-            mapping = _vcf_mapping_for_row(row, calls, position_index=position_index)
+            mapping = _vcf_mapping_for_row(
+                row, calls, position_index=position_index, qc=qc
+            )
             encoded = encode_mapping(row, mapping)
             encoded["sample_id"] = sample_id
             encoded["source_query_file"] = str(path)
-            encoded_value = int(encoded["encoded_value"])
+            try:
+                encoded_value = float(encoded["encoded_value"])
+            except (TypeError, ValueError):
+                encoded_value = float("nan")
             values.append(encoded_value)
+            try:
+                st = CallState(
+                    str(
+                        encoded.get(
+                            "call_state", CallState.UNRESOLVED_OR_AMBIGUOUS.value
+                        )
+                    )
+                )
+            except ValueError:
+                st = CallState.UNRESOLVED_OR_AMBIGUOUS
+            sample_states.append(st)
+            if encoded.get("assumed_reference"):
+                n_assumed += 1
 
             mapping_status = str(encoded.get("mapping_status", ""))
             mapping_quality = str(encoded.get("mapping_quality", ""))
             allele_call = str(encoded.get("allele_call", ""))
+            call_state = str(encoded.get("call_state", st.value))
 
             global_counts["n_feature_calls"] += 1
             sample_counts["n_feature_calls"] += 1
             global_counts["mapping_status_counts"][mapping_status] += 1
             global_counts["mapping_quality_counts"][mapping_quality] += 1
             global_counts["allele_call_counts"][allele_call] += 1
+            global_counts["call_state_counts"][call_state] += 1
             sample_counts["status_counts"][mapping_status] += 1
             sample_counts["allele_call_counts"][allele_call] += 1
+            sample_counts["call_state_counts"][call_state] += 1
 
-            if mapping_status == "mapped_unique_context":
+            if st in {CallState.CALLED_REFERENCE, CallState.CALLED_ALTERNATE}:
                 global_counts["n_unique_mapped_calls"] += 1
                 sample_counts["n_unique_mapped_calls"] += 1
-            if encoded_value != 0:
+                global_counts["n_callable_features"] += 1
+                sample_counts["n_callable_features"] += 1
+            if np.isnan(encoded_value):
+                global_counts["n_noncallable_nan"] += 1
+                sample_counts["n_noncallable_nan"] += 1
+            if encoded_value == 1.0:
                 global_counts["n_encoded_active_feature_calls"] += 1
                 sample_counts["n_encoded_active_features"] += 1
             if allele_call in resolved_calls:
                 global_counts["n_resolved_features"] += 1
                 sample_counts["n_resolved_features"] += 1
-            if allele_call == "baseline_match":
+            if allele_call in {"baseline_match", "assumed_reference"}:
                 global_counts["n_resolved_baseline_features"] += 1
                 sample_counts["n_resolved_baseline_features"] += 1
             if allele_call in nonbaseline_calls:
                 global_counts["n_resolved_nonbaseline_features"] += 1
                 sample_counts["n_resolved_nonbaseline_features"] += 1
-            if "missing_context" in mapping_status or "unresolved_context" in mapping_status:
+            if st in {
+                CallState.MISSING_OR_NO_CALL,
+                CallState.LOCUS_NOT_PRESENT,
+                CallState.FILTERED_OR_LOW_QUALITY,
+                CallState.UNRESOLVED_OR_AMBIGUOUS,
+            }:
                 sample_counts["n_unresolved_or_missing_context_calls"] += 1
             if "multi_hit" in mapping_status:
                 sample_counts["n_multi_hit_calls"] += 1
-            if "ambiguous_base" in mapping_status:
+            if (
+                "ambiguous_base" in mapping_status
+                or st == CallState.UNRESOLVED_OR_AMBIGUOUS
+            ):
                 sample_counts["n_ambiguous_base_calls"] += 1
-            if "non_training_allele" in mapping_status:
+            if "non_training_allele" in allele_call:
                 sample_counts["n_non_training_allele_calls"] += 1
+            if allele_call == "assumed_reference":
+                global_counts["n_assumed_reference"] += 1
+                sample_counts["n_assumed_reference"] += 1
 
             if _should_keep_vcf_call_row(encoded, compact=compact_call_table):
                 call_rows.append(encoded)
 
+        gate = callability_gate_result(
+            sample_states,
+            qc=qc,
+            n_assumed_reference=n_assumed,
+        )
+        sample_counts["callability_gate"] = gate
+        if gate["prediction_action"] != "predict":
+            logger.warning(
+                "Sample %s fails callability gates | recovery=%.3f callable=%.3f → %s",
+                sample_id,
+                float(gate.get("feature_recovery_fraction", 0.0)),
+                float(gate.get("callable_fraction", 0.0)),
+                gate["prediction_action"],
+            )
+
         matrix_rows[sample_id] = values
         sample_counts["status_counts"] = dict(sample_counts["status_counts"])
         sample_counts["allele_call_counts"] = dict(sample_counts["allele_call_counts"])
+        sample_counts["call_state_counts"] = dict(sample_counts["call_state_counts"])
         per_sample.append(sample_counts)
 
         if sample_i == 1 or sample_i % 250 == 0 or sample_i == len(vcf_paths):
@@ -1326,7 +1556,11 @@ def encode_vcf_query_from_manifest(
                 int(len(call_rows)),
             )
 
-    matrix = pd.DataFrame.from_dict(matrix_rows, orient="index", columns=feature_order, dtype=int)
+    assert_unique_sample_ids(sample_ids_seen, context="VCF query inputs")
+
+    matrix = pd.DataFrame.from_dict(
+        matrix_rows, orient="index", columns=feature_order, dtype=float
+    )
     matrix.index.name = "Sample"
     calls_df = pd.DataFrame(call_rows)
 
@@ -1338,13 +1572,33 @@ def encode_vcf_query_from_manifest(
         global_counts=global_counts,
         compact_call_table=compact_call_table,
     )
+    # Surface per-sample gate failures for query_engine.
+    summary["callability_gates"] = {
+        str(row["sample_id"]): row.get("callability_gate", {}) for row in per_sample
+    }
+    summary["samples_requiring_abstention"] = [
+        sid
+        for sid, g in summary["callability_gates"].items()
+        if g.get("prediction_action") == "abstain_review_unresolved"
+    ]
+    summary["vcf_qc"] = {
+        "assume_absent_variant_is_reference": bool(
+            qc.assume_absent_variant_is_reference
+        ),
+        "min_feature_recovery_fraction": float(qc.min_feature_recovery_fraction),
+        "min_callable_fraction": float(qc.min_callable_fraction),
+        "enforce_query_callability_gates": bool(qc.enforce_query_callability_gates),
+        "respect_filter": bool(qc.respect_filter),
+    }
 
     logger.info(
-        "VCF query encoding complete | samples=%d | trained_features=%d | active_calls=%d | unique_fraction=%.3f | compact_call_table=%s",
+        "VCF query encoding complete | samples=%d | trained_features=%d | active_calls=%d | "
+        "unique_fraction=%.3f | abstain_samples=%d | compact_call_table=%s",
         int(matrix.shape[0]),
         int(matrix.shape[1]),
         int(summary.get("n_encoded_active_feature_calls", 0)),
         float(summary.get("unique_mapped_fraction", 0.0)),
+        int(len(summary["samples_requiring_abstention"])),
         "yes" if compact_call_table else "no",
     )
     return matrix, summary, calls_df
@@ -1353,6 +1607,7 @@ def encode_vcf_query_from_manifest(
 # -----------------------------------------------------------------------------
 # Public API
 # -----------------------------------------------------------------------------
+
 
 def encode_raw_sequence_query(
     *,
@@ -1387,10 +1642,15 @@ def encode_raw_sequence_query(
 
     feature_order = [str(f) for f in features]
     if not feature_order:
-        raise ValueError("At least one selected feature is required for FASTA query encoding.")
+        raise ValueError(
+            "At least one selected feature is required for FASTA query encoding."
+        )
 
     manifest = load_feature_manifest(Path(feature_manifest_path))
-    rows = [normalise_manifest_row(r) for r in manifest_rows_for_features(manifest, feature_order)]
+    rows = [
+        normalise_manifest_row(r)
+        for r in manifest_rows_for_features(manifest, feature_order)
+    ]
     missing_context = [r["Feature_ID"] for r in rows if not r.get("Context_sequence")]
 
     fasta_paths = discover_fasta_inputs(raw_sequence_path)
@@ -1406,10 +1666,14 @@ def encode_raw_sequence_query(
         sample_id = fasta_path.stem
         records = read_fasta_records(fasta_path)
         if not records:
-            raise ValueError(f"No FASTA records found in FASTA query input: {fasta_path}")
+            raise ValueError(
+                f"No FASTA records found in FASTA query input: {fasta_path}"
+            )
 
         blast_mappings: Dict[str, Dict[str, Any]] = {}
-        use_blast = mapping_mode == "blast" or (mapping_mode == "auto" and blast_is_available)
+        use_blast = mapping_mode == "blast" or (
+            mapping_mode == "auto" and blast_is_available
+        )
         if use_blast and selected_context_rows:
             try:
                 blast_mappings = run_blast_context_mapping(
@@ -1449,7 +1713,9 @@ def encode_raw_sequence_query(
 
         matrix_rows[sample_id] = values
 
-    matrix = pd.DataFrame.from_dict(matrix_rows, orient="index", columns=feature_order, dtype=int)
+    matrix = pd.DataFrame.from_dict(
+        matrix_rows, orient="index", columns=feature_order, dtype=int
+    )
     matrix.index.name = "Sample"
     calls = pd.DataFrame(call_rows)
 

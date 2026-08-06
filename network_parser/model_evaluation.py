@@ -9,22 +9,15 @@ Evaluate saved-model predictions against labelled holdout metadata without
 rerunning statistical filtering, feature selection, model training, tree
 construction, bootstrapping, or confidence scoring.
 
-This module is intentionally generic with respect to the active dataset.  It
-operates on true labels, predicted labels, and optional class-support scores.
-It writes diagnostic metrics that are useful for AMR/strain-classification
-validation:
+Evaluation roles
+----------------
+- **held_out / external**: generalisation performance on untouched external data.
+- **out_of_fold / internal_cv**: internal estimates from leakage-aware CV.
+- **training_fit_diagnostics**: same-data scores on the fitting set. These are
+  **not** generalisation metrics and must never be reported as such.
 
-    - overall accuracy / balanced accuracy / macro and weighted F1
-    - per-class sensitivity, specificity, PPV, NPV, F1
-    - confusion matrix
-    - one-vs-rest ROC-AUC and PR-AUC where class-support scores are available
-    - ROC / PR curve point tables for plotting downstream
-
-Design rule
------------
-These metrics are evaluation-only.  They do not affect marker discovery or
-model fitting.  For robust inference, use this on a held-out set, or later wrap
-it inside cross-validation where filtering is rerun inside each training fold.
+Always report end-to-end denominators including abstentions/missing predictions
+(total truth, total predictions, matched, called, abstained, coverage).
 """
 
 from __future__ import annotations
@@ -32,20 +25,19 @@ from __future__ import annotations
 import ast
 import json
 import logging
+import math
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
 import pandas as pd
 from sklearn.metrics import (
     accuracy_score,
     average_precision_score,
-    balanced_accuracy_score,
     confusion_matrix,
     f1_score,
     matthews_corrcoef,
     precision_recall_curve,
-    precision_recall_fscore_support,
     precision_score,
     recall_score,
     roc_auc_score,
@@ -58,17 +50,222 @@ except Exception:  # pragma: no cover - supports direct source-tree execution
     try:
         from utils import normalize_sample_id  # type: ignore
     except Exception:  # pragma: no cover
+
         def normalize_sample_id(value: Any, strip_library_suffix: bool = True) -> str:  # type: ignore
             return str(value).strip()
 
+
 logger = logging.getLogger(__name__)
 
-MISSING_LABEL_TOKENS = {"", "-", "NA", "N/A", "None", "none", "nan", "NaN", "null", "NULL"}
+MISSING_LABEL_TOKENS = frozenset(
+    {
+        "",
+        "-",
+        "NA",
+        "N/A",
+        "<NA>",
+        "None",
+        "none",
+        "nan",
+        "NaN",
+        "null",
+        "NULL",
+    }
+)
+MISSING_LABEL_TOKENS_NORMALIZED = frozenset(
+    str(token).strip().casefold() for token in MISSING_LABEL_TOKENS
+)
+
+# Prediction tokens treated as abstention / non-called (not class assignments).
+DEFAULT_ABSTENTION_TOKENS = frozenset(
+    {
+        "",
+        "unavailable",
+        "review",
+        "review_required",
+        "low_support_review_required",
+        "amr_evidence_review_required",
+        "abstain",
+        "abstain_review_unresolved",
+        "unresolved",
+        "not_called",
+        "missing",
+        "na",
+        "<na>",
+        "nan",
+        "none",
+    }
+)
+
+EVALUATION_ROLES = frozenset(
+    {
+        "held_out",
+        "external",
+        "out_of_fold",
+        "internal_cv",
+        "training_fit_diagnostics",
+        "calibration",
+    }
+)
+
+
+# -----------------------------------------------------------------------------
+# Sample-ID integrity and end-to-end evaluation helpers
+# -----------------------------------------------------------------------------
+
+
+def detect_duplicate_normalized_ids(ids: Sequence[Any]) -> List[str]:
+    """Return sorted list of normalized IDs that appear more than once."""
+    counts: Dict[str, int] = {}
+    for value in ids:
+        key = normalize_sample_id(str(value))
+        if not key:
+            continue
+        counts[key] = counts.get(key, 0) + 1
+    return sorted([k for k, n in counts.items() if n > 1])
+
+
+def assert_unique_normalized_ids(
+    ids: Sequence[Any], *, context: str = "samples"
+) -> None:
+    """Fail hard on colliding normalized sample IDs (no silent keep-first)."""
+    dups = detect_duplicate_normalized_ids(ids)
+    if dups:
+        raise ValueError(
+            f"Duplicate normalized sample IDs in {context}: {dups[:20]}"
+            + (" ..." if len(dups) > 20 else "")
+            + ". Refusing to silently keep the first occurrence."
+        )
+
+
+def wilson_interval(
+    successes: int, n: int, *, z: float = 1.96
+) -> Tuple[Optional[float], Optional[float]]:
+    """Wilson score interval for a binomial proportion (or (None, None) if n==0)."""
+    if n <= 0:
+        return None, None
+    successes = max(0, min(int(successes), int(n)))
+    n = int(n)
+    phat = successes / n
+    denom = 1.0 + (z * z) / n
+    centre = (phat + (z * z) / (2.0 * n)) / denom
+    margin = (
+        z * math.sqrt((phat * (1.0 - phat) / n) + (z * z) / (4.0 * n * n))
+    ) / denom
+    return float(max(0.0, centre - margin)), float(min(1.0, centre + margin))
+
+
+def _is_missing_label(value: Any) -> bool:
+    """Return True for native or textual missing-label representations.
+
+    Literal ``0`` is intentionally not missing. It remains a valid binary
+    class/baseline label, matching the DataLoader's 0/1 matrix contract.
+    """
+    if pd.isna(value):
+        return True
+    return str(value).strip().casefold() in MISSING_LABEL_TOKENS_NORMALIZED
+
+
+def _is_abstention_label(value: Any, abstention_tokens: Set[str]) -> bool:
+    if _is_missing_label(value):
+        return True
+    return str(value).strip().casefold() in abstention_tokens
+
+
+def end_to_end_prediction_counts(
+    *,
+    y_true: pd.Series,
+    y_pred: pd.Series,
+    abstention_tokens: Optional[Iterable[str]] = None,
+) -> Dict[str, Any]:
+    """
+    Count truth/prediction/matched/called/abstained with full denominators.
+
+    Called = matched samples whose prediction is a non-abstention class label.
+    Missing predictions (truth without pred) count as abstained for end-to-end.
+    """
+    tokens = {t.lower() for t in (abstention_tokens or DEFAULT_ABSTENTION_TOKENS)}
+
+    truth = y_true.copy()
+    truth.index = truth.index.astype(str).map(normalize_sample_id)
+    truth = truth.dropna()
+    truth = truth[truth.index.astype(str).str.len() > 0]
+    assert_unique_normalized_ids(
+        truth.index.tolist(), context="y_true for end-to-end metrics"
+    )
+
+    pred = y_pred.copy()
+    pred.index = pred.index.astype(str).map(normalize_sample_id)
+    # Keep abstention labels; only drop empty index
+    pred = pred[pred.index.astype(str).str.len() > 0]
+    assert_unique_normalized_ids(
+        pred.index.tolist(), context="y_pred for end-to-end metrics"
+    )
+
+    n_truth = int(len(truth))
+    n_pred_rows = int(len(pred))
+    matched_ids = truth.index.intersection(pred.index)
+    n_matched = int(len(matched_ids))
+
+    called_mask = []
+    correct_called = 0
+    correct_all_matched = 0
+    abstained_matched = 0
+    for sid in matched_ids:
+        t = str(truth.loc[sid])
+        p = pred.loc[sid]
+        if _is_abstention_label(p, tokens):
+            abstained_matched += 1
+            called_mask.append(False)
+            continue
+        called_mask.append(True)
+        p_str = str(p)
+        if p_str == t:
+            correct_called += 1
+            correct_all_matched += 1
+        # unmatched abstentions don't contribute to correct_all_matched
+
+    n_called = int(sum(called_mask))
+    # Truth samples with no prediction row
+    missing_pred = int(n_truth - n_matched)
+    n_abstained_or_missing = int(abstained_matched + missing_pred)
+
+    # End-to-end accuracy: correct class calls / all truth samples
+    # (missing/abstained count as incorrect for e2e assignment accuracy)
+    e2e_correct = correct_called  # only non-abstention correct counts
+    coverage = float(n_called / n_truth) if n_truth else 0.0
+    called_only_acc = float(correct_called / n_called) if n_called else 0.0
+    e2e_acc = float(e2e_correct / n_truth) if n_truth else 0.0
+
+    ci_called = (
+        wilson_interval(correct_called, n_called) if n_called >= 5 else (None, None)
+    )
+    ci_e2e = wilson_interval(e2e_correct, n_truth) if n_truth >= 5 else (None, None)
+    ci_cov = wilson_interval(n_called, n_truth) if n_truth >= 5 else (None, None)
+
+    return {
+        "n_truth_samples": n_truth,
+        "n_prediction_samples": n_pred_rows,
+        "n_matched_samples": n_matched,
+        "n_called_samples": n_called,
+        "n_abstained_matched_samples": int(abstained_matched),
+        "n_missing_prediction_samples": missing_pred,
+        "n_abstained_or_missing_samples": n_abstained_or_missing,
+        "coverage_call_rate": coverage,
+        "accuracy_called_only": called_only_acc,
+        "accuracy_end_to_end_all_truth": e2e_acc,
+        "n_correct_called": int(correct_called),
+        "n_correct_end_to_end": int(e2e_correct),
+        "accuracy_called_only_ci95": {"low": ci_called[0], "high": ci_called[1]},
+        "accuracy_end_to_end_ci95": {"low": ci_e2e[0], "high": ci_e2e[1]},
+        "coverage_call_rate_ci95": {"low": ci_cov[0], "high": ci_cov[1]},
+    }
 
 
 # -----------------------------------------------------------------------------
 # JSON / IO helpers
 # -----------------------------------------------------------------------------
+
 
 def _json_default(obj: Any) -> Any:
     if isinstance(obj, (np.integer,)):
@@ -102,6 +299,7 @@ def _write_json(payload: Dict[str, Any], path: Path) -> None:
 # Metadata / label helpers
 # -----------------------------------------------------------------------------
 
+
 def _read_table(path: str | Path) -> pd.DataFrame:
     path = Path(path)
     if not path.exists():
@@ -118,19 +316,39 @@ def _read_table(path: str | Path) -> pd.DataFrame:
 
 
 def _normalise_label_series(values: pd.Series) -> pd.Series:
-    clean = values.astype(str).str.strip()
-    clean = clean.replace({token: pd.NA for token in MISSING_LABEL_TOKENS})
-    clean = clean.str.replace("-", "_", regex=False)
-    return clean
+    """Strip and map missing tokens only — never rewrite punctuation globally.
+
+    Replacing every ``-`` with ``_`` can collapse distinct biological labels
+    (``A-B`` vs ``A_B``). Use an explicit mapping when renaming is required.
+    """
+    # Pandas' nullable string dtype preserves native pd.NA/np.nan instead of
+    # converting them to the literal strings "<NA>"/"nan". Textual missing
+    # tokens are then canonicalised to pd.NA. Literal "0" remains a valid label.
+    clean = values.astype("string").str.strip()
+    missing_mask = clean.str.casefold().isin(MISSING_LABEL_TOKENS_NORMALIZED)
+    return clean.mask(missing_mask, pd.NA)
 
 
-def _resolve_sample_id_column(df: pd.DataFrame, sample_id_column: Optional[str]) -> Optional[str]:
+def _resolve_sample_id_column(
+    df: pd.DataFrame, sample_id_column: Optional[str]
+) -> Optional[str]:
     if sample_id_column:
         if sample_id_column not in df.columns:
-            raise ValueError(f"sample_id_column '{sample_id_column}' not found in metadata columns")
+            raise ValueError(
+                f"sample_id_column '{sample_id_column}' not found in metadata columns"
+            )
         return sample_id_column
 
-    for candidate in ("sample_id", "Sample_ID", "sample", "Sample", "SampleID", "sampleID", "id", "ID"):
+    for candidate in (
+        "sample_id",
+        "Sample_ID",
+        "sample",
+        "Sample",
+        "SampleID",
+        "sampleID",
+        "id",
+        "ID",
+    ):
         if candidate in df.columns:
             return candidate
     return None
@@ -159,7 +377,9 @@ def load_labels_from_metadata(
     labels.index = index
     labels = labels.dropna()
     labels = labels[labels.index.astype(str).str.len() > 0]
-    labels = labels[~labels.index.duplicated(keep="first")]
+    assert_unique_normalized_ids(
+        labels.index.tolist(), context=f"metadata labels ({label_column})"
+    )
     return labels
 
 
@@ -167,7 +387,11 @@ def score_dicts_to_frame(
     sample_ids: Sequence[Any],
     score_dicts: Sequence[Optional[Dict[str, Any]]],
 ) -> pd.DataFrame:
-    """Convert per-sample class-support dictionaries into a numeric score matrix."""
+    """Convert per-sample class-support dictionaries into a numeric score matrix.
+
+    Absent class keys remain NaN. Omission is **not** treated as zero unless a
+    predictor contract explicitly documents that semantics.
+    """
     rows: List[Dict[str, float]] = []
     index: List[str] = []
     for sample_id, scores in zip(sample_ids, score_dicts):
@@ -183,7 +407,8 @@ def score_dicts_to_frame(
 
     if not rows:
         return pd.DataFrame()
-    return pd.DataFrame(rows, index=index).fillna(0.0)
+    # Do not fillna(0): missing class scores stay NaN.
+    return pd.DataFrame(rows, index=index)
 
 
 def _as_label_series(values: Any, name: str) -> pd.Series:
@@ -203,7 +428,11 @@ def _align_truth_and_predictions(
     y_true: Any,
     y_pred: Any,
     score_df: Optional[pd.DataFrame] = None,
-) -> Tuple[pd.DataFrame, Optional[pd.DataFrame]]:
+    *,
+    drop_abstentions_for_called_metrics: bool = False,
+    abstention_tokens: Optional[Iterable[str]] = None,
+    include_truth_without_prediction: bool = False,
+) -> Tuple[pd.DataFrame, Optional[pd.DataFrame], Dict[str, Any]]:
     truth = _as_label_series(y_true, "true_label")
     pred = _as_label_series(y_pred, "predicted_label")
 
@@ -211,40 +440,237 @@ def _align_truth_and_predictions(
     pred.index = pred.index.astype(str).map(normalize_sample_id)
 
     truth = truth.dropna()
-    pred = pred.dropna()
-    truth = truth[~truth.index.duplicated(keep="first")]
-    pred = pred[~pred.index.duplicated(keep="first")]
+    # Keep abstention predictions for end-to-end accounting; drop empty index only.
+    pred = pred[pred.index.astype(str).str.len() > 0]
+    truth = truth[truth.index.astype(str).str.len() > 0]
+    assert_unique_normalized_ids(truth.index.tolist(), context="aligned y_true")
+    assert_unique_normalized_ids(pred.index.tolist(), context="aligned y_pred")
 
-    common = truth.index.intersection(pred.index)
-    df = pd.DataFrame(
-        {
-            "sample_id": common.astype(str),
-            "true_label": truth.loc[common].astype(str).values,
-            "predicted_label": pred.loc[common].astype(str).values,
-        },
-        index=common,
+    e2e = end_to_end_prediction_counts(
+        y_true=truth,
+        y_pred=pred,
+        abstention_tokens=abstention_tokens,
     )
 
+    tokens = {t.lower() for t in (abstention_tokens or DEFAULT_ABSTENTION_TOKENS)}
+    common = truth.index.intersection(pred.index)
+
+    if include_truth_without_prediction:
+        # Full audit: every truth sample, including those with no prediction row.
+        ordered = truth.index
+        pred_labels: List[Any] = []
+        statuses: List[str] = []
+        is_abs: List[bool] = []
+        for sid in ordered:
+            if sid not in pred.index:
+                pred_labels.append(pd.NA)
+                statuses.append("missing_prediction")
+                is_abs.append(True)
+                continue
+            p = pred.loc[sid]
+            abs_flag = _is_abstention_label(p, tokens)
+            pred_labels.append(pd.NA if _is_missing_label(p) else str(p).strip())
+            statuses.append("abstention" if abs_flag else "called")
+            is_abs.append(abs_flag)
+        df = pd.DataFrame(
+            {
+                "sample_id": ordered.astype(str),
+                "true_label": truth.loc[ordered].astype(str).values,
+                "predicted_label": pred_labels,
+                "prediction_status": statuses,
+                "is_abstention": is_abs,
+            },
+            index=ordered,
+        )
+    else:
+        df = pd.DataFrame(
+            {
+                "sample_id": common.astype(str),
+                "true_label": truth.loc[common].astype(str).values,
+                # Preserve native NA values until abstention classification.
+                # Stringifying here used to turn pd.NA into a false "<NA>"
+                # prediction class and contaminate called-only metrics.
+                "predicted_label": pred.loc[common].to_numpy(dtype=object),
+            },
+            index=common,
+        )
+        df["is_abstention"] = [
+            _is_abstention_label(p, tokens) for p in df["predicted_label"].tolist()
+        ]
+        df["prediction_status"] = [
+            "abstention" if a else "called" for a in df["is_abstention"].tolist()
+        ]
+
+    if drop_abstentions_for_called_metrics and not df.empty:
+        called_df = df.loc[~df["is_abstention"]].copy()
+    else:
+        called_df = df.copy()
+
     if score_df is None or score_df.empty:
-        return df, None
+        return called_df, None, e2e
 
     scores = score_df.copy()
     scores.index = scores.index.astype(str).map(normalize_sample_id)
-    scores = scores[~scores.index.duplicated(keep="first")]
-    scores = scores.apply(pd.to_numeric, errors="coerce").fillna(0.0)
-    scores = scores.reindex(df.index).fillna(0.0)
-    return df, scores
+    assert_unique_normalized_ids(
+        scores.index.tolist(), context="class-support score matrix"
+    )
+    scores = scores.apply(pd.to_numeric, errors="coerce")
+    # Do not fabricate zeros for missing score rows — reindex with NaN.
+    scores = scores.reindex(called_df.index)
+    return called_df, scores, e2e
+
+
+def bootstrap_metric_confidence_intervals(
+    y_true: Sequence[Any],
+    y_pred: Sequence[Any],
+    *,
+    groups: Optional[Sequence[Any]] = None,
+    n_bootstrap: int = 500,
+    random_state: int = 42,
+    metrics: Optional[Sequence[str]] = None,
+) -> Dict[str, Any]:
+    """
+    Sample- or group-aware bootstrap CIs for principal classification metrics.
+
+    When ``groups`` is provided, resampling is over unique groups (cluster
+    bootstrap) so correlated samples within a group are kept together.
+    """
+    y_true_arr = np.asarray([str(x) for x in y_true], dtype=object)
+    y_pred_arr = np.asarray([str(x) for x in y_pred], dtype=object)
+    n = int(len(y_true_arr))
+    if n == 0 or n != len(y_pred_arr):
+        return {
+            "status": "skipped",
+            "skip_reason": "empty_or_mismatched_inputs",
+            "n_bootstrap": 0,
+        }
+
+    wanted = (
+        list(metrics)
+        if metrics is not None
+        else [
+            "accuracy_called_only",
+            "balanced_accuracy",
+            "macro_f1",
+        ]
+    )
+    rng = np.random.default_rng(int(random_state))
+    n_boot = max(1, int(n_bootstrap))
+
+    if groups is not None:
+        g_arr = np.asarray([str(g) for g in groups], dtype=object)
+        if len(g_arr) != n:
+            return {
+                "status": "skipped",
+                "skip_reason": "groups_length_mismatch",
+                "n_bootstrap": 0,
+            }
+        unique_groups = np.unique(g_arr)
+        unit_ids = unique_groups
+        unit_mode = "group"
+        unit_to_idx = {ug: np.where(g_arr == ug)[0] for ug in unique_groups}
+    else:
+        unit_ids = np.arange(n)
+        unit_mode = "sample"
+        unit_to_idx = {i: np.array([i], dtype=int) for i in unit_ids}
+
+    n_units = int(len(unit_ids))
+    if n_units < 5:
+        return {
+            "status": "skipped",
+            "skip_reason": "too_few_resample_units",
+            "n_bootstrap": 0,
+            "n_units": n_units,
+            "unit_mode": unit_mode,
+        }
+
+    def _compute(yt: np.ndarray, yp: np.ndarray) -> Dict[str, float]:
+        out: Dict[str, float] = {}
+        if "accuracy_called_only" in wanted:
+            out["accuracy_called_only"] = (
+                float(accuracy_score(yt, yp)) if len(yt) else float("nan")
+            )
+        if "balanced_accuracy" in wanted:
+            out["balanced_accuracy"] = (
+                float(_balanced_accuracy_no_warning(yt.tolist(), yp.tolist()))
+                if len(yt)
+                else float("nan")
+            )
+        if "macro_f1" in wanted:
+            labs = sorted(set(yt.tolist()).union(set(yp.tolist())))
+            try:
+                out["macro_f1"] = (
+                    float(
+                        f1_score(yt, yp, labels=labs, average="macro", zero_division=0)
+                    )
+                    if len(yt)
+                    else float("nan")
+                )
+            except Exception:
+                out["macro_f1"] = float("nan")
+        return out
+
+    point = _compute(y_true_arr, y_pred_arr)
+    collected: Dict[str, List[float]] = {k: [] for k in point}
+
+    for _ in range(n_boot):
+        draw = rng.choice(unit_ids, size=n_units, replace=True)
+        idx_parts = [unit_to_idx[u] for u in draw]
+        idx = np.concatenate(idx_parts) if idx_parts else np.array([], dtype=int)
+        if idx.size == 0:
+            continue
+        boot = _compute(y_true_arr[idx], y_pred_arr[idx])
+        for k, v in boot.items():
+            if np.isfinite(v):
+                collected[k].append(float(v))
+
+    intervals: Dict[str, Any] = {}
+    for k, vals in collected.items():
+        if len(vals) < 20:
+            intervals[k] = {
+                "point": point.get(k),
+                "low": None,
+                "high": None,
+                "n_successful_resamples": int(len(vals)),
+                "status": "insufficient_successful_resamples",
+            }
+            continue
+        arr = np.asarray(vals, dtype=float)
+        intervals[k] = {
+            "point": point.get(k),
+            "low": float(np.quantile(arr, 0.025)),
+            "high": float(np.quantile(arr, 0.975)),
+            "n_successful_resamples": int(len(vals)),
+            "status": "ok",
+        }
+
+    return {
+        "status": "ok",
+        "unit_mode": unit_mode,
+        "n_units": n_units,
+        "n_bootstrap_requested": n_boot,
+        "n_samples": n,
+        "intervals": intervals,
+        "method": (
+            "cluster bootstrap over groups (resample groups with replacement)"
+            if unit_mode == "group"
+            else "sample bootstrap (resample samples with replacement)"
+        ),
+    }
 
 
 # -----------------------------------------------------------------------------
 # Metric helpers
 # -----------------------------------------------------------------------------
 
+
 def _safe_div(numerator: float, denominator: float) -> float:
     return float(numerator / denominator) if denominator else 0.0
 
 
-def _balanced_accuracy_no_warning(y_true: Sequence[Any], y_pred: Sequence[Any]) -> float:
+def _balanced_accuracy_no_warning(
+    y_true: Sequence[Any], y_pred: Sequence[Any]
+) -> float:
     """Compute balanced accuracy without sklearn warnings for extra predicted classes.
 
     sklearn warns when y_pred contains labels absent from y_true. For evaluation
@@ -266,19 +692,31 @@ def _balanced_accuracy_no_warning(y_true: Sequence[Any], y_pred: Sequence[Any]) 
     return float(np.mean(recalls)) if recalls else 0.0
 
 
-def _safe_macro_metric(metric_func, y_true: Sequence[Any], y_pred: Sequence[Any], *, labels: Optional[List[str]] = None) -> float:
+def _safe_macro_metric(
+    metric_func,
+    y_true: Sequence[Any],
+    y_pred: Sequence[Any],
+    *,
+    labels: Optional[List[str]] = None,
+) -> float:
     """Return a macro metric while treating extra prediction-only labels as zero-support classes."""
     y_true_arr = np.asarray([str(x) for x in y_true], dtype=object)
     y_pred_arr = np.asarray([str(x) for x in y_pred], dtype=object)
     if labels is None:
         labels = sorted(set(y_true_arr.tolist()).union(set(y_pred_arr.tolist())))
     try:
-        return float(metric_func(y_true_arr, y_pred_arr, labels=labels, average="macro", zero_division=0))
+        return float(
+            metric_func(
+                y_true_arr, y_pred_arr, labels=labels, average="macro", zero_division=0
+            )
+        )
     except Exception:
         return 0.0
 
 
-def _per_class_metrics(y_true: np.ndarray, y_pred: np.ndarray, labels: List[str]) -> pd.DataFrame:
+def _per_class_metrics(
+    y_true: np.ndarray, y_pred: np.ndarray, labels: List[str]
+) -> pd.DataFrame:
     cm = confusion_matrix(y_true, y_pred, labels=labels)
     total = int(cm.sum())
 
@@ -320,41 +758,141 @@ def _per_class_metrics(y_true: np.ndarray, y_pred: np.ndarray, labels: List[str]
     return pd.DataFrame(rows)
 
 
-def _normalise_score_rows(scores: pd.DataFrame) -> pd.DataFrame:
-    scores = scores.copy().astype(float)
-    row_sums = scores.sum(axis=1)
-    nonzero = row_sums > 0
-    scores.loc[nonzero, :] = scores.loc[nonzero, :].div(row_sums.loc[nonzero], axis=0)
-    return scores.fillna(0.0)
+def _class_has_genuine_support(
+    scores: pd.DataFrame, label: str, *, min_finite: int = 5
+) -> bool:
+    """True when a class column has enough finite scores (not fabricated zeros)."""
+    if scores is None or scores.empty or str(label) not in scores.columns:
+        return False
+    col = pd.to_numeric(scores[str(label)], errors="coerce")
+    return int(col.notna().sum()) >= int(min_finite)
+
+
+def _scores_are_top_class_only(scores: pd.DataFrame, labels: Sequence[str]) -> bool:
+    """Detect matrices that only expose a single top-class support column."""
+    if scores is None or scores.empty:
+        return True
+    present = [str(c) for c in scores.columns if str(c) in {str(x) for x in labels}]
+    if len(present) <= 1:
+        return True
+    # Per-row: at most one finite non-NaN score among evaluated labels → top-class only.
+    sub = scores.reindex(columns=present).apply(pd.to_numeric, errors="coerce")
+    finite_per_row = sub.notna().sum(axis=1)
+    if finite_per_row.empty:
+        return True
+    return bool((finite_per_row <= 1).mean() >= 0.9)
+
+
+def _scores_usable_for_auc(scores: pd.DataFrame) -> bool:
+    """Require finite, non-fabricated score mass for a majority of evaluated rows."""
+    if scores is None or scores.empty:
+        return False
+    arr = scores.to_numpy(dtype=float)
+    row_ok = np.isfinite(arr).any(axis=1)
+    return bool(row_ok.mean() >= 0.9 and int(row_ok.sum()) >= 5)
 
 
 def _roc_pr_outputs(
     eval_df: pd.DataFrame,
     scores: Optional[pd.DataFrame],
     labels: List[str],
+    *,
+    scores_are_calibrated_probabilities: bool = False,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, Dict[str, Any]]:
+    """
+    ROC/PR from class-support scores.
+
+    Rules
+    -----
+    - Do not fill absent class scores with zero.
+    - One-vs-rest AUC uses genuine finite scores for that class as a ranking
+      score (not renamed to probability unless calibrated).
+    - Multiclass AUC requires genuine support for **every** evaluated class;
+      skip when only top-class support is available and record why.
+    - Row-normalisation to a simplex is only applied when scores are documented
+      calibrated probabilities.
+    """
     if scores is None or scores.empty:
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), {
-            "status": "skipped",
-            "message": "No class-support score matrix was available for ROC/PR evaluation.",
-        }
+        return (
+            pd.DataFrame(),
+            pd.DataFrame(),
+            pd.DataFrame(),
+            {
+                "status": "skipped",
+                "skip_reason": "no_score_matrix",
+                "message": "No class-support score matrix was available for ROC/PR evaluation.",
+            },
+        )
 
-    usable_labels = [str(label) for label in labels if str(label) in scores.columns]
+    present_true = sorted({str(x) for x in eval_df["true_label"].astype(str).tolist()})
+    score_cols = {str(c) for c in scores.columns}
+    usable_labels = [str(label) for label in labels if str(label) in score_cols]
     if not usable_labels:
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), {
-            "status": "skipped",
-            "message": "Class-support scores did not contain columns matching evaluated labels.",
-        }
+        return (
+            pd.DataFrame(),
+            pd.DataFrame(),
+            pd.DataFrame(),
+            {
+                "status": "skipped",
+                "skip_reason": "no_matching_score_columns",
+                "message": "Class-support scores did not contain columns matching evaluated labels.",
+            },
+        )
 
-    scores_local = scores.reindex(columns=usable_labels).fillna(0.0)
-    scores_local = _normalise_score_rows(scores_local)
-    y_true = eval_df["true_label"].astype(str).to_numpy()
+    scores_local = scores.reindex(columns=usable_labels).apply(
+        pd.to_numeric, errors="coerce"
+    )
+    # Rows need at least one finite score for per-class ranking metrics.
+    row_ok = scores_local.notna().any(axis=1)
+    if int(row_ok.sum()) < 5 or float(row_ok.mean()) < 0.5:
+        return (
+            pd.DataFrame(),
+            pd.DataFrame(),
+            pd.DataFrame(),
+            {
+                "status": "skipped",
+                "skip_reason": "insufficient_finite_score_rows",
+                "message": (
+                    "Class-support scores are sparse (too few rows with finite scores); "
+                    "AUC was not computed. Absent class entries are not filled with zero."
+                ),
+            },
+        )
+
+    eval_local = eval_df.loc[row_ok].copy()
+    scores_local = scores_local.loc[row_ok]
+    y_true = eval_local["true_label"].astype(str).to_numpy()
+
+    # Ranking scores for OVR; optional simplex only if calibrated probabilities.
+    if scores_are_calibrated_probabilities:
+        row_sums = scores_local.sum(axis=1, min_count=1)
+        nonzero = row_sums > 0
+        scores_rank = scores_local.copy()
+        scores_rank.loc[nonzero, :] = scores_local.loc[nonzero, :].div(
+            row_sums.loc[nonzero], axis=0
+        )
+        score_kind = "calibrated_probability"
+    else:
+        scores_rank = scores_local
+        score_kind = "support_score_ranking"
 
     auc_rows: List[Dict[str, Any]] = []
     roc_rows: List[Dict[str, Any]] = []
     pr_rows: List[Dict[str, Any]] = []
 
     for label in usable_labels:
+        if not _class_has_genuine_support(scores_rank, label, min_finite=5):
+            auc_rows.append(
+                {
+                    "class_label": label,
+                    "roc_auc_ovr": np.nan,
+                    "pr_auc_average_precision": np.nan,
+                    "status": "skipped_no_genuine_class_support",
+                    "skip_reason": "class_score_column_sparse_or_absent",
+                }
+            )
+            continue
+
         binary_true = (y_true == label).astype(int)
         if len(np.unique(binary_true)) < 2:
             auc_rows.append(
@@ -363,14 +901,31 @@ def _roc_pr_outputs(
                     "roc_auc_ovr": np.nan,
                     "pr_auc_average_precision": np.nan,
                     "status": "skipped_single_class_truth",
+                    "skip_reason": "single_class_truth_for_ovr",
                 }
             )
             continue
 
-        score = scores_local[label].to_numpy(dtype=float)
+        score = scores_rank[label].to_numpy(dtype=float)
+        # Only use rows with finite score for this class (no zero-fill).
+        finite_mask = np.isfinite(score)
+        if int(finite_mask.sum()) < 5 or len(np.unique(binary_true[finite_mask])) < 2:
+            auc_rows.append(
+                {
+                    "class_label": label,
+                    "roc_auc_ovr": np.nan,
+                    "pr_auc_average_precision": np.nan,
+                    "status": "skipped_insufficient_finite_scores",
+                    "skip_reason": "insufficient_finite_scores_for_class",
+                }
+            )
+            continue
+
         try:
-            roc_auc = float(roc_auc_score(binary_true, score))
-            fpr, tpr, roc_thresholds = roc_curve(binary_true, score)
+            roc_auc = float(roc_auc_score(binary_true[finite_mask], score[finite_mask]))
+            fpr, tpr, roc_thresholds = roc_curve(
+                binary_true[finite_mask], score[finite_mask]
+            )
             for fpr_i, tpr_i, thr_i in zip(fpr, tpr, roc_thresholds):
                 roc_rows.append(
                     {
@@ -385,11 +940,16 @@ def _roc_pr_outputs(
             logger.warning("ROC calculation failed for one class: %s", exc)
 
         try:
-            pr_auc = float(average_precision_score(binary_true, score))
-            precision, recall, pr_thresholds = precision_recall_curve(binary_true, score)
-            # precision/recall has one extra point beyond thresholds.
+            pr_auc = float(
+                average_precision_score(binary_true[finite_mask], score[finite_mask])
+            )
+            precision, recall, pr_thresholds = precision_recall_curve(
+                binary_true[finite_mask], score[finite_mask]
+            )
             padded_thresholds = list(pr_thresholds) + [np.nan]
-            for precision_i, recall_i, thr_i in zip(precision, recall, padded_thresholds):
+            for precision_i, recall_i, thr_i in zip(
+                precision, recall, padded_thresholds
+            ):
                 pr_rows.append(
                     {
                         "class_label": label,
@@ -407,60 +967,119 @@ def _roc_pr_outputs(
                 "class_label": label,
                 "roc_auc_ovr": roc_auc,
                 "pr_auc_average_precision": pr_auc,
-                "status": "ok" if np.isfinite(roc_auc) or np.isfinite(pr_auc) else "failed",
+                "status": "ok"
+                if np.isfinite(roc_auc) or np.isfinite(pr_auc)
+                else "failed",
+                "score_kind": score_kind,
             }
         )
 
     macro_roc_auc = np.nan
     weighted_roc_auc = np.nan
     macro_pr_auc = np.nan
+    multiclass_skip_reason: Optional[str] = None
 
-    try:
-        present_true_labels = sorted(set(map(str, y_true)))
-        multiclass_labels = [label for label in usable_labels if label in present_true_labels]
-        if len(multiclass_labels) >= 2:
-            score_all = scores_local.reindex(columns=multiclass_labels).fillna(0.0)
-            score_all = _normalise_score_rows(score_all)
-            macro_roc_auc = float(
-                roc_auc_score(
-                    y_true,
-                    score_all.to_numpy(dtype=float),
-                    labels=multiclass_labels,
-                    multi_class="ovr",
-                    average="macro",
-                )
+    present_true_labels = sorted(set(map(str, y_true)))
+    multiclass_labels = [
+        label for label in usable_labels if label in present_true_labels
+    ]
+    if len(multiclass_labels) < 2:
+        multiclass_skip_reason = "fewer_than_two_truth_classes"
+    elif _scores_are_top_class_only(scores_rank, multiclass_labels):
+        multiclass_skip_reason = "only_top_class_support_available"
+    else:
+        missing_support = [
+            lab
+            for lab in multiclass_labels
+            if not _class_has_genuine_support(scores_rank, lab, min_finite=5)
+        ]
+        if missing_support:
+            multiclass_skip_reason = "missing_genuine_support_for_classes:" + ",".join(
+                missing_support[:20]
             )
-            weighted_roc_auc = float(
-                roc_auc_score(
-                    y_true,
-                    score_all.to_numpy(dtype=float),
-                    labels=multiclass_labels,
-                    multi_class="ovr",
-                    average="weighted",
-                )
-            )
-    except Exception:
-        # Per-class one-vs-rest AUC rows remain the primary output.
-        pass
+        else:
+            score_all = scores_rank.reindex(columns=multiclass_labels)
+            # Multiclass OVR requires finite scores for every class on every row.
+            complete = score_all.notna().all(axis=1)
+            if int(complete.sum()) < 5:
+                multiclass_skip_reason = "too_few_rows_with_complete_multiclass_scores"
+            else:
+                try:
+                    y_mc = y_true[complete.to_numpy()]
+                    score_arr = score_all.loc[complete].to_numpy(dtype=float)
+                    if scores_are_calibrated_probabilities:
+                        row_sums = score_arr.sum(axis=1, keepdims=True)
+                        row_sums = np.where(row_sums > 0, row_sums, np.nan)
+                        score_arr = score_arr / row_sums
+                    if np.isfinite(score_arr).all() and len(set(map(str, y_mc))) >= 2:
+                        macro_roc_auc = float(
+                            roc_auc_score(
+                                y_mc,
+                                score_arr,
+                                labels=multiclass_labels,
+                                multi_class="ovr",
+                                average="macro",
+                            )
+                        )
+                        weighted_roc_auc = float(
+                            roc_auc_score(
+                                y_mc,
+                                score_arr,
+                                labels=multiclass_labels,
+                                multi_class="ovr",
+                                average="weighted",
+                            )
+                        )
+                    else:
+                        multiclass_skip_reason = "non_finite_multiclass_score_block"
+                except Exception as exc:
+                    multiclass_skip_reason = f"multiclass_auc_failed:{exc}"
 
     auc_df = pd.DataFrame(auc_rows)
     if not auc_df.empty and "pr_auc_average_precision" in auc_df.columns:
-        macro_pr_auc = float(pd.to_numeric(auc_df["pr_auc_average_precision"], errors="coerce").mean())
+        macro_pr_auc = float(
+            pd.to_numeric(auc_df["pr_auc_average_precision"], errors="coerce").mean()
+        )
 
-    summary = {
-        "status": "ok" if not auc_df.empty else "skipped",
+    any_ok = (
+        bool(auc_df["status"].eq("ok").any())
+        if not auc_df.empty and "status" in auc_df.columns
+        else False
+    )
+    summary: Dict[str, Any] = {
+        "status": "ok" if any_ok else "skipped",
         "scored_classes": int(len(usable_labels)),
+        "score_kind": score_kind,
+        "scores_are_calibrated_probabilities": bool(
+            scores_are_calibrated_probabilities
+        ),
         "macro_roc_auc_ovr": macro_roc_auc if np.isfinite(macro_roc_auc) else None,
-        "weighted_roc_auc_ovr": weighted_roc_auc if np.isfinite(weighted_roc_auc) else None,
-        "macro_pr_auc_average_precision": macro_pr_auc if np.isfinite(macro_pr_auc) else None,
+        "weighted_roc_auc_ovr": weighted_roc_auc
+        if np.isfinite(weighted_roc_auc)
+        else None,
+        "macro_pr_auc_average_precision": macro_pr_auc
+        if np.isfinite(macro_pr_auc)
+        else None,
+        "n_truth_classes_in_eval": int(len(present_true)),
     }
+    if multiclass_skip_reason is not None:
+        summary["multiclass_auc_status"] = "skipped"
+        summary["multiclass_auc_skip_reason"] = multiclass_skip_reason
+        summary["message"] = f"Multiclass AUC skipped: {multiclass_skip_reason}"
+    elif np.isfinite(macro_roc_auc):
+        summary["multiclass_auc_status"] = "ok"
+    if not any_ok and summary["status"] == "skipped" and "message" not in summary:
+        summary["skip_reason"] = "no_per_class_auc_computed"
+        summary[
+            "message"
+        ] = "No per-class AUC could be computed from available support scores."
     return auc_df, pd.DataFrame(roc_rows), pd.DataFrame(pr_rows), summary
-
 
 
 # -----------------------------------------------------------------------------
 # Prediction-table loaders
 # -----------------------------------------------------------------------------
+
 
 def _resolve_required_column(
     df: pd.DataFrame,
@@ -553,9 +1172,10 @@ def load_predictions_from_table(
     index = df[sample_col].astype(str).map(normalize_sample_id)
     y_pred = _normalise_label_series(df[pred_col])
     y_pred.index = index
-    y_pred = y_pred.dropna()
     y_pred = y_pred[y_pred.index.astype(str).str.len() > 0]
-    y_pred = y_pred[~y_pred.index.duplicated(keep="first")]
+    assert_unique_normalized_ids(
+        y_pred.index.tolist(), context="prediction table sample IDs"
+    )
     y_pred = y_pred.rename("predicted_label")
 
     score_df: Optional[pd.DataFrame] = None
@@ -563,24 +1183,33 @@ def load_predictions_from_table(
 
     if score_json_column:
         if score_json_column not in df.columns:
-            raise ValueError(f"score_json_column '{score_json_column}' not found in prediction table")
+            raise ValueError(
+                f"score_json_column '{score_json_column}' not found in prediction table"
+            )
         score_dicts = [_parse_score_mapping(v) for v in df[score_json_column].tolist()]
-        score_df = score_dicts_to_frame(df[sample_col].astype(str).tolist(), score_dicts)
+        score_df = score_dicts_to_frame(
+            df[sample_col].astype(str).tolist(), score_dicts
+        )
         score_source = score_json_column
     elif score_prefix:
-        score_cols = [col for col in df.columns if str(col).startswith(str(score_prefix))]
+        score_cols = [
+            col for col in df.columns if str(col).startswith(str(score_prefix))
+        ]
         if not score_cols:
             raise ValueError(f"No score columns found with prefix '{score_prefix}'")
         score_df = df.loc[:, score_cols].copy()
-        score_df.columns = [str(c)[len(str(score_prefix)):] for c in score_cols]
+        score_df.columns = [str(c)[len(str(score_prefix)) :] for c in score_cols]
         score_df.index = index
-        score_df = score_df.apply(pd.to_numeric, errors="coerce").fillna(0.0)
+        # Keep NaN for missing score cells; do not fabricate zeros.
+        score_df = score_df.apply(pd.to_numeric, errors="coerce")
         score_source = f"prefix:{score_prefix}"
     else:
         for candidate in ("class_support_json", "class_support", "support_scores_json"):
             if candidate in df.columns:
                 score_dicts = [_parse_score_mapping(v) for v in df[candidate].tolist()]
-                score_df = score_dicts_to_frame(df[sample_col].astype(str).tolist(), score_dicts)
+                score_df = score_dicts_to_frame(
+                    df[sample_col].astype(str).tolist(), score_dicts
+                )
                 score_source = candidate
                 break
 
@@ -594,8 +1223,6 @@ def load_predictions_from_table(
         "score_matrix_available": bool(score_df is not None and not score_df.empty),
     }
     return y_pred, score_df, summary
-
-
 
 
 def _prediction_table_with_sample_index(
@@ -615,7 +1242,10 @@ def _prediction_table_with_sample_index(
     df = df.copy()
     df["__sample_id_normalized"] = df[sample_col].astype(str).map(normalize_sample_id)
     df = df[df["__sample_id_normalized"].astype(str).str.len() > 0]
-    df = df.drop_duplicates(subset=["__sample_id_normalized"], keep="first")
+    assert_unique_normalized_ids(
+        df["__sample_id_normalized"].tolist(),
+        context=f"prediction table ({predictions_path})",
+    )
     df = df.set_index("__sample_id_normalized", drop=False)
     return df, sample_col
 
@@ -627,9 +1257,13 @@ def _metadata_truth_frame(
 ) -> Tuple[pd.DataFrame, Optional[str]]:
     """Load multiple metadata truth columns with a normalized sample-id index."""
     meta = _read_table(meta_path)
-    missing = [str(label) for label in hierarchy_labels if str(label) not in meta.columns]
+    missing = [
+        str(label) for label in hierarchy_labels if str(label) not in meta.columns
+    ]
     if missing:
-        raise ValueError(f"Metadata is missing hierarchy label column(s): {', '.join(missing)}")
+        raise ValueError(
+            f"Metadata is missing hierarchy label column(s): {', '.join(missing)}"
+        )
 
     sid_col = _resolve_sample_id_column(meta, sample_id_column)
     if sid_col is not None:
@@ -645,11 +1279,15 @@ def _metadata_truth_frame(
         truth[str(label)] = _normalise_label_series(meta[str(label)]).values
     truth = truth.dropna(how="any")
     truth = truth[truth.index.astype(str).str.len() > 0]
-    truth = truth[~truth.index.duplicated(keep="first")]
+    assert_unique_normalized_ids(
+        truth.index.tolist(), context="metadata hierarchy truth"
+    )
     return truth, sid_col
 
 
-def _hierarchy_prediction_columns(df: pd.DataFrame, n_levels: int) -> List[Optional[str]]:
+def _hierarchy_prediction_columns(
+    df: pd.DataFrame, n_levels: int
+) -> List[Optional[str]]:
     """Resolve predicted_level columns for hierarchy outputs, one per level."""
     cols: List[Optional[str]] = []
     for i in range(1, int(n_levels) + 1):
@@ -664,7 +1302,9 @@ def _hierarchy_prediction_columns(df: pd.DataFrame, n_levels: int) -> List[Optio
     return cols
 
 
-def _parse_predicted_hierarchy_path_value(value: Any, hierarchy_labels: Sequence[str]) -> Dict[str, str]:
+def _parse_predicted_hierarchy_path_value(
+    value: Any, hierarchy_labels: Sequence[str]
+) -> Dict[str, str]:
     """Parse strings like label=value / label=value into label -> predicted value."""
     text = str(value or "").strip()
     out: Dict[str, str] = {}
@@ -698,7 +1338,9 @@ def evaluate_hierarchy_prediction_table(
     """
     labels = [str(x) for x in hierarchy_labels if str(x).strip()]
     if not labels:
-        raise ValueError("hierarchy_labels must contain at least one metadata label column")
+        raise ValueError(
+            "hierarchy_labels must contain at least one metadata label column"
+        )
 
     out = _ensure_dir(Path(output_dir))
     pred_df, pred_sample_col = _prediction_table_with_sample_index(
@@ -713,13 +1355,15 @@ def evaluate_hierarchy_prediction_table(
 
     common = truth_df.index.intersection(pred_df.index)
     if common.empty:
-        summary = {
+        summary: Dict[str, Any] = {
             "status": "skipped",
             "message": "No overlapping labelled samples between hierarchy predictions and metadata.",
             "hierarchy_labels": labels,
             "n_evaluated_samples": 0,
             "artifacts": {
-                "full_path_predictions_tsv": str(out / "hierarchy_full_path_predictions.tsv"),
+                "full_path_predictions_tsv": str(
+                    out / "hierarchy_full_path_predictions.tsv"
+                ),
                 "summary_json": str(out / "hierarchy_full_path_summary.json"),
             },
         }
@@ -772,7 +1416,9 @@ def evaluate_hierarchy_prediction_table(
                 "predicted_hierarchy_path_normalized": " / ".join(pred_parts),
                 "full_path_correct": bool(all(level_correct)),
                 "deepest_correct_prefix_level": int(deepest_correct_prefix),
-                "terminal_level_correct": bool(level_correct[-1]) if level_correct else False,
+                "terminal_level_correct": bool(level_correct[-1])
+                if level_correct
+                else False,
             }
         )
         rows.append(row)
@@ -784,7 +1430,11 @@ def evaluate_hierarchy_prediction_table(
     level_summaries: List[Dict[str, Any]] = []
     for i, label in enumerate(labels, start=1):
         col = f"level{i}_correct"
-        values = full_path_df[col].astype(bool) if col in full_path_df.columns else pd.Series(dtype=bool)
+        values = (
+            full_path_df[col].astype(bool)
+            if col in full_path_df.columns
+            else pd.Series(dtype=bool)
+        )
         level_summaries.append(
             {
                 "level_number": int(i),
@@ -809,9 +1459,17 @@ def evaluate_hierarchy_prediction_table(
         "status": "success",
         "hierarchy_labels": labels,
         "n_evaluated_samples": int(full_path_df.shape[0]),
-        "full_path_accuracy": float(full_path_df["full_path_correct"].mean()) if not full_path_df.empty else None,
-        "terminal_level_accuracy": float(full_path_df["terminal_level_correct"].mean()) if not full_path_df.empty else None,
-        "mean_deepest_correct_prefix_level": float(full_path_df["deepest_correct_prefix_level"].mean()) if not full_path_df.empty else None,
+        "full_path_accuracy": float(full_path_df["full_path_correct"].mean())
+        if not full_path_df.empty
+        else None,
+        "terminal_level_accuracy": float(full_path_df["terminal_level_correct"].mean())
+        if not full_path_df.empty
+        else None,
+        "mean_deepest_correct_prefix_level": float(
+            full_path_df["deepest_correct_prefix_level"].mean()
+        )
+        if not full_path_df.empty
+        else None,
         "per_level": level_summaries,
         "input": {
             "predictions_path": str(predictions_path),
@@ -889,7 +1547,9 @@ def evaluate_hierarchy_branch_diagnostics(
             "hierarchy_labels": labels,
             "n_evaluated_samples": 0,
             "artifacts": {
-                "per_parent_child_metrics_tsv": str(out / "per_parent_child_metrics.tsv"),
+                "per_parent_child_metrics_tsv": str(
+                    out / "per_parent_child_metrics.tsv"
+                ),
                 "summary_json": str(out / "branch_diagnostics_summary.json"),
             },
         }
@@ -900,7 +1560,9 @@ def evaluate_hierarchy_branch_diagnostics(
     for i, label in enumerate(labels, start=1):
         pred_col = pred_level_cols[i - 1]
         if pred_col is not None:
-            merged[f"__pred_level{i}"] = _normalise_label_series(pred_df.loc[common, pred_col])
+            merged[f"__pred_level{i}"] = _normalise_label_series(
+                pred_df.loc[common, pred_col]
+            )
         else:
             parsed_values: List[str] = []
             for sample_id in common.astype(str):
@@ -909,7 +1571,9 @@ def evaluate_hierarchy_branch_diagnostics(
                     labels,
                 )
                 parsed_values.append(parsed.get(label, ""))
-            merged[f"__pred_level{i}"] = _normalise_label_series(pd.Series(parsed_values, index=common))
+            merged[f"__pred_level{i}"] = _normalise_label_series(
+                pd.Series(parsed_values, index=common)
+            )
 
     parent_label_col = labels[parent_level - 1]
     parent_pred_col = f"__pred_level{parent_level}"
@@ -918,62 +1582,120 @@ def evaluate_hierarchy_branch_diagnostics(
     per_sample_rows: List[Dict[str, Any]] = []
 
     parent_values = sorted(
-        [str(x) for x in merged[parent_label_col].dropna().astype(str).unique() if str(x).strip()]
+        [
+            str(x)
+            for x in merged[parent_label_col].dropna().astype(str).unique()
+            if str(x).strip()
+        ]
     )
 
     for parent_value in parent_values:
-        branch = merged[merged[parent_label_col].astype(str) == str(parent_value)].copy()
+        branch = merged[
+            merged[parent_label_col].astype(str) == str(parent_value)
+        ].copy()
         if branch.empty:
             continue
 
-        parent_pred_available = branch[parent_pred_col].dropna().astype(str).str.len() > 0 if parent_pred_col in branch.columns else pd.Series(dtype=bool)
+        parent_pred_available = (
+            branch[parent_pred_col].dropna().astype(str).str.len() > 0
+            if parent_pred_col in branch.columns
+            else pd.Series(dtype=bool)
+        )
         parent_correct = (
-            branch[parent_pred_col].astype(str) == branch[parent_label_col].astype(str)
-        ) if parent_pred_col in branch.columns else pd.Series(False, index=branch.index)
+            (
+                branch[parent_pred_col].astype(str)
+                == branch[parent_label_col].astype(str)
+            )
+            if parent_pred_col in branch.columns
+            else pd.Series(False, index=branch.index)
+        )
 
         for child_level in range(parent_level + 1, len(labels) + 1):
             child_label_col = labels[child_level - 1]
             child_pred_col = f"__pred_level{child_level}"
 
             true_child = _normalise_label_series(branch[child_label_col]).dropna()
-            pred_child = _normalise_label_series(branch[child_pred_col]) if child_pred_col in branch.columns else pd.Series(index=branch.index, dtype=object)
+            pred_child = (
+                _normalise_label_series(branch[child_pred_col])
+                if child_pred_col in branch.columns
+                else pd.Series(index=branch.index, dtype=object)
+            )
             pred_child = pred_child.dropna()
 
             truth_index = true_child.index
             eval_index = truth_index.intersection(pred_child.index)
-            y_true = true_child.loc[eval_index].astype(str) if len(eval_index) else pd.Series(dtype=str)
-            y_pred = pred_child.loc[eval_index].astype(str) if len(eval_index) else pd.Series(dtype=str)
+            y_true = (
+                true_child.loc[eval_index].astype(str)
+                if len(eval_index)
+                else pd.Series(dtype=str)
+            )
+            y_pred = (
+                pred_child.loc[eval_index].astype(str)
+                if len(eval_index)
+                else pd.Series(dtype=str)
+            )
 
             n_parent_samples = int(branch.shape[0])
             n_truth_child = int(true_child.shape[0])
-            n_with_child_prediction = int(pred_child.reindex(truth_index).dropna().shape[0]) if n_truth_child else 0
+            n_with_child_prediction = (
+                int(pred_child.reindex(truth_index).dropna().shape[0])
+                if n_truth_child
+                else 0
+            )
             n_evaluated = int(y_true.shape[0])
             prediction_coverage = float(n_with_child_prediction / max(1, n_truth_child))
-            parent_prediction_coverage = float(parent_pred_available.mean()) if len(parent_pred_available) else 0.0
-            parent_accuracy_within_branch = float(parent_correct.mean()) if len(parent_correct) else None
+            parent_prediction_coverage = (
+                float(parent_pred_available.mean())
+                if len(parent_pred_available)
+                else 0.0
+            )
+            parent_accuracy_within_branch = (
+                float(parent_correct.mean()) if len(parent_correct) else None
+            )
 
-            true_classes = sorted(set(y_true.astype(str).tolist())) if n_evaluated else sorted(set(true_child.astype(str).tolist()))
-            pred_classes = sorted(set(y_pred.astype(str).tolist())) if n_evaluated else sorted(set(pred_child.astype(str).tolist()))
+            true_classes = (
+                sorted(set(y_true.astype(str).tolist()))
+                if n_evaluated
+                else sorted(set(true_child.astype(str).tolist()))
+            )
+            pred_classes = (
+                sorted(set(y_pred.astype(str).tolist()))
+                if n_evaluated
+                else sorted(set(pred_child.astype(str).tolist()))
+            )
             predicted_absent_from_truth = sorted(set(pred_classes) - set(true_classes))
             true_never_predicted = sorted(set(true_classes) - set(pred_classes))
 
             if n_evaluated and len(set(y_true.astype(str))) >= 2:
-                labels_union = sorted(set(y_true.astype(str).tolist()).union(set(y_pred.astype(str).tolist())))
+                labels_union = sorted(
+                    set(y_true.astype(str).tolist()).union(
+                        set(y_pred.astype(str).tolist())
+                    )
+                )
                 balanced_accuracy = _balanced_accuracy_no_warning(y_true, y_pred)
-                macro_tpr = _safe_macro_metric(recall_score, y_true, y_pred, labels=labels_union)
-                macro_f1 = _safe_macro_metric(f1_score, y_true, y_pred, labels=labels_union)
+                macro_tpr = _safe_macro_metric(
+                    recall_score, y_true, y_pred, labels=labels_union
+                )
+                macro_f1 = _safe_macro_metric(
+                    f1_score, y_true, y_pred, labels=labels_union
+                )
             else:
                 balanced_accuracy = None
                 macro_tpr = None
                 macro_f1 = None
 
-            if n_truth_child < int(min_samples_for_reliable_profile) or len(set(true_child.astype(str))) < 2:
+            if (
+                n_truth_child < int(min_samples_for_reliable_profile)
+                or len(set(true_child.astype(str))) < 2
+            ):
                 recommended_route = "insufficient_support"
                 reason = "Branch has too little evaluable support or only one observed child class."
             elif prediction_coverage < float(min_prediction_coverage_for_exact):
                 recommended_route = "routing_or_prediction_coverage_issue"
                 reason = "Many samples in this parent branch lack a downstream child prediction."
-            elif balanced_accuracy is not None and balanced_accuracy >= float(min_balanced_accuracy_for_exact):
+            elif balanced_accuracy is not None and balanced_accuracy >= float(
+                min_balanced_accuracy_for_exact
+            ):
                 recommended_route = "use_exact_child_prediction"
                 reason = "Child-level prediction is sufficiently recovered within this parent branch."
             elif len(set(true_child.astype(str))) > 2:
@@ -998,12 +1720,18 @@ def evaluate_hierarchy_branch_diagnostics(
                     "prediction_coverage": prediction_coverage,
                     "parent_prediction_coverage": parent_prediction_coverage,
                     "parent_accuracy_within_branch": parent_accuracy_within_branch,
-                    "n_true_child_classes": int(len(set(true_child.astype(str)))) if n_truth_child else 0,
-                    "n_pred_child_classes": int(len(set(pred_child.astype(str)))) if not pred_child.empty else 0,
+                    "n_true_child_classes": int(len(set(true_child.astype(str))))
+                    if n_truth_child
+                    else 0,
+                    "n_pred_child_classes": int(len(set(pred_child.astype(str))))
+                    if not pred_child.empty
+                    else 0,
                     "balanced_accuracy": balanced_accuracy,
                     "macro_true_positive_rate": macro_tpr,
                     "macro_f1": macro_f1,
-                    "predicted_classes_absent_from_truth": ";".join(predicted_absent_from_truth),
+                    "predicted_classes_absent_from_truth": ";".join(
+                        predicted_absent_from_truth
+                    ),
                     "true_classes_never_predicted": ";".join(true_never_predicted),
                     "recommended_route": recommended_route,
                     "reason": reason,
@@ -1020,9 +1748,15 @@ def evaluate_hierarchy_branch_diagnostics(
                         "parent_label": str(parent_value),
                         "child_level": int(child_level),
                         "child_label": child_label_col,
-                        "true_child_label": "" if pd.isna(true_value) else str(true_value),
-                        "predicted_child_label": "" if pd.isna(pred_value) else str(pred_value),
-                        "child_prediction_present": bool(not pd.isna(pred_value) and str(pred_value).strip()),
+                        "true_child_label": ""
+                        if pd.isna(true_value)
+                        else str(true_value),
+                        "predicted_child_label": ""
+                        if pd.isna(pred_value)
+                        else str(pred_value),
+                        "child_prediction_present": bool(
+                            not pd.isna(pred_value) and str(pred_value).strip()
+                        ),
                         "child_prediction_correct": bool(
                             not pd.isna(true_value)
                             and not pd.isna(pred_value)
@@ -1042,7 +1776,12 @@ def evaluate_hierarchy_branch_diagnostics(
     recommendations_path = out / "per_parent_fallback_recommendations.tsv"
     if not metrics_df.empty:
         metrics_df.sort_values(
-            ["child_level", "recommended_route", "prediction_coverage", "balanced_accuracy"],
+            [
+                "child_level",
+                "recommended_route",
+                "prediction_coverage",
+                "balanced_accuracy",
+            ],
             ascending=[True, True, True, False],
             na_position="first",
         ).to_csv(recommendations_path, sep="\t", index=False)
@@ -1050,7 +1789,10 @@ def evaluate_hierarchy_branch_diagnostics(
         pd.DataFrame().to_csv(recommendations_path, sep="\t", index=False)
 
     route_counts = (
-        metrics_df["recommended_route"].value_counts(dropna=False).rename_axis("recommended_route").reset_index(name="n_branches")
+        metrics_df["recommended_route"]
+        .value_counts(dropna=False)
+        .rename_axis("recommended_route")
+        .reset_index(name="n_branches")
         if not metrics_df.empty and "recommended_route" in metrics_df.columns
         else pd.DataFrame(columns=["recommended_route", "n_branches"])
     )
@@ -1065,7 +1807,9 @@ def evaluate_hierarchy_branch_diagnostics(
         "n_evaluated_samples": int(len(common)),
         "n_parent_branches": int(len(parent_values)),
         "n_branch_child_rows": int(metrics_df.shape[0]),
-        "prediction_columns": {f"level_{i}": pred_level_cols[i - 1] for i in range(1, len(labels) + 1)},
+        "prediction_columns": {
+            f"level_{i}": pred_level_cols[i - 1] for i in range(1, len(labels) + 1)
+        },
         "input": {
             "predictions_path": str(predictions_path),
             "prediction_sample_id_column": pred_sample_col,
@@ -1086,6 +1830,7 @@ def evaluate_hierarchy_branch_diagnostics(
     }
     _write_json(summary, out / "branch_diagnostics_summary.json")
     return summary
+
 
 def evaluate_prediction_table(
     *,
@@ -1137,9 +1882,11 @@ def evaluate_prediction_table(
     _write_json(summary, Path(output_dir) / "model_performance_summary.json")
     return summary
 
+
 # -----------------------------------------------------------------------------
 # Public API
 # -----------------------------------------------------------------------------
+
 
 def evaluate_predictions(
     *,
@@ -1148,10 +1895,40 @@ def evaluate_predictions(
     class_support_scores: Optional[pd.DataFrame] = None,
     output_dir: str | Path,
     level_name: str = "model",
+    evaluation_role: str = "held_out",
+    abstention_tokens: Optional[Iterable[str]] = None,
+    groups: Optional[Sequence[Any]] = None,
+    n_bootstrap: int = 500,
+    scores_are_calibrated_probabilities: bool = False,
+    random_state: int = 42,
 ) -> Dict[str, Any]:
-    """Evaluate predictions and write diagnostic performance artifacts."""
+    """Evaluate predictions and write diagnostic performance artifacts.
+
+    Parameters
+    ----------
+    evaluation_role
+        ``held_out`` / ``external`` / ``out_of_fold`` / ``internal_cv`` for
+        generalisation or internal estimates; ``training_fit_diagnostics`` for
+        same-data scores that must not be reported as generalisation.
+    groups
+        Optional group labels aligned to called samples (or truth index order
+        after alignment) for cluster bootstrap CIs.
+    scores_are_calibrated_probabilities
+        When False (default), class scores are treated as support/ranking
+        scores, not probabilities. Row-normalisation to a simplex is skipped.
+    """
+    role = str(evaluation_role or "held_out").strip().lower()
+    if role not in EVALUATION_ROLES:
+        role = "held_out"
+
     out = _ensure_dir(Path(output_dir))
-    eval_df, scores = _align_truth_and_predictions(y_true, y_pred, class_support_scores)
+    eval_df, scores, e2e = _align_truth_and_predictions(
+        y_true,
+        y_pred,
+        class_support_scores,
+        drop_abstentions_for_called_metrics=True,
+        abstention_tokens=abstention_tokens,
+    )
 
     artifacts = {
         "sample_predictions": str(out / "evaluated_sample_predictions.tsv"),
@@ -1161,18 +1938,62 @@ def evaluate_predictions(
         "roc_auc_summary_tsv": str(out / "roc_auc_summary.tsv"),
         "roc_curve_points_tsv": str(out / "roc_curve_points.tsv"),
         "pr_curve_points_tsv": str(out / "pr_curve_points.tsv"),
+        "bootstrap_ci_json": str(out / "bootstrap_metric_cis.json"),
     }
 
-    eval_df.to_csv(artifacts["sample_predictions"], sep="\t", index=False)
+    # Full audit table: every truth sample, including those without predictions.
+    full_df, _, _ = _align_truth_and_predictions(
+        y_true,
+        y_pred,
+        class_support_scores,
+        drop_abstentions_for_called_metrics=False,
+        abstention_tokens=abstention_tokens,
+        include_truth_without_prediction=True,
+    )
+    full_df.to_csv(artifacts["sample_predictions"], sep="\t", index=False)
 
-    if eval_df.empty:
-        summary = {
+    if eval_df.empty and e2e.get("n_truth_samples", 0) == 0:
+        summary: Dict[str, Any] = {
             "status": "skipped",
             "level_name": level_name,
+            "evaluation_role": role,
+            "is_generalization_estimate": role not in {"training_fit_diagnostics"},
             "n_evaluated_samples": 0,
+            "end_to_end": e2e,
             "message": "No overlapping labelled samples between predictions and metadata.",
             "artifacts": artifacts,
         }
+        _write_json(summary, out / "model_performance_summary.json")
+        return summary
+
+    if eval_df.empty:
+        # Truth exists but no called predictions
+        summary = {
+            "status": "success",
+            "level_name": level_name,
+            "evaluation_role": role,
+            "is_generalization_estimate": role not in {"training_fit_diagnostics"},
+            "n_evaluated_samples": 0,
+            "n_called_samples": 0,
+            "accuracy": 0.0,
+            "balanced_accuracy": 0.0,
+            "accuracy_called_only": 0.0,
+            "end_to_end": e2e,
+            "coverage_call_rate": e2e.get("coverage_call_rate", 0.0),
+            "accuracy_end_to_end_all_truth": e2e.get(
+                "accuracy_end_to_end_all_truth", 0.0
+            ),
+            "method_note": (
+                "All matched predictions abstained or were missing; called-only metrics are empty. "
+                "End-to-end metrics use the full truth denominator. "
+                "Per-sample audit includes truth samples without predictions."
+            ),
+            "artifacts": artifacts,
+        }
+        if role == "training_fit_diagnostics":
+            summary[
+                "method_note"
+            ] += " Role=training_fit_diagnostics: not a generalisation performance claim."
         _write_json(summary, out / "model_performance_summary.json")
         return summary
 
@@ -1184,23 +2005,82 @@ def evaluate_predictions(
     by_class.to_csv(artifacts["by_class_tsv"], sep="\t", index=False)
 
     cm = confusion_matrix(y_true_arr, y_pred_arr, labels=labels)
-    cm_df = pd.DataFrame(cm, index=[f"true::{x}" for x in labels], columns=[f"pred::{x}" for x in labels])
+    cm_df = pd.DataFrame(
+        cm, index=[f"true::{x}" for x in labels], columns=[f"pred::{x}" for x in labels]
+    )
     cm_df.to_csv(artifacts["confusion_matrix_tsv"], sep="\t")
 
-    precision_macro = precision_score(y_true_arr, y_pred_arr, labels=labels, average="macro", zero_division=0)
-    recall_macro = recall_score(y_true_arr, y_pred_arr, labels=labels, average="macro", zero_division=0)
-    f1_macro = f1_score(y_true_arr, y_pred_arr, labels=labels, average="macro", zero_division=0)
-    precision_weighted = precision_score(y_true_arr, y_pred_arr, labels=labels, average="weighted", zero_division=0)
-    recall_weighted = recall_score(y_true_arr, y_pred_arr, labels=labels, average="weighted", zero_division=0)
-    f1_weighted = f1_score(y_true_arr, y_pred_arr, labels=labels, average="weighted", zero_division=0)
+    precision_macro = precision_score(
+        y_true_arr, y_pred_arr, labels=labels, average="macro", zero_division=0
+    )
+    recall_macro = recall_score(
+        y_true_arr, y_pred_arr, labels=labels, average="macro", zero_division=0
+    )
+    f1_macro = f1_score(
+        y_true_arr, y_pred_arr, labels=labels, average="macro", zero_division=0
+    )
+    precision_weighted = precision_score(
+        y_true_arr, y_pred_arr, labels=labels, average="weighted", zero_division=0
+    )
+    recall_weighted = recall_score(
+        y_true_arr, y_pred_arr, labels=labels, average="weighted", zero_division=0
+    )
+    f1_weighted = f1_score(
+        y_true_arr, y_pred_arr, labels=labels, average="weighted", zero_division=0
+    )
 
-    macro_specificity = float(pd.to_numeric(by_class["specificity"], errors="coerce").mean()) if not by_class.empty else 0.0
-    macro_npv = float(pd.to_numeric(by_class["npv"], errors="coerce").mean()) if not by_class.empty else 0.0
+    macro_specificity = (
+        float(pd.to_numeric(by_class["specificity"], errors="coerce").mean())
+        if not by_class.empty
+        else 0.0
+    )
+    macro_npv = (
+        float(pd.to_numeric(by_class["npv"], errors="coerce").mean())
+        if not by_class.empty
+        else 0.0
+    )
 
-    auc_df, roc_points, pr_points, auc_summary = _roc_pr_outputs(eval_df, scores, labels)
+    n_called = int(len(eval_df))
+    n_correct = int((y_true_arr == y_pred_arr).sum())
+    called_acc = float(accuracy_score(y_true_arr, y_pred_arr))
+    called_acc_ci = (
+        wilson_interval(n_correct, n_called) if n_called >= 5 else (None, None)
+    )
+
+    auc_df, roc_points, pr_points, auc_summary = _roc_pr_outputs(
+        eval_df,
+        scores,
+        labels,
+        scores_are_calibrated_probabilities=bool(scores_are_calibrated_probabilities),
+    )
     auc_df.to_csv(artifacts["roc_auc_summary_tsv"], sep="\t", index=False)
     roc_points.to_csv(artifacts["roc_curve_points_tsv"], sep="\t", index=False)
     pr_points.to_csv(artifacts["pr_curve_points_tsv"], sep="\t", index=False)
+
+    # Align optional groups to called eval_df index when possible.
+    boot_groups: Optional[Sequence[Any]] = None
+    if groups is not None:
+        try:
+            gser = pd.Series(list(groups))
+            if len(gser) == n_called:
+                boot_groups = gser.tolist()
+            elif hasattr(groups, "index"):
+                gser = pd.Series(groups)
+                gser.index = gser.index.astype(str).map(normalize_sample_id)
+                boot_groups = gser.reindex(eval_df.index).tolist()
+            else:
+                boot_groups = None
+        except Exception:
+            boot_groups = None
+
+    boot_ci = bootstrap_metric_confidence_intervals(
+        y_true_arr,
+        y_pred_arr,
+        groups=boot_groups,
+        n_bootstrap=int(n_bootstrap),
+        random_state=int(random_state),
+    )
+    _write_json(boot_ci, out / "bootstrap_metric_cis.json")
 
     try:
         mcc = float(matthews_corrcoef(y_true_arr, y_pred_arr))
@@ -1210,11 +2090,21 @@ def evaluate_predictions(
     summary = {
         "status": "success",
         "level_name": level_name,
-        "n_evaluated_samples": int(eval_df.shape[0]),
+        "evaluation_role": role,
+        "is_generalization_estimate": role not in {"training_fit_diagnostics"},
+        "n_evaluated_samples": n_called,
+        "n_called_samples": n_called,
         "n_classes_observed": int(len(set(y_true_arr))),
         "n_prediction_classes": int(len(set(y_pred_arr))),
-        "accuracy": float(accuracy_score(y_true_arr, y_pred_arr)),
-        "balanced_accuracy": float(_balanced_accuracy_no_warning(y_true_arr, y_pred_arr)),
+        "accuracy": called_acc,
+        "accuracy_called_only": called_acc,
+        "accuracy_called_only_ci95": {
+            "low": called_acc_ci[0],
+            "high": called_acc_ci[1],
+        },
+        "balanced_accuracy": float(
+            _balanced_accuracy_no_warning(y_true_arr, y_pred_arr)
+        ),
         "macro_precision_ppv": float(precision_macro),
         "macro_true_positive_rate": float(recall_macro),
         "macro_sensitivity_recall": float(recall_macro),
@@ -1227,18 +2117,41 @@ def evaluate_predictions(
         "weighted_sensitivity_recall": float(recall_weighted),
         "weighted_f1": float(f1_weighted),
         "matthews_corrcoef": mcc,
+        "end_to_end": e2e,
+        "n_truth_samples": e2e.get("n_truth_samples"),
+        "n_prediction_samples": e2e.get("n_prediction_samples"),
+        "n_matched_samples": e2e.get("n_matched_samples"),
+        "n_abstained_or_missing_samples": e2e.get("n_abstained_or_missing_samples"),
+        "coverage_call_rate": e2e.get("coverage_call_rate"),
+        "accuracy_end_to_end_all_truth": e2e.get("accuracy_end_to_end_all_truth"),
         "roc_pr": auc_summary,
+        "bootstrap_metric_cis": boot_ci,
         "artifacts": artifacts,
+        "method_note": (
+            "Called-only metrics exclude abstentions. End-to-end metrics use all truth samples "
+            "as the denominator (NA/abstentions/missing contribute zero correct assignments, "
+            "reducing coverage and end-to-end accuracy). Literal label 0 remains a valid class. "
+            "Per-sample audit includes truth samples without predictions. "
+            "Class-support scores are not treated as probabilities unless "
+            "scores_are_calibrated_probabilities=True. "
+            "Absent class-score entries are not filled with zero."
+            + (
+                " Role=training_fit_diagnostics: same-data scores are not generalisation performance."
+                if role == "training_fit_diagnostics"
+                else ""
+            )
+        ),
     }
 
     _write_json(summary, out / "model_performance_summary.json")
     logger.info(
-        "Model evaluation complete | level=%s | samples=%d | balanced_accuracy=%.4f | macro_sensitivity=%.4f | macro_specificity=%.4f",
+        "Model evaluation complete | role=%s | level=%s | called=%d | e2e_acc=%.4f | called_acc=%.4f | coverage=%.4f",
+        role,
         level_name,
-        int(eval_df.shape[0]),
-        float(summary["balanced_accuracy"]),
-        float(summary["macro_sensitivity_recall"]),
-        float(summary["macro_specificity"]),
+        n_called,
+        float(summary.get("accuracy_end_to_end_all_truth") or 0.0),
+        float(summary["accuracy_called_only"]),
+        float(summary.get("coverage_call_rate") or 0.0),
     )
     return summary
 
@@ -1344,7 +2257,9 @@ def run_networkparser_evaluation(
     """Evaluate saved hierarchy predictions and write the validation artifact tree."""
     labels = [str(x) for x in hierarchy_labels if str(x).strip()]
     if not labels:
-        raise ValueError("hierarchy_labels must contain at least one metadata label column")
+        raise ValueError(
+            "hierarchy_labels must contain at least one metadata label column"
+        )
 
     out = _ensure_dir(normalize_run_artifact_dir(output_dir, "validation"))
     pred_df, _ = _prediction_table_with_sample_index(
@@ -1373,7 +2288,11 @@ def run_networkparser_evaluation(
             )
             targets.append(summary)
         except Exception as exc:
-            logger.exception("Hierarchy level evaluation failed | level=%s | label=%s", level_number, label)
+            logger.exception(
+                "Hierarchy level evaluation failed | level=%s | label=%s",
+                level_number,
+                label,
+            )
             failure = {
                 "status": "failed",
                 "level_number": int(level_number),
@@ -1424,10 +2343,21 @@ def run_networkparser_evaluation(
         failures.append({"stage": "hierarchy_branch_diagnostics", "error": str(exc)})
 
     successful_targets = [item for item in targets if item.get("status") == "success"]
+    # Level failures are stored once in `targets`. `failures` also lists them for
+    # detail plus separate stage failures (full_path / branch). Do not double-count.
+    n_failed_level_targets = int(
+        len([item for item in targets if item.get("status") != "success"])
+    )
+    n_failed_stages = int(len([item for item in failures if "stage" in item]))
+    n_failed_total = int(n_failed_level_targets + n_failed_stages)
     summary = {
-        "status": "success" if successful_targets and not failures else ("partial" if successful_targets else "failed"),
+        "status": "success"
+        if successful_targets and n_failed_total == 0
+        else ("partial" if successful_targets else "failed"),
         "n_successful_targets": int(len(successful_targets)),
-        "n_failed_targets": int(len([item for item in targets if item.get("status") != "success"]) + len(failures)),
+        "n_failed_level_targets": n_failed_level_targets,
+        "n_failed_stages": n_failed_stages,
+        "n_failed_targets": n_failed_total,
         "targets": targets,
         "hierarchy_full_path": hierarchy_full_path,
         "hierarchy_branch_diagnostics": hierarchy_branch_diagnostics,
@@ -1437,74 +2367,9 @@ def run_networkparser_evaluation(
         },
         "method_note": (
             "This is evaluation-only. It compares saved predictions to metadata truth labels "
-            "and does not rerun feature filtering, tree construction, bootstrapping, or model training."
+            "and does not rerun feature filtering, tree construction, bootstrapping, or model training. "
+            "Failure counts: each level is counted once; stage failures (full-path/branch) are separate."
         ),
     }
     _write_json(summary, out / "networkparser_validation_summary.json")
-    return summary
-
-    y_true_arr = eval_df["true_label"].astype(str).to_numpy()
-    y_pred_arr = eval_df["predicted_label"].astype(str).to_numpy()
-    labels = sorted(set(y_true_arr).union(set(y_pred_arr)))
-
-    by_class = _per_class_metrics(y_true_arr, y_pred_arr, labels)
-    by_class.to_csv(artifacts["by_class_tsv"], sep="\t", index=False)
-
-    cm = confusion_matrix(y_true_arr, y_pred_arr, labels=labels)
-    cm_df = pd.DataFrame(cm, index=[f"true::{x}" for x in labels], columns=[f"pred::{x}" for x in labels])
-    cm_df.to_csv(artifacts["confusion_matrix_tsv"], sep="\t")
-
-    precision_macro = precision_score(y_true_arr, y_pred_arr, labels=labels, average="macro", zero_division=0)
-    recall_macro = recall_score(y_true_arr, y_pred_arr, labels=labels, average="macro", zero_division=0)
-    f1_macro = f1_score(y_true_arr, y_pred_arr, labels=labels, average="macro", zero_division=0)
-    precision_weighted = precision_score(y_true_arr, y_pred_arr, labels=labels, average="weighted", zero_division=0)
-    recall_weighted = recall_score(y_true_arr, y_pred_arr, labels=labels, average="weighted", zero_division=0)
-    f1_weighted = f1_score(y_true_arr, y_pred_arr, labels=labels, average="weighted", zero_division=0)
-
-    macro_specificity = float(pd.to_numeric(by_class["specificity"], errors="coerce").mean()) if not by_class.empty else 0.0
-    macro_npv = float(pd.to_numeric(by_class["npv"], errors="coerce").mean()) if not by_class.empty else 0.0
-
-    auc_df, roc_points, pr_points, auc_summary = _roc_pr_outputs(eval_df, scores, labels)
-    auc_df.to_csv(artifacts["roc_auc_summary_tsv"], sep="\t", index=False)
-    roc_points.to_csv(artifacts["roc_curve_points_tsv"], sep="\t", index=False)
-    pr_points.to_csv(artifacts["pr_curve_points_tsv"], sep="\t", index=False)
-
-    try:
-        mcc = float(matthews_corrcoef(y_true_arr, y_pred_arr))
-    except Exception:
-        mcc = 0.0
-
-    summary = {
-        "status": "success",
-        "level_name": level_name,
-        "n_evaluated_samples": int(eval_df.shape[0]),
-        "n_classes_observed": int(len(set(y_true_arr))),
-        "n_prediction_classes": int(len(set(y_pred_arr))),
-        "accuracy": float(accuracy_score(y_true_arr, y_pred_arr)),
-        "balanced_accuracy": float(_balanced_accuracy_no_warning(y_true_arr, y_pred_arr)),
-        "macro_precision_ppv": float(precision_macro),
-        "macro_true_positive_rate": float(recall_macro),
-        "macro_sensitivity_recall": float(recall_macro),
-        "macro_true_negative_rate": macro_specificity,
-        "macro_specificity": macro_specificity,
-        "macro_npv": macro_npv,
-        "macro_f1": float(f1_macro),
-        "weighted_precision_ppv": float(precision_weighted),
-        "weighted_true_positive_rate": float(recall_weighted),
-        "weighted_sensitivity_recall": float(recall_weighted),
-        "weighted_f1": float(f1_weighted),
-        "matthews_corrcoef": mcc,
-        "roc_pr": auc_summary,
-        "artifacts": artifacts,
-    }
-
-    _write_json(summary, out / "model_performance_summary.json")
-    logger.info(
-        "Model evaluation complete | level=%s | samples=%d | balanced_accuracy=%.4f | macro_sensitivity=%.4f | macro_specificity=%.4f",
-        level_name,
-        int(eval_df.shape[0]),
-        float(summary["balanced_accuracy"]),
-        float(summary["macro_sensitivity_recall"]),
-        float(summary["macro_specificity"]),
-    )
     return summary

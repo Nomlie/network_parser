@@ -34,15 +34,18 @@ Returned value:
 """
 
 from __future__ import annotations
-import os 
+
+from bisect import bisect_right
+import os
 import csv
 import gzip
 import json
 import logging
+import time
 from collections import Counter, OrderedDict, defaultdict
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 from concurrent.futures import ProcessPoolExecutor
 from joblib import Parallel, delayed
 import numpy as np
@@ -51,15 +54,48 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 try:
-    from network_parser.utils import log_flow_step, log_filter_step, log_artifact, progress_iter
-except Exception:  # pragma: no cover - supports direct source-tree execution
+    from network_parser.utils import (
+        log_flow_step,
+        log_filter_step,
+        log_artifact,
+        progress_iter,
+    )
+    from network_parser.vcf_call_semantics import (
+        AlleleCall,
+        CallSet,
+        CallState,
+        VcfQCConfig,
+        assert_unique_sample_ids,
+        encode_binary_for_feature,
+        iter_sample_calls as shared_iter_sample_calls,
+        resolve_feature_call,
+        warn_legacy_absence_assumed_reference,
+    )
+except ImportError:  # pragma: no cover - supports direct source-tree execution
     try:
         from utils import log_flow_step, log_filter_step, log_artifact, progress_iter  # type: ignore
-    except Exception:  # pragma: no cover
+        from vcf_call_semantics import (  # type: ignore
+            AlleleCall,
+            CallSet,
+            CallState,
+            VcfQCConfig,
+            assert_unique_sample_ids,
+            encode_binary_for_feature,
+            iter_sample_calls as shared_iter_sample_calls,
+            resolve_feature_call,
+            warn_legacy_absence_assumed_reference,
+        )
+    except ImportError:  # pragma: no cover
         log_flow_step = None  # type: ignore
         log_filter_step = None  # type: ignore
         log_artifact = None  # type: ignore
-        progress_iter = lambda iterable, **kwargs: iterable  # type: ignore
+
+        def progress_iter(iterable, **kwargs):  # type: ignore
+            return iterable
+
+        shared_iter_sample_calls = None  # type: ignore
+        resolve_feature_call = None  # type: ignore
+
 
 def _minor_count_chunk(cols: List[List[str]]) -> List[Tuple[int, int]]:
     # returns [(count0, count1), ...] for each col in chunk
@@ -74,7 +110,9 @@ def _minor_count_chunk(cols: List[List[str]]) -> List[Tuple[int, int]]:
     return out
 
 
-def minor_count_filter_parallel(binary_cols: List[List[str]], min_count: int, n_jobs: int) -> List[bool]:
+def minor_count_filter_parallel(
+    binary_cols: List[List[str]], min_count: int, n_jobs: int
+) -> List[bool]:
     """
     Parallel minor-count filter across columns.
 
@@ -93,7 +131,7 @@ def minor_count_filter_parallel(binary_cols: List[List[str]], min_count: int, n_
     n_workers = max(1, int(n_workers))
     chunk_size = max(1000, n_cols // (n_workers * 4))
 
-    chunks = [binary_cols[i:i+chunk_size] for i in range(0, n_cols, chunk_size)]
+    chunks = [binary_cols[i : i + chunk_size] for i in range(0, n_cols, chunk_size)]
 
     results: List[Tuple[int, int]] = []
     with ProcessPoolExecutor(max_workers=n_workers) as ex:
@@ -104,6 +142,7 @@ def minor_count_filter_parallel(binary_cols: List[List[str]], min_count: int, n_
     for c0, c1 in results:
         keep.append(min(c0, c1) >= min_count)
     return keep
+
 
 def _fmt_n_jobs(n_jobs: Optional[int]) -> str:
     """Log-friendly n_jobs formatting."""
@@ -120,12 +159,13 @@ def _safe_int(x, default: int = 0) -> int:
     except Exception:
         return default
 
+
 try:
     from Bio import SeqIO
     from Bio.Seq import Seq
 
     HAVE_BIO = True
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover
     HAVE_BIO = False
 
 
@@ -137,7 +177,11 @@ except Exception:  # pragma: no cover
 def open_any(path: Path):
     """Open plain-text or gzipped text files in read-text mode."""
     p = str(path)
-    return gzip.open(p, "rt") if p.endswith(".gz") else open(p, "r", encoding="utf-8", errors="replace")
+    return (
+        gzip.open(p, "rt")
+        if p.endswith(".gz")
+        else open(p, "r", encoding="utf-8", errors="replace")
+    )
 
 
 def parse_info_field(info_str: str) -> Dict[str, str]:
@@ -176,79 +220,53 @@ def passes_info_qc(
     mq_thresh: float,
     mq0f_thresh: float,
 ) -> bool:
-    """Apply INFO/QUAL filters (QUAL, DP, MQ, MQ0F)."""
+    """Backward-compatible INFO/QUAL filter (delegates to shared QC)."""
     try:
-        qual = float(qual_str) if qual_str != "." else 0.0
-    except Exception:
-        qual = 0.0
-    if qual < qual_thresh:
-        return False
+        from network_parser.vcf_call_semantics import VcfQCConfig, record_fails_site_qc
+    except ImportError:  # pragma: no cover
+        from vcf_call_semantics import VcfQCConfig, record_fails_site_qc  # type: ignore
 
-    # DP can appear as float depending on caller; cast defensively
-    try:
-        dp = int(float(info.get("DP", "0")))
-    except Exception:
-        dp = 0
-    try:
-        mq = float(info.get("MQ", "0"))
-    except Exception:
-        mq = 0.0
-    try:
-        mq0f = float(info.get("MQ0F", "0"))
-    except Exception:
-        mq0f = 0.0
-
-    if dp < dp_thresh:
-        return False
-    if mq < mq_thresh:
-        return False
-    if mq0f > mq0f_thresh:
-        return False
-    return True
+    qc = VcfQCConfig(
+        qual_threshold=float(qual_thresh),
+        min_dp=int(dp_thresh),
+        min_gq=0,  # legacy helper did not enforce GQ
+        mq_threshold=float(mq_thresh),
+        mq0f_threshold=float(mq0f_thresh),
+        respect_filter=False,  # legacy helper ignored FILTER
+    )
+    failed, _ = record_fails_site_qc(
+        qual_str=qual_str,
+        filter_field="PASS",
+        info=info or {},
+        sample_map={},
+        qc=qc,
+    )
+    return not failed
 
 
-def choose_called_allele(ref: str, alts: List[str], fmt: Optional[str], sample_field: Optional[str]) -> str:
-    """Determine the allele for a sample at a site.
-
-    Strategy:
-      - If FORMAT/sample fields exist and include GT, interpret GT:
-          * if any allele index > 0 appears → use that ALT (1→ALT0, 2→ALT1, ...)
-          * else (0/0 or missing) → REF
-      - If no GT is available → assume ALT[0] for presence-based calls
+def choose_called_allele(
+    ref: str,
+    alts: List[str],
+    fmt: Optional[str],
+    sample_field: Optional[str],
+) -> str:
     """
-    if not fmt or not sample_field:
-        return alts[0] if alts else ref
+    Shared-safe allele choice.
 
-    fmt_keys = fmt.split(":")
-    smp_vals = sample_field.split(":")
-    fmt_map = {k: v for k, v in zip(fmt_keys, smp_vals)}
-    gt = fmt_map.get("GT", "")
+    Missing / empty GT never becomes ALT. Returns empty string when no callable
+    allele can be determined (callers must not treat empty as REF/ALT).
+    """
+    try:
+        from network_parser.vcf_call_semantics import (
+            choose_called_allele as shared_choose,
+        )
+    except ImportError:  # pragma: no cover
+        from vcf_call_semantics import choose_called_allele as shared_choose  # type: ignore
 
-    if not gt:
-        return alts[0] if alts else ref
-
-    sep = "/" if "/" in gt else ("|" if "|" in gt else None)
-    tokens = gt.split(sep) if sep else [gt]
-
-    allele_idx: Optional[int] = None
-    for tok in tokens:
-        tok = tok.strip()
-        if tok in (".", ""):
-            continue
-        try:
-            idx = int(tok)
-        except ValueError:
-            continue
-        if idx > 0:
-            allele_idx = idx
-            break
-
-    if allele_idx is None:
-        return ref
-
-    if 1 <= allele_idx <= len(alts):
-        return alts[allele_idx - 1]
-    return alts[0] if alts else ref
+    called, state = shared_choose(ref, alts, fmt, sample_field)
+    if called is None:
+        return ""
+    return str(called).upper()
 
 
 def iter_sample_calls(
@@ -258,49 +276,27 @@ def iter_sample_calls(
     mq_thresh: float,
     mq0f_thresh: float,
     biallelic_only: bool = True,
-) -> Dict[Tuple[str, int], Tuple[str, str]]:
-    """Extract per-sample SNP calls after QC.
-
-    Returns:
-      dict keyed by (chrom, pos) -> (ref_base, called_base)
+    gq_thresh: Optional[int] = None,
+    qc: Optional[Any] = None,
+) -> CallSet:
     """
-    calls: Dict[Tuple[str, int], Tuple[str, str]] = {}
-    with open_any(vcf_path) as f:
-        for line in f:
-            if not line or line.startswith("#"):
-                continue
+    Extract per-sample calls after shared QC/genotype semantics.
 
-            parts = line.rstrip("\n").split("\t")
-            if len(parts) < 8:
-                continue
-
-            chrom = parts[0]
-            try:
-                pos = int(parts[1])
-            except Exception:
-                continue
-
-            ref = parts[3].upper()
-            alt_field = parts[4].upper()
-
-            if not is_snp_like(ref, alt_field, biallelic_only=biallelic_only):
-                continue
-
-            info = parse_info_field(parts[7])
-            if not passes_info_qc(parts[5], info, qual_thresh, dp_thresh, mq_thresh, mq0f_thresh):
-                continue
-
-            alts = [a.strip().upper() for a in alt_field.split(",") if a.strip()]
-            fmt = parts[8] if len(parts) >= 9 else None
-            sample_field = parts[9] if len(parts) >= 10 else None
-
-            called = choose_called_allele(ref, alts, fmt, sample_field).upper()
-            if len(called) != 1:
-                continue
-
-            calls[(chrom, pos)] = (ref, called)
-
-    return calls
+    Returns a CallSet (coordinate → AlleleCall), including FILTER/GQ handling
+    when thresholds are provided via ``qc`` or keyword arguments.
+    """
+    if shared_iter_sample_calls is None:
+        raise RuntimeError("vcf_call_semantics is required for VCF parsing")
+    return shared_iter_sample_calls(
+        Path(vcf_path),
+        qc=qc,
+        qual_thresh=qual_thresh,
+        dp_thresh=dp_thresh,
+        mq_thresh=mq_thresh,
+        mq0f_thresh=mq0f_thresh,
+        biallelic_only=biallelic_only,
+        gq_thresh=gq_thresh,
+    )
 
 
 # ──────────────────────────────────────────────────────────────
@@ -317,7 +313,9 @@ def load_reference_sequence(ref_path: Path) -> Optional[str]:
     if not ref_path.exists():
         return None
     if not HAVE_BIO:
-        raise RuntimeError("Biopython is required for reference sequence loading but is not available.")
+        raise RuntimeError(
+            "Biopython is required for reference sequence loading but is not available."
+        )
 
     lower = ref_path.name.lower()
     fmt = "fasta" if lower.endswith((".fa", ".fna", ".fasta", ".fas")) else None
@@ -355,7 +353,9 @@ def load_reference_sequences(ref_path: Path) -> Dict[str, str]:
     if not ref_path.exists():
         return {}
     if not HAVE_BIO:
-        raise RuntimeError("Biopython is required for reference sequence loading but is not available.")
+        raise RuntimeError(
+            "Biopython is required for reference sequence loading but is not available."
+        )
 
     lower = ref_path.name.lower()
     formats: List[str] = []
@@ -380,7 +380,9 @@ def load_reference_sequences(ref_path: Path) -> Dict[str, str]:
             if not seq:
                 continue
             keys = {str(rec.id), str(rec.name)}
-            description_first = str(rec.description).split()[0] if str(rec.description).strip() else ""
+            description_first = (
+                str(rec.description).split()[0] if str(rec.description).strip() else ""
+            )
             if description_first:
                 keys.add(description_first)
             for key in keys:
@@ -410,116 +412,471 @@ def context_around(pos_1based: int, genome: str, flank: int = 40) -> str:
 # ──────────────────────────────────────────────────────────────
 
 
+def _complement_base(base: str) -> str:
+    return (
+        str(Seq(base).complement())
+        if HAVE_BIO
+        else {"A": "T", "T": "A", "G": "C", "C": "G"}.get(base.upper(), base)
+    )
+
+
+def _location_contains(feature, pos0: int) -> bool:
+    """True if 0-based genomic coordinate is inside a (possibly compound) CDS."""
+    try:
+        return (
+            bool(
+                feature.location.nofuzzy_start <= pos0 < feature.location.nofuzzy_end
+                and any(
+                    int(part.start) <= pos0 < int(part.end)
+                    for part in feature.location.parts
+                )
+            )
+            if hasattr(feature.location, "parts")
+            else (int(feature.location.start) <= pos0 < int(feature.location.end))
+        )
+    except Exception:
+        try:
+            return pos0 in feature.location
+        except Exception:
+            return False
+
+
+def _cds_coding_index(feature, pos0: int) -> Optional[int]:
+    """
+    0-based index along the spliced coding sequence for a genomic coordinate,
+    or None if the position is not in the CDS.
+    """
+    strand = int(feature.location.strand or 1)
+    parts = (
+        list(feature.location.parts)
+        if hasattr(feature.location, "parts")
+        else [feature.location]
+    )
+    # Walk parts in transcription order
+    ordered = parts if strand >= 0 else list(reversed(parts))
+    offset = 0
+    for part in ordered:
+        start = int(part.start)
+        end = int(part.end)
+        if start <= pos0 < end:
+            if strand >= 0:
+                return offset + (pos0 - start)
+            return offset + (end - 1 - pos0)
+        offset += max(0, end - start)
+    return None
+
+
+def _extract_coding_codon(
+    sequence,
+    feature,
+    coding_index: int,
+    *,
+    codon_start: int = 1,
+    table: int = 11,
+) -> Tuple[str, int, str, str]:
+    """
+    Return (ref_codon, position_in_codon_0based, ref_aa, mut placeholder).
+
+    codon_start is GenBank codon_start (1,2,3).
+    """
+    # Extract spliced CDS sequence on coding strand via Biopython
+    try:
+        cds_seq = feature.extract(sequence)
+    except Exception:
+        cds_seq = sequence[int(feature.location.start) : int(feature.location.end)]
+        if int(feature.location.strand or 1) < 0 and HAVE_BIO:
+            cds_seq = cds_seq.reverse_complement()
+
+    phase = max(0, int(codon_start) - 1)
+    # Align coding_index to codon frame
+    rel = coding_index - phase
+    if rel < 0:
+        return "NNN", 0, "X", "X"
+    codon_number0 = rel // 3
+    pos_in_codon = rel % 3
+    codon_start_idx = phase + codon_number0 * 3
+    ref_codon = str(cds_seq[codon_start_idx : codon_start_idx + 3]).upper()
+    if len(ref_codon) < 3:
+        ref_codon = (ref_codon + "NNN")[:3]
+    try:
+        ref_aa = str(Seq(ref_codon).translate(table=table))
+    except Exception:
+        ref_aa = "X"
+    return ref_codon, pos_in_codon, ref_aa, str(codon_number0 + 1)
+
+
+@dataclass
+class _CdsIntervalIndex:
+    """Reusable interval index for the CDS features of one reference record."""
+
+    starts: List[int]
+    start_entries: List[Tuple[int, int, int, int, Any]]
+    prefix_max_ends: List[int]
+    ends: List[int]
+    end_entries: List[Tuple[int, int, int, int, Any]]
+
+    @classmethod
+    def build(cls, record: Any) -> "_CdsIntervalIndex":
+        entries: List[Tuple[int, int, int, int, Any]] = []
+        features = [feature for feature in record.features if feature.type == "CDS"]
+        for feature_order, feature in enumerate(features):
+            parts = (
+                list(feature.location.parts)
+                if hasattr(feature.location, "parts")
+                else [feature.location]
+            )
+            for part_order, part in enumerate(parts):
+                start = int(part.start)
+                end = int(part.end)
+                if end > start:
+                    entries.append(
+                        (start, end, feature_order, part_order, feature)
+                    )
+
+        start_entries = sorted(
+            entries, key=lambda entry: (entry[0], entry[2], entry[3], entry[1])
+        )
+        prefix_max_ends: List[int] = []
+        running_max = -1
+        for _, end, _, _, _ in start_entries:
+            running_max = max(running_max, end)
+            prefix_max_ends.append(running_max)
+
+        end_entries = sorted(
+            entries, key=lambda entry: (entry[1], entry[2], entry[3], entry[0])
+        )
+        return cls(
+            starts=[entry[0] for entry in start_entries],
+            start_entries=start_entries,
+            prefix_max_ends=prefix_max_ends,
+            ends=[entry[1] for entry in end_entries],
+            end_entries=end_entries,
+        )
+
+    def overlapping(self, pos0: int) -> List[Any]:
+        """Return all CDS features containing a coordinate in record order."""
+        idx = bisect_right(self.starts, int(pos0)) - 1
+        hits: Dict[int, Any] = {}
+        while idx >= 0 and self.prefix_max_ends[idx] > pos0:
+            start, end, feature_order, _, feature = self.start_entries[idx]
+            if start <= pos0 < end:
+                hits.setdefault(feature_order, feature)
+            idx -= 1
+        return [hits[order] for order in sorted(hits)]
+
+    def nearest(
+        self, pos0: int
+    ) -> Tuple[Optional[Tuple[int, int, int, int, Any]], int]:
+        """Return the nearest CDS part and distance using binary searches."""
+        overlaps = self.overlapping(pos0)
+        if overlaps:
+            first = min(overlaps, key=lambda feature: self._feature_order(feature))
+            for entry in self.start_entries:
+                if entry[4] is first and entry[0] <= pos0 < entry[1]:
+                    return entry, 0
+
+        candidates: List[Tuple[int, int, int, Tuple[int, int, int, int, Any]]] = []
+
+        right_idx = bisect_right(self.starts, int(pos0))
+        if right_idx < len(self.start_entries):
+            nearest_start = self.start_entries[right_idx][0]
+            idx = right_idx
+            while idx < len(self.start_entries) and self.start_entries[idx][0] == nearest_start:
+                entry = self.start_entries[idx]
+                candidates.append((nearest_start - pos0, entry[2], entry[3], entry))
+                idx += 1
+
+        left_idx = bisect_right(self.ends, int(pos0)) - 1
+        if left_idx >= 0:
+            nearest_end = self.end_entries[left_idx][1]
+            idx = left_idx
+            while idx >= 0 and self.end_entries[idx][1] == nearest_end:
+                entry = self.end_entries[idx]
+                candidates.append((pos0 - (nearest_end - 1), entry[2], entry[3], entry))
+                idx -= 1
+
+        if not candidates:
+            return None, -1
+        distance, _, _, entry = min(candidates, key=lambda item: item[:3])
+        return entry, int(distance)
+
+    def _feature_order(self, target: Any) -> int:
+        for _, _, feature_order, _, feature in self.start_entries:
+            if feature is target:
+                return feature_order
+        return len(self.start_entries)
+
+
 def annotate_snps_genbank(
-    snp_details: Dict[Tuple[str, int], Tuple[int, str, str]],
+    snp_details: Dict[Tuple[str, int, str, str], int],
     ref_gbk_path: Path,
+    *,
+    reference_id: Optional[str] = None,
+    allow_circular_wrap: bool = False,
+    circular_contigs: Optional[Sequence[str]] = None,
 ) -> List[Dict[str, str]]:
-    """Annotate SNPs using a GenBank reference sequence.
+    """Annotate SNPs using a contig-aware GenBank (or multi-record) reference.
 
-    Input:
-      snp_details: (chrom,pos) -> (count, ref_nt, alt_nt)
+    Input keys: (chrom, pos, ref_nt, alt_nt) -> count
 
-    Output:
-      list of row dicts with columns used by the annotation table.
+    Negative-strand CDS substitutions transform both the codon and the ALT
+    allele into coding-strand orientation before translation.
+    Multi-record references are never concatenated for coordinate mapping.
+
+    All overlapping CDS features are reported (not just the first hit).
+    Out-of-range positions are explicitly rejected.
+    ``circular_contigs`` declares which contigs may wrap. The legacy
+    ``allow_circular_wrap`` switch applies to all contigs and is retained only
+    for compatibility; topology is never inferred from a filename.
     """
     if not HAVE_BIO:
-        raise RuntimeError("Biopython is required for GenBank annotation but is not available.")
+        raise RuntimeError(
+            "Biopython is required for GenBank annotation but is not available."
+        )
 
-    record = SeqIO.read(str(ref_gbk_path), "genbank")
-    sequence = record.seq
-    features = [f for f in record.features if f.type == "CDS"]
+    import hashlib as _hashlib
+
+    annotation_started_at = time.perf_counter()
+
+    ref_gbk_path = Path(ref_gbk_path)
+    ref_bytes = ref_gbk_path.read_bytes()
+    ref_checksum = _hashlib.sha256(ref_bytes).hexdigest()
+    with open(ref_gbk_path, "r", encoding="utf-8") as handle:
+        records = list(SeqIO.parse(handle, "genbank"))
+    if not records:
+        with open(ref_gbk_path, "r", encoding="utf-8") as handle:
+            records = [SeqIO.read(handle, "genbank")]
+    declared_ref_id = (
+        str(reference_id).strip()
+        if reference_id
+        else ";".join(str(record.id) for record in records)
+    )
+    circular_names = {
+        str(value).strip() for value in (circular_contigs or []) if str(value).strip()
+    }
+
+    # Map contig/id aliases -> record
+    by_id: Dict[str, Any] = {}
+    for rec in records:
+        for key in {str(rec.id), str(rec.name), str(rec.id).split(".")[0]}:
+            if key and key not in by_id:
+                by_id[key] = rec
+
+    index_started_at = time.perf_counter()
+    cds_indexes = {id(record): _CdsIntervalIndex.build(record) for record in records}
+    index_seconds = time.perf_counter() - index_started_at
+    indexed_parts = sum(
+        len(index.start_entries) for index in cds_indexes.values()
+    )
+    logger.info(
+        "GenBank annotation: CDS indexes built | records=%d | interval_parts=%d | seconds=%.3f",
+        len(records),
+        indexed_parts,
+        index_seconds,
+    )
 
     rows: List[Dict[str, str]] = []
+    items: List[Tuple[str, int, str, str, int]] = []
+    for (chrom, pos, ref_nt, alt_nt), count in snp_details.items():
+        items.append((str(chrom), int(pos), str(ref_nt), str(alt_nt), int(count)))
 
-    for (chrom, pos, ref_nt, alt_nt) in sorted(snp_details.keys(), key=lambda x: (x[0], x[1], x[2], x[3])):
-        count = snp_details[(chrom, pos, ref_nt, alt_nt)]
+    def _base_row(chrom, pos, count, ref_nt_u, alt_nt_u, **extra) -> Dict[str, str]:
+        base = {
+            "Feature_ID": f"{chrom}:{pos}:{ref_nt_u}:{alt_nt_u}",
+            "Position": str(pos),
+            "Count": str(count),
+            "Sequence": chrom,
+            "Ref_allele": ref_nt_u,
+            "Alt_allele": alt_nt_u,
+            "Reference_id": declared_ref_id,
+            "Reference_build": declared_ref_id,  # not filename-as-build
+            "Reference_checksum_sha256": ref_checksum,
+            "Contig": chrom,
+        }
+        base.update({k: str(v) for k, v in extra.items()})
+        return base
+
+    for chrom, pos, ref_nt, alt_nt, count in sorted(
+        items, key=lambda x: (x[0], x[1], x[2], x[3])
+    ):
+        ref_nt_u = ref_nt.upper()
+        alt_nt_u = alt_nt.upper()
         pos0 = pos - 1
-        coding_found = False
+        rec = by_id.get(chrom) or by_id.get(chrom.split("|")[0])
+        if rec is None and len(records) == 1:
+            rec = records[0]
+        if rec is None:
+            rows.append(
+                _base_row(
+                    chrom,
+                    pos,
+                    count,
+                    ref_nt_u,
+                    alt_nt_u,
+                    Region_type="unannotated_contig_mismatch",
+                    Relative_pos="-1",
+                    Codon_number="0",
+                    Nucleotide_change=f"{ref_nt_u}|{alt_nt_u}",
+                    Amino_acid_change="NA",
+                    Gene_annotation=f". | . | contig_not_in_reference:{chrom} | [.]",
+                )
+            )
+            continue
 
-        closest = None
-        min_dist = float("inf")
+        sequence = rec.seq
+        seq_len = len(sequence)
+        # Explicit out-of-range rejection (circular wrap is opt-in only)
+        if pos0 < 0 or pos0 >= seq_len:
+            contig_is_circular = bool(
+                allow_circular_wrap
+                or chrom in circular_names
+                or str(rec.id) in circular_names
+                or str(rec.name) in circular_names
+            )
+            if contig_is_circular and seq_len > 0:
+                pos0 = pos0 % seq_len
+                pos = pos0 + 1
+            else:
+                rows.append(
+                    _base_row(
+                        chrom,
+                        pos,
+                        count,
+                        ref_nt_u,
+                        alt_nt_u,
+                        Region_type="out_of_range",
+                        Relative_pos="-1",
+                        Codon_number="0",
+                        Nucleotide_change=f"{ref_nt_u}|{alt_nt_u}",
+                        Amino_acid_change="NA",
+                        Gene_annotation=f". | . | position_out_of_range:{pos}>{seq_len} | [.]",
+                        Contig=str(rec.id),
+                    )
+                )
+                continue
 
-        for feature in features:
-            start = int(feature.location.start)
-            end = int(feature.location.end)
-            strand = feature.location.strand
+        genome_ref = str(sequence[pos0]).upper()
+        if genome_ref and ref_nt_u and genome_ref != ref_nt_u:
+            rows.append(
+                _base_row(
+                    chrom,
+                    pos,
+                    count,
+                    ref_nt_u,
+                    alt_nt_u,
+                    Region_type="ref_mismatch",
+                    Relative_pos="-1",
+                    Codon_number="0",
+                    Nucleotide_change=f"{ref_nt_u}|{alt_nt_u}",
+                    Amino_acid_change="NA",
+                    Gene_annotation=f". | . | REF_mismatch_genome={genome_ref} | [.]",
+                    Contig=str(rec.id),
+                )
+            )
+            continue
+
+        cds_index = cds_indexes[id(rec)]
+        coding_hits = 0
+
+        for feature in cds_index.overlapping(pos0):
+            strand = int(feature.location.strand or 1)
             locus_tag = feature.qualifiers.get("locus_tag", ["."])[0]
             gene = feature.qualifiers.get("gene", ["."])[0]
             product = feature.qualifiers.get("product", ["."])[0]
-            label = f"{'+' if strand == 1 else '-'}{locus_tag} | {gene} | {product} | [{start+1}..{end}]"
+            codon_start = int(feature.qualifiers.get("codon_start", ["1"])[0] or 1)
+            table = int(feature.qualifiers.get("transl_table", ["11"])[0] or 11)
+            start = (
+                int(feature.location.nofuzzy_start)
+                if hasattr(feature.location, "nofuzzy_start")
+                else int(feature.location.start)
+            )
+            end = (
+                int(feature.location.nofuzzy_end)
+                if hasattr(feature.location, "nofuzzy_end")
+                else int(feature.location.end)
+            )
+            label = f"{'+' if strand >= 0 else '-'}{locus_tag} | {gene} | {product} | [{start+1}..{end}]"
 
-            if start <= pos0 < end:
-                coding_found = True
-                rel_pos = (pos0 - start) if strand == 1 else (end - pos0 - 1)
-                codon_number = rel_pos // 3 + 1
-
-                if strand == 1:
-                    codon_start = start + (rel_pos // 3) * 3
-                    codon_seq = sequence[codon_start : codon_start + 3]
-                else:
-                    codon_start = end - ((rel_pos // 3 + 1) * 3)
-                    codon_seq = sequence[codon_start : codon_start + 3].reverse_complement()
-
-                ref_codon = str(codon_seq).upper()
-                snp_pos_in_codon = rel_pos % 3
-                codon_list = list(ref_codon)
-                codon_list[snp_pos_in_codon] = alt_nt.upper()
-                mut_codon = "".join(codon_list)
-
-                ref_aa = str(Seq(ref_codon).translate())
-                alt_aa = str(Seq(mut_codon).translate())
-
-                feature_id = f"{chrom}:{pos}:{ref_nt}:{alt_nt}"
-                rows.append(
-                    {
-                        "Feature_ID": feature_id,
-                        "Position": str(pos),
-                        "Count": str(count),
-                        "Sequence": chrom,
-                        "Ref_allele": ref_nt.upper(),
-                        "Alt_allele": alt_nt.upper(),
-                        "Region_type": "coding",
-                        "Relative_pos": str(rel_pos + 1),
-                        "Codon_number": str(codon_number),
-                        "Nucleotide_change": f"{ref_nt}|{alt_nt}",
-                        "Amino_acid_change": f"{ref_aa}|{alt_aa}",
-                        "Gene_annotation": label,
-                    }
+            if _location_contains(feature, pos0):
+                coding_idx = _cds_coding_index(feature, pos0)
+                if coding_idx is None:
+                    continue
+                coding_hits += 1
+                ref_codon, pos_in_codon, ref_aa, codon_number = _extract_coding_codon(
+                    sequence, feature, coding_idx, codon_start=codon_start, table=table
                 )
-                break
+                coding_alt = alt_nt_u if strand >= 0 else _complement_base(alt_nt_u)
+                codon_list = list(ref_codon)
+                if 0 <= pos_in_codon < len(codon_list):
+                    codon_list[pos_in_codon] = coding_alt
+                mut_codon = "".join(codon_list)
+                try:
+                    alt_aa = str(Seq(mut_codon).translate(table=table))
+                except Exception:
+                    alt_aa = "X"
 
-            dist = min(abs(pos0 - start), abs(pos0 - end))
-            if dist < min_dist:
-                min_dist = dist
-                closest = (start, strand, locus_tag, gene, product)
+                rows.append(
+                    _base_row(
+                        chrom,
+                        pos,
+                        count,
+                        ref_nt_u,
+                        alt_nt_u,
+                        Region_type="coding",
+                        Relative_pos=str(int(coding_idx) + 1),
+                        Codon_number=str(codon_number),
+                        Nucleotide_change=f"{ref_nt_u}|{alt_nt_u}",
+                        Amino_acid_change=f"{ref_aa}|{alt_aa}",
+                        Gene_annotation=label,
+                        Strand="+" if strand >= 0 else "-",
+                        Coding_alt_allele=coding_alt,
+                        Contig=str(rec.id),
+                        Transl_table=str(table),
+                        Codon_start=str(codon_start),
+                        Overlapping_cds_index=str(coding_hits),
+                    )
+                )
+                # Continue: report all overlapping CDS, do not stop at first
 
-        if not coding_found:
-            if closest is not None:
-                start, strand, locus_tag, gene, product = closest
-                label = f"{'+' if strand == 1 else '-'}{locus_tag} | {gene} | {product} | [{start+1}..{start+1}]"
-                rel = -int(min_dist) if min_dist != float("inf") else -1
+        if coding_hits == 0:
+            nearest_entry, nearest_cds_distance_bp = cds_index.nearest(pos0)
+            if nearest_entry is not None:
+                ps, pe, _, _, nearest_feature = nearest_entry
+                strand = int(nearest_feature.location.strand or 1)
+                locus_tag = nearest_feature.qualifiers.get("locus_tag", ["."])[0]
+                gene = nearest_feature.qualifiers.get("gene", ["."])[0]
+                product = nearest_feature.qualifiers.get("product", ["."])[0]
+                label = f"{'+' if strand >= 0 else '-'}{locus_tag} | {gene} | {product} | [{ps+1}..{pe}]"
             else:
                 label = ". | . | . | [.]"
-                rel = -1
+                nearest_cds_distance_bp = -1
 
-            feature_id = f"{chrom}:{pos}:{ref_nt}:{alt_nt}"
             rows.append(
-                {
-                    "Feature_ID": feature_id,
-                    "Position": str(pos),
-                    "Count": str(count),
-                    "Sequence": chrom,
-                    "Ref_allele": ref_nt.upper(),
-                    "Alt_allele": alt_nt.upper(),
-                    "Region_type": "non-coding",
-                    "Relative_pos": str(rel),
-                    "Codon_number": "0",
-                    "Nucleotide_change": f"{ref_nt}|{alt_nt}",
-                    "Amino_acid_change": "NA",
-                    "Gene_annotation": label,
-                }
+                _base_row(
+                    chrom,
+                    pos,
+                    count,
+                    ref_nt_u,
+                    alt_nt_u,
+                    Region_type="non-coding",
+                    Relative_pos=str(nearest_cds_distance_bp),
+                    Nearest_cds_distance_bp=str(nearest_cds_distance_bp),
+                    Codon_number="0",
+                    Nucleotide_change=f"{ref_nt_u}|{alt_nt_u}",
+                    Amino_acid_change="NA",
+                    Gene_annotation=label,
+                    Contig=str(rec.id),
+                )
             )
 
+    logger.info(
+        "GenBank annotation complete | variants=%d | output_rows=%d | "
+        "index_seconds=%.3f | total_seconds=%.3f",
+        len(items),
+        len(rows),
+        index_seconds,
+        time.perf_counter() - annotation_started_at,
+    )
     return rows
 
 
@@ -528,7 +885,9 @@ def annotate_snps_genbank(
 # ──────────────────────────────────────────────────────────────
 
 
-def write_fasta_matrix(path: Path, ref_seq: str, sample_map: Dict[str, str], ref_name: str = "REF") -> None:
+def write_fasta_matrix(
+    path: Path, ref_seq: str, sample_map: Dict[str, str], ref_name: str = "REF"
+) -> None:
     """Write a REF + sample sequences FASTA that represents a column-aligned matrix."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as out:
@@ -562,12 +921,16 @@ def read_fasta_matrix(path: Path) -> OrderedDict:
 
     lengths = {len(v) for v in records.values()}
     if len(lengths) != 1:
-        raise ValueError(f"Sequences in {path} have different lengths: {sorted(lengths)}")
+        raise ValueError(
+            f"Sequences in {path} have different lengths: {sorted(lengths)}"
+        )
 
     return records
 
 
-def write_fasta_matrix_wrapped(path: Path, matrix: OrderedDict, line_width: int = 80) -> None:
+def write_fasta_matrix_wrapped(
+    path: Path, matrix: OrderedDict, line_width: int = 80
+) -> None:
     """Write FASTA from OrderedDict[name]->list(chars) with wrapping."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as out:
@@ -589,7 +952,7 @@ def transpose_rows_to_columns(matrix: OrderedDict) -> Tuple[List[str], List[List
     if not genomes:
         raise ValueError("Empty FASTA matrix.")
     row_len = len(next(iter(matrix.values())))
-    cols = [[] for _ in range(row_len)]
+    cols: List[List[str]] = [[] for _ in range(row_len)]
     for gid in genomes:
         row = matrix[gid]
         if len(row) != row_len:
@@ -663,21 +1026,21 @@ def group_and_reduce_by_pattern(
     repeat_number: int,
     sample_threshold: int = 2000,
     sample_size: int = 256,
+    pattern_keys: Optional[Sequence[bytes]] = None,
 ) -> List[bool]:
     """
     Group identical 0/1 patterns and keep up to repeat_number columns per pattern.
 
-    For large cohorts, this uses a sampled signature as an exact pre-bucketing
-    optimization, then verifies duplicate groups with the full binary pattern
-    before dropping any columns. The sampling therefore improves runtime/memory
-    without allowing approximate duplicate removal.
+    Each full pattern key is constructed once and then reused for uniqueness
+    reporting and exact grouping. Missing values receive their own state and
+    are never folded into the ordinary zero/baseline state.
     """
     n_cols = len(binary_cols)
     if n_cols == 0:
         return []
 
     repeat_number = max(1, int(repeat_number))
-    n_rows = len(binary_cols[0]) if binary_cols and binary_cols[0] is not None else 0
+    _ = sample_threshold, sample_size  # retained for API compatibility
 
     positions: List[Optional[int]] = []
     for r in annotation_rows:
@@ -696,55 +1059,50 @@ def group_and_reduce_by_pattern(
     def _sort_cols(cols: List[int]) -> List[int]:
         return sorted(
             cols,
-            key=lambda idx: (positions[idx] is None, positions[idx] if positions[idx] is not None else idx),
+            key=lambda idx: (
+                positions[idx] is None,
+                positions[idx] if positions[idx] is not None else idx,
+            ),
         )
-
-    def _full_pattern_key(col: List[str]) -> str:
-        return "".join("1" if value == "1" else "0" for value in col)
 
     keep = [False] * n_cols
 
-    # Large-cohort pre-bucketing. Duplicate full patterns must share the same
-    # sampled signature, while non-identical patterns are still checked exactly
-    # before any representative is dropped.
-    if n_rows >= int(sample_threshold) and n_cols >= 1000:
-        sample_size = min(max(1, int(sample_size)), n_rows)
-        sample_positions = even_pick_indices(list(range(n_rows)), sample_size)
-
-        sampled_buckets: Dict[str, List[int]] = defaultdict(list)
-        for j, col in enumerate(binary_cols):
-            sampled_key = "".join("1" if col[i] == "1" else "0" for i in sample_positions)
-            sampled_buckets[sampled_key].append(j)
-
-        bucket_iterable = sampled_buckets.values()
-        logger.debug(
-            "Redundancy reduction using sampled pre-buckets | rows=%d | columns=%d | buckets=%d | sample_size=%d",
-            n_rows,
-            n_cols,
-            len(sampled_buckets),
-            sample_size,
+    if pattern_keys is None:
+        pattern_keys = [
+            bytes(
+                0 if str(value) == "0" else 1 if str(value) == "1" else 2
+                for value in column
+            )
+            for column in binary_cols
+        ]
+    if len(pattern_keys) != n_cols:
+        raise ValueError(
+            "pattern_keys length must match the number of binary columns"
         )
-    else:
-        bucket_iterable = [list(range(n_cols))]
 
-    for bucket_cols in bucket_iterable:
-        bucket_cols = list(bucket_cols)
-        if len(bucket_cols) <= repeat_number:
-            for idx in bucket_cols:
-                keep[idx] = True
-            continue
+    groups: Dict[bytes, List[int]] = defaultdict(list)
+    for idx, key in enumerate(pattern_keys):
+        groups[bytes(key)].append(idx)
 
-        groups: Dict[str, List[int]] = defaultdict(list)
-        for idx in bucket_cols:
-            groups[_full_pattern_key(binary_cols[idx])].append(idx)
-
-        for cols in groups.values():
-            cols_sorted = _sort_cols(cols)
-            picked = even_pick_indices(cols_sorted, repeat_number)
-            for idx in picked:
-                keep[idx] = True
+    for cols in groups.values():
+        cols_sorted = _sort_cols(cols)
+        picked = even_pick_indices(cols_sorted, repeat_number)
+        for idx in picked:
+            keep[idx] = True
 
     return keep
+
+
+def binary_pattern_keys(binary_values: np.ndarray) -> List[bytes]:
+    """Encode each matrix column once as an exact reusable 0/1/missing key."""
+    values = np.asarray(binary_values, dtype=float)
+    if values.ndim != 2:
+        raise ValueError("binary_values must be a two-dimensional matrix")
+    encoded = np.full(values.shape, 2, dtype=np.uint8)
+    encoded[values == 0.0] = 0
+    encoded[values == 1.0] = 1
+    columns = np.ascontiguousarray(encoded.T)
+    return [column.tobytes() for column in columns]
 
 
 def parse_fix_positions(fix_arg: str, total_cols: int) -> Tuple[List[int], List[str]]:
@@ -765,7 +1123,9 @@ def parse_fix_positions(fix_arg: str, total_cols: int) -> Tuple[List[int], List[
             warnings.append(f"Ignored non-positive position in --fix: {v}")
             continue
         if v > total_cols:
-            warnings.append(f"Ignored out-of-range position in --fix: {v} (max {total_cols})")
+            warnings.append(
+                f"Ignored out-of-range position in --fix: {v} (max {total_cols})"
+            )
             continue
         if v in seen:
             continue
@@ -794,7 +1154,7 @@ def read_annotation_tsv(path: Path) -> Tuple[List[Dict[str, str]], List[str]]:
         try:
             with open(path, "r", encoding=enc, newline="") as f:
                 reader = csv.DictReader(f, delimiter="\t")
-                header = reader.fieldnames or []
+                header = list(reader.fieldnames or [])
                 rows = list(reader)
             break
         except UnicodeDecodeError as e:
@@ -802,22 +1162,30 @@ def read_annotation_tsv(path: Path) -> Tuple[List[Dict[str, str]], List[str]]:
             continue
 
     if not rows and last_error is not None:
-        raise UnicodeError(f"Failed to decode annotation file {path}. Last error: {last_error}")
+        raise UnicodeError(
+            f"Failed to decode annotation file {path}. Last error: {last_error}"
+        )
 
     return rows, header
 
 
-def write_annotation_tsv(path: Path, rows: List[Dict[str, str]], header: List[str]) -> None:
+def write_annotation_tsv(
+    path: Path, rows: List[Dict[str, str]], header: List[str]
+) -> None:
     """Write annotation TSV in a fixed header order."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8", newline="") as out:
-        writer = csv.DictWriter(out, fieldnames=header, delimiter="\t", lineterminator="\n")
+        writer = csv.DictWriter(
+            out, fieldnames=header, delimiter="\t", lineterminator="\n"
+        )
         writer.writeheader()
         for r in rows:
             writer.writerow(r)
 
 
-def write_matrix_tsv(path: Path, genomes: List[str], positions: List[str], data_cols: List[List[str]]) -> None:
+def write_matrix_tsv(
+    path: Path, genomes: List[str], positions: List[str], data_cols: List[List[str]]
+) -> None:
     """Write a matrix TSV: Genome + positions header, one row per genome."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8", newline="") as out:
@@ -828,6 +1196,20 @@ def write_matrix_tsv(path: Path, genomes: List[str], positions: List[str], data_
             writer.writerow(row)
 
 
+def write_matrix_tsv_rows(
+    path: Path,
+    positions: List[str],
+    rows: "OrderedDict[str, List[str]]",
+) -> None:
+    """Write an already row-oriented character matrix without transposing it."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="") as out:
+        writer = csv.writer(out, delimiter="\t", lineterminator="\n")
+        writer.writerow(["Genome"] + positions)
+        for genome, values in rows.items():
+            writer.writerow([genome] + list(values))
+
+
 # ──────────────────────────────────────────────────────────────
 # DataLoader
 # ──────────────────────────────────────────────────────────────
@@ -835,6 +1217,7 @@ def write_matrix_tsv(path: Path, genomes: List[str], positions: List[str], data_
 
 class DataLoader:
     """Build a clean binary feature matrix from per-sample VCFs."""
+
     def _log_stage1_reconciliation(
         self,
         *,
@@ -868,43 +1251,79 @@ class DataLoader:
             kept_sites_n,
             downstream_features,
             removed_features,
-            str(matrices_final_markers) if matrices_final_markers is not None else "n/a",
+            str(matrices_final_markers)
+            if matrices_final_markers is not None
+            else "n/a",
             str(out_root) if out_root is not None else "n/a",
         )
+
     def __init__(self, config=None, n_jobs: Optional[int] = None):
         self.config = config
         self.n_jobs = n_jobs
 
-        # INFO-level site QC thresholds
-        self.qual_threshold = float(getattr(config, "qual_threshold", 30.0)) if config else 30.0
-        self.dp_threshold = int(getattr(config, "min_dp_per_sample", 10)) if config else 10
-        self.mq_threshold = float(getattr(config, "mq_threshold", 40.0)) if config else 40.0
-        self.mq0f_threshold = float(getattr(config, "mq0f_threshold", 0.1)) if config else 0.1
+        # Shared VCF QC / callability (training == query semantics)
+        self.vcf_qc = (
+            VcfQCConfig.from_config(config) if config is not None else VcfQCConfig()
+        )
+        if config is None:
+            # Allow explicit constructor defaults without config object.
+            self.vcf_qc = VcfQCConfig()
+
+        # INFO-level site QC thresholds (mirrored from vcf_qc for logging/compat)
+        self.qual_threshold = float(self.vcf_qc.qual_threshold)
+        self.dp_threshold = int(self.vcf_qc.min_dp)
+        self.gq_threshold = int(self.vcf_qc.min_gq)
+        self.mq_threshold = float(self.vcf_qc.mq_threshold)
+        self.mq0f_threshold = float(self.vcf_qc.mq0f_threshold)
+        self.assume_absent_variant_is_reference = bool(
+            self.vcf_qc.assume_absent_variant_is_reference
+        )
 
         # Cohort-level presence threshold (minimum number of samples that must contain the SNP)
-        self.min_sample_presence = int(getattr(config, "min_sample_presence", 3)) if config else 3
+        self.min_sample_presence = (
+            int(getattr(config, "min_sample_presence", 3)) if config else 3
+        )
 
         # Binary baseline strategy: 'Y' (reference) or 'N' (cohort mode)
-        self.ancestral_allele = str(getattr(config, "ancestral_allele", "Y")) if config else "Y"
+        self.ancestral_allele = (
+            str(getattr(config, "ancestral_allele", "Y")) if config else "Y"
+        )
 
         # Variant scope
-        self.biallelic_only = bool(getattr(config, "biallelic_only", True)) if config else True
+        self.biallelic_only = bool(self.vcf_qc.biallelic_only)
 
         # DataLoader lightweight preprocessing (kept separate from statistical validation)
-        self.remove_invariant = bool(getattr(config, "remove_invariant", True)) if config else True
-        self.min_minor_count = int(getattr(config, "min_minor_count", 0)) if config else 0
+        self.remove_invariant = (
+            bool(getattr(config, "remove_invariant", True)) if config else True
+        )
+        self.min_minor_count = (
+            int(getattr(config, "min_minor_count", 0)) if config else 0
+        )
 
         # Output naming (kept consistent across artifacts)
-        self.generic_name = str(getattr(config, "generic_name", "matrix")) if config else "matrix"
+        self.generic_name = (
+            str(getattr(config, "generic_name", "matrix")) if config else "matrix"
+        )
 
         # Fasta2matrices-style filter knobs for matrices/* outputs
-        self.matrices_min_count = int(getattr(config, "matrices_min_count", 3)) if config else 3
-        self.matrices_repeat_number = int(getattr(config, "matrices_repeat_number", 1)) if config else 1
-        self.matrices_type = str(getattr(config, "matrices_type", "all")) if config else "all"
+        self.matrices_min_count = (
+            int(getattr(config, "matrices_min_count", 3)) if config else 3
+        )
+        self.matrices_repeat_number = (
+            int(getattr(config, "matrices_repeat_number", 1)) if config else 1
+        )
+        self.matrices_type = (
+            str(getattr(config, "matrices_type", "all")) if config else "all"
+        )
         self.matrices_fix = str(getattr(config, "matrices_fix", "")) if config else ""
 
         # Optional: shrink column names in returned DataFrame (not affecting artifacts)
-        self.use_integer_variant_ids = bool(getattr(config, "use_integer_variant_ids", False)) if config else False
+        self.use_integer_variant_ids = (
+            bool(getattr(config, "use_integer_variant_ids", False)) if config else False
+        )
+
+        if self.assume_absent_variant_is_reference:
+            warn_legacy_absence_assumed_reference()
 
     def load_genomic_matrix(
         self,
@@ -937,7 +1356,9 @@ class DataLoader:
                 )
             else:
                 logger.info("DataLoader: mode=vcf_directory")
-            return self._load_vcf_directory(path, output_dir=output_dir, ref_path=ref_fasta)
+            return self._load_vcf_directory(
+                path, output_dir=output_dir, ref_path=ref_fasta
+            )
 
         suffix = "".join(path.suffixes).lower()
         if suffix.endswith((".csv", ".tsv", ".tab")):
@@ -959,7 +1380,9 @@ class DataLoader:
             f"Got: {path}"
         )
 
-    def load_metadata(self, meta_path: str, output_dir: Optional[str] = None) -> pd.DataFrame:
+    def load_metadata(
+        self, meta_path: str, output_dir: Optional[str] = None
+    ) -> pd.DataFrame:
         """Load a metadata table and index it by sample identifier."""
         path = Path(meta_path)
         if not path.exists():
@@ -969,7 +1392,9 @@ class DataLoader:
         df = pd.read_csv(path, sep=sep)
 
         if df.shape[1] < 2:
-            raise ValueError(f"Metadata file looks invalid (needs ≥2 columns): {path} (shape={df.shape})")
+            raise ValueError(
+                f"Metadata file looks invalid (needs ≥2 columns): {path} (shape={df.shape})"
+            )
 
         idx_col = "Sample" if "Sample" in df.columns else df.columns[0]
         df[idx_col] = df[idx_col].astype(str)
@@ -983,7 +1408,9 @@ class DataLoader:
 
         return df
 
-    def load_known_markers(self, known_markers_path: str, output_dir: Optional[str] = None) -> List[str]:
+    def load_known_markers(
+        self, known_markers_path: str, output_dir: Optional[str] = None
+    ) -> List[str]:
         """Load a list of marker identifiers from a .txt or .csv/.tsv file."""
         path = Path(known_markers_path)
         if not path.exists():
@@ -1006,7 +1433,10 @@ class DataLoader:
 
         elif suffix.endswith((".csv", ".tsv", ".tab")):
             sep = "\t" if suffix.endswith((".tsv", ".tab")) else ","
-            logger.info("Detected tabular file (%s) – reading from first column or 'marker' column", suffix)
+            logger.info(
+                "Detected tabular file (%s) – reading from first column or 'marker' column",
+                suffix,
+            )
             df = pd.read_csv(path, sep=sep)
             col = "marker" if "marker" in df.columns else df.columns[0]
             markers = [str(x).strip() for x in df[col].tolist() if str(x).strip()]
@@ -1025,9 +1455,15 @@ class DataLoader:
 
         removed = len(markers) - len(uniq_markers)
         if removed > 0:
-            logger.info("Removed %d duplicate markers (total unique: %d)", removed, len(uniq_markers))
+            logger.info(
+                "Removed %d duplicate markers (total unique: %d)",
+                removed,
+                len(uniq_markers),
+            )
         else:
-            logger.info("Loaded %d unique markers (no duplicates found)", len(uniq_markers))
+            logger.info(
+                "Loaded %d unique markers (no duplicates found)", len(uniq_markers)
+            )
 
         if output_dir:
             outdir = Path(output_dir)
@@ -1047,9 +1483,15 @@ class DataLoader:
     # ──────────────────────────────────────────────────────────────
     # Helper to process one VCF file (used in parallel)
     # ──────────────────────────────────────────────────────────────
-    def _load_vcf_directory(self, vcf_dir: Path, output_dir: Optional[str], ref_path: Optional[str]) -> pd.DataFrame:
+    def _load_vcf_directory(
+        self, vcf_dir: Path, output_dir: Optional[str], ref_path: Optional[str]
+    ) -> pd.DataFrame:
         """Scan a directory of per-sample VCFs and build allele/binary matrices."""
-        vcfs = sorted([p for p in vcf_dir.iterdir() if p.name.endswith((".vcf", ".vcf.gz"))])
+        load_started_at = time.perf_counter()
+        stage_timings: Dict[str, float] = {}
+        vcfs = sorted(
+            [p for p in vcf_dir.iterdir() if p.name.endswith((".vcf", ".vcf.gz"))]
+        )
         if not vcfs:
             raise ValueError(f"No .vcf/.vcf.gz files found in: {vcf_dir}")
 
@@ -1071,29 +1513,38 @@ class DataLoader:
 
         # 3) Record-level QC configuration (applied during parsing)
         logger.info(
-            "DataLoader: record-level QC thresholds (applied during parsing)\n"
-            "  QUAL>=%.1f | INFO/DP>=%d | INFO/MQ>=%.1f | INFO/MQ0F<=%.3f",
+            "DataLoader: record-level QC thresholds (shared vcf_call_semantics)\n"
+            "  QUAL>=%.1f | DP>=%d | GQ>=%d | INFO/MQ>=%.1f | INFO/MQ0F<=%.3f | "
+            "respect_filter=%s | assume_absent_as_ref=%s",
             float(self.qual_threshold),
             int(self.dp_threshold),
+            int(self.gq_threshold),
             float(self.mq_threshold),
             float(self.mq0f_threshold),
+            bool(self.vcf_qc.respect_filter),
+            bool(self.assume_absent_variant_is_reference),
         )
 
         # 4) Cohort / matrix-level configuration (applied AFTER parsing/merge)
         logger.info(
             "DataLoader: cohort + matrix settings (applied after parsing)\n"
             "  min_sample_presence=%d | baseline=%s | min_minor_count=%d",
-            int(self.min_sample_presence), ("REF" if self.ancestral_allele.upper() == "Y" else "MODE"),
+            int(self.min_sample_presence),
+            ("REF" if self.ancestral_allele.upper() == "Y" else "MODE"),
             int(self.min_minor_count),
         )
 
         # Helper for parallel processing
-        def process_vcf(vcf_path: Path) -> tuple[str, dict]:
+        def process_vcf(vcf_path: Path) -> tuple[str, CallSet]:
             sample = vcf_path.name
             if sample.endswith(".vcf.gz"):
                 sample = sample[:-7]
             elif sample.endswith(".vcf"):
                 sample = sample[:-4]
+            elif sample.endswith(".g.vcf.gz"):
+                sample = sample[: -len(".g.vcf.gz")]
+            elif sample.endswith(".g.vcf"):
+                sample = sample[: -len(".g.vcf")]
 
             calls = iter_sample_calls(
                 vcf_path,
@@ -1102,14 +1553,18 @@ class DataLoader:
                 mq_thresh=self.mq_threshold,
                 mq0f_thresh=self.mq0f_threshold,
                 biallelic_only=self.biallelic_only,
+                gq_thresh=self.gq_threshold,
+                qc=self.vcf_qc,
             )
+            # Prefer sample name from VCF header when present.
+            if getattr(calls, "sample_name", None):
+                sample = str(calls.sample_name)
 
-            # Keep debug-level to avoid log spam unless enabled
             logger.debug(
                 "DataLoader: per-sample parse result\n"
                 "  sample=%s\n"
-                "  retained_sites=%d\n"
-                "  storage=returned as calls_dict (site→(REF,CALLED))",
+                "  parsed_records=%d\n"
+                "  storage=CallSet (site→AlleleCall + optional gVCF ref blocks)",
                 sample,
                 len(calls),
             )
@@ -1117,27 +1572,62 @@ class DataLoader:
 
         # 5) Execute parsing
         n_jobs = getattr(self, "n_jobs", -1)
-        logger.info("DataLoader: starting parallel per-sample parsing (n_jobs=%s)", _fmt_n_jobs(n_jobs))
-
-        results = Parallel(n_jobs=n_jobs)(
-            delayed(process_vcf)(vcf)
-            for vcf in progress_iter(vcfs, desc="Parsing VCF samples", unit="sample", leave=False)
+        logger.info(
+            "DataLoader: starting parallel per-sample parsing (n_jobs=%s)",
+            _fmt_n_jobs(n_jobs),
         )
 
+        parsing_started_at = time.perf_counter()
+        results = Parallel(n_jobs=n_jobs)(
+            delayed(process_vcf)(vcf)
+            for vcf in progress_iter(
+                vcfs, desc="Parsing VCF samples", unit="sample", leave=False
+            )
+        )
+        stage_timings["vcf_parsing"] = time.perf_counter() - parsing_started_at
+
         # 6) Parsing summary + clarify where it is stored
+        audit_started_at = time.perf_counter()
         n_samples = len(results)
-        total_calls = sum(len(calls) for _, calls in results)
-        mean_calls = total_calls / max(1, n_samples)
+        total_records = sum(len(calls) for _, calls in results)
+        mean_records = total_records / max(1, n_samples)
+        parsed_state_counts: Counter[str] = Counter()
+        parsed_qc_reasons: Counter[str] = Counter()
+        for _, calls in results:
+            for allele_call in calls.by_pos.values():
+                parsed_state_counts[allele_call.state.value] += 1
+                parsed_qc_reasons.update(allele_call.qc_reasons)
+
+        state_summary = ", ".join(
+            f"{state}={count}"
+            for state, count in sorted(parsed_state_counts.items())
+        ) or "none"
+        qc_reason_summary = ", ".join(
+            f"{reason}={count}"
+            for reason, count in parsed_qc_reasons.most_common(8)
+        ) or "none"
+        stage_timings["parse_audit"] = time.perf_counter() - audit_started_at
 
         logger.info(
             "DataLoader: parsing complete\n"
             "  samples=%d\n"
-            "  total_called_sites=%d\n"
-            "  mean_calls_per_sample=%.2f\n"
+            "  total_parsed_records=%d\n"
+            "  mean_parsed_records_per_sample=%.2f\n"
+            "  call_states=%s\n"
+            "  top_qc_reasons=%s\n"
             "  storage=results list of (sample_id, calls_dict) in memory",
             n_samples,
-            total_calls,
-            mean_calls,
+            total_records,
+            mean_records,
+            state_summary,
+            qc_reason_summary,
+        )
+        logger.info(
+            "DataLoader timing: VCF parsing | seconds=%.3f | samples_per_second=%.2f | "
+            "records_per_second=%.2f",
+            stage_timings["vcf_parsing"],
+            n_samples / max(stage_timings["vcf_parsing"], 1e-12),
+            total_records / max(stage_timings["vcf_parsing"], 1e-12),
         )
 
         logger.info(
@@ -1149,20 +1639,35 @@ class DataLoader:
         )
 
         # 7) Merge parsed results into cohort-wide site universe
-        per_sample_calls: Dict[str, Dict[Tuple[str, int], Tuple[str, str]]] = {}
+        per_sample_calls: Dict[str, CallSet] = {}
         site_counts: Dict[Tuple[str, int, str, str], int] = {}
 
         carrier_events = 0
+        sample_ids = [sample for sample, _ in results]
+        assert_unique_sample_ids(sample_ids, context="VCF training directory")
 
+        merge_started_at = time.perf_counter()
         for sample, calls in results:
             per_sample_calls[sample] = calls
-            for (chrom, pos), (ref, called) in calls.items():
-                if called == ref:
+            for (chrom, pos), allele_call in calls.items():
+                if not isinstance(allele_call, AlleleCall):
                     continue
-
+                if allele_call.state != CallState.CALLED_ALTERNATE:
+                    continue
+                called = (allele_call.called_allele or "").upper()
+                ref = (allele_call.ref or "").upper()
+                if (
+                    not called
+                    or not ref
+                    or called == ref
+                    or len(called) != 1
+                    or len(ref) != 1
+                ):
+                    continue
                 allele_key = (chrom, pos, ref, called)
                 site_counts[allele_key] = site_counts.get(allele_key, 0) + 1
                 carrier_events += 1
+        stage_timings["cohort_merge"] = time.perf_counter() - merge_started_at
 
         logger.info(
             "DataLoader: cohort merge complete\n"
@@ -1230,32 +1735,84 @@ class DataLoader:
             )
 
         if not kept_sites:
+            diagnostic = (
+                f"call_states=[{state_summary}]; "
+                f"top_qc_reasons=[{qc_reason_summary}]"
+            )
+            if candidate_sites == 0:
+                raise ValueError(
+                    "No callable alternate SNPs remained after record-level QC. "
+                    f"{diagnostic}. Check whether the configured QC fields exist "
+                    "in the VCF FORMAT/INFO columns (for example, GQ_missing means "
+                    "min_gq_per_sample is active for VCFs without GQ)."
+                )
             raise ValueError(
                 "No polymorphic sites retained after QC + min-sample-presence filter. "
-                "Consider relaxing thresholds."
+                f"Observed {candidate_sites} callable allele-specific SNPs, but none "
+                f"occurred in at least {self.min_sample_presence} samples. {diagnostic}."
             )
 
         # 9) Sort sites deterministically and build allele strings
         ordered_keys = sorted(kept_sites.keys(), key=lambda x: (x[0], x[1], x[2], x[3]))
         ref_bases = [k[2] for k in ordered_keys]
-        alt_bases = [k[3] for k in ordered_keys]
 
         samples_sorted = sorted(per_sample_calls.keys())
-        per_pos_counts = [Counter() for _ in ordered_keys]
+        per_pos_counts: List[Counter[str]] = [Counter() for _ in ordered_keys]
         sample_allele_strings: Dict[str, str] = {}
+        # Parallel binary matrix cells: 0 / 1 / NaN (missing is never ordinary 0)
+        sample_binary_values: Dict[str, List[float]] = {}
+        call_state_audit: Dict[str, Counter] = {}
 
         ref_line = "".join(ref_bases)
-        logger.debug("DataLoader: building allele strings for %d sample(s)", len(per_sample_calls))
+        logger.debug(
+            "DataLoader: building allele strings for %d sample(s)",
+            len(per_sample_calls),
+        )
 
+        matrix_started_at = time.perf_counter()
         for sample in samples_sorted:
             calls = per_sample_calls[sample]
-            alleles = []
+            alleles: List[str] = []
+            bin_vals: List[float] = []
+            state_counts: Counter = Counter()
             for j, (chrom, pos, ref, alt) in enumerate(ordered_keys):
-                called = calls.get((chrom, pos), (ref, ref))[1]
-                base = alt if called == alt else ref
+                resolved = resolve_feature_call(
+                    chrom=chrom,
+                    pos=pos,
+                    feature_ref=ref,
+                    feature_alt=alt,
+                    calls=calls,
+                    qc=self.vcf_qc,
+                )
+                state_counts[resolved.state.value] += 1
+                if resolved.assumed_reference:
+                    state_counts["assumed_reference"] += 1
+                encoded, _allele_label = encode_binary_for_feature(
+                    resolved,
+                    feature_ref=ref,
+                    feature_alt=alt,
+                    baseline_allele=ref
+                    if self.ancestral_allele.upper() == "Y"
+                    else None,
+                )
+                if (
+                    resolved.state == CallState.CALLED_ALTERNATE
+                    and (resolved.called_allele or "").upper() == alt
+                ):
+                    base = alt
+                elif resolved.state == CallState.CALLED_REFERENCE:
+                    base = ref
+                elif np.isnan(encoded):
+                    base = "N"  # non-callable; not REF evidence
+                else:
+                    base = alt if encoded == 1.0 else ref
                 alleles.append(base)
-                per_pos_counts[j][base] += 1
+                bin_vals.append(float(encoded))
+                if base in {"A", "C", "G", "T"}:
+                    per_pos_counts[j][base] += 1
             sample_allele_strings[sample] = "".join(alleles)
+            sample_binary_values[sample] = bin_vals
+            call_state_audit[sample] = state_counts
 
         # 10) Baseline selection
         if self.ancestral_allele.upper() == "Y":
@@ -1263,12 +1820,16 @@ class DataLoader:
             baseline_strategy = "REF"
         else:
             baseline = [
-                per_pos_counts[j].most_common(1)[0][0] if per_pos_counts[j] else ref_bases[j]
+                per_pos_counts[j].most_common(1)[0][0]
+                if per_pos_counts[j]
+                else ref_bases[j]
                 for j in range(len(ordered_keys))
             ]
             baseline_strategy = "MODE"
 
-        baseline_diff_from_ref = sum(1 for i, ch in enumerate(baseline) if ch != ref_line[i])
+        baseline_diff_from_ref = sum(
+            1 for i, ch in enumerate(baseline) if ch != ref_line[i]
+        )
 
         if log_flow_step is not None:
             baseline_reason = (
@@ -1311,11 +1872,32 @@ class DataLoader:
                 baseline_diff_from_ref,
             )
 
-        # 11) Binary encoding (baseline → 0/1 orientation)
-        ref_binary = "".join("0" if ref_line[i] == baseline[i] else "1" for i in range(len(ref_line)))
+        # 11) Binary encoding (baseline → 0/1/NaN orientation)
+        # Re-encode relative to chosen baseline when cohort MODE is requested.
+        if self.ancestral_allele.upper() != "Y":
+            for sample in samples_sorted:
+                seq = sample_allele_strings[sample]
+                re_bin: List[float] = []
+                for i, ch in enumerate(seq):
+                    if ch == "N" or ch not in {"A", "C", "G", "T"}:
+                        re_bin.append(float("nan"))
+                    else:
+                        re_bin.append(0.0 if ch == baseline[i] else 1.0)
+                sample_binary_values[sample] = re_bin
+
+        ref_binary = "".join(
+            "0" if ref_line[i] == baseline[i] else "1" for i in range(len(ref_line))
+        )
         sample_binary_strings = {
-            s: "".join("0" if seq[i] == baseline[i] else "1" for i in range(len(seq)))
-            for s, seq in sample_allele_strings.items()
+            s: "".join(
+                "?"
+                if (
+                    i >= len(vals) or (isinstance(vals[i], float) and np.isnan(vals[i]))
+                )
+                else ("1" if vals[i] == 1.0 else "0")
+                for i in range(len(ref_line))
+            )
+            for s, vals in sample_binary_values.items()
         }
 
         expected_len = len(ref_line)
@@ -1328,44 +1910,72 @@ class DataLoader:
         # 12) Feature IDs (variant-centric identifiers)
         variant_ids = [f"{c}:{p}:{r}:{a}" for (c, p, r, a) in ordered_keys]
         # 13) Final matrix assembly (sample-centric orientation)
-        data_bin = [[int(ch) for ch in sample_binary_strings[s]] for s in samples_sorted]
+        # Missing / unresolved / absent-without-callability → NaN (not ordinary 0).
+        data_bin = [sample_binary_values[s] for s in samples_sorted]
 
         df = pd.DataFrame(
             data_bin,
             index=samples_sorted,
             columns=variant_ids,
-            dtype=int,
+            dtype=float,
         )
         df.index.name = "Sample"
+        stage_timings["matrix_construction"] = (
+            time.perf_counter() - matrix_started_at
+        )
+        matrix_cells = int(df.shape[0] * df.shape[1])
+        logger.info(
+            "DataLoader timing: matrix construction | seconds=%.3f | samples=%d | "
+            "features=%d | cells=%d | cells_per_second=%.2f",
+            stage_timings["matrix_construction"],
+            int(df.shape[0]),
+            int(df.shape[1]),
+            matrix_cells,
+            matrix_cells / max(stage_timings["matrix_construction"], 1e-12),
+        )
 
         # 14) Raw matrix stats (post-encoding, pre-preprocessing)
         n_samples, raw_feature_count = df.shape
-        total_ones = int(df.values.sum())
+        values = df.to_numpy(dtype=float)
+        total_ones = int(np.nansum(values == 1.0))
+        total_zeros = int(np.nansum(values == 0.0))
+        total_missing = int(np.isnan(values).sum())
         total_cells = n_samples * raw_feature_count
 
         matrix_density = total_ones / max(1, total_cells)
         mean_ones_per_feature = total_ones / max(1, raw_feature_count)
         mean_ones_per_sample = total_ones / max(1, n_samples)
+        missing_fraction = total_missing / max(1, total_cells)
+
+        # Aggregate call-state audit
+        global_state: Counter[str] = Counter()
+        for c in call_state_audit.values():
+            global_state.update(c)
 
         logger.info(
             "DataLoader: raw binary matrix (post-encoding, pre-preprocessing)\n"
             "  The matrix contains %d genomes (rows) and %d polymorphic sites (columns).\n"
             "  This corresponds to %d total genotype entries.\n"
-            "  A total of %d entries are encoded as 1 (non-baseline alleles).\n"
-            "  Matrix density (fraction of 1s) = %.6f.\n"
+            "  Encoded as 1 (non-baseline)=%d | 0 (callable baseline)=%d | NaN (non-callable)=%d.\n"
+            "  Matrix density (fraction of 1s) = %.6f | missing_fraction=%.6f.\n"
             "  Mean carrier count per site = %.2f genomes.\n"
-            "  Mean variant burden per genome = %.2f sites.",
+            "  Mean variant burden per genome = %.2f sites.\n"
+            "  Call-state tallies (sample×feature): %s",
             n_samples,
             raw_feature_count,
             total_cells,
             total_ones,
+            total_zeros,
+            total_missing,
             matrix_density,
+            missing_fraction,
             mean_ones_per_feature,
             mean_ones_per_sample,
+            dict(global_state),
         )
 
-        # 15) Variant frequency summary (carriers per feature)
-        carrier_counts = df.sum(axis=0).astype(int)
+        # 15) Variant frequency summary (carriers per feature; NaN skipped by sum)
+        carrier_counts = df.eq(1.0).sum(axis=0).astype(int)
         singleton_sites = int((carrier_counts == 1).sum())
         doubleton_sites = int((carrier_counts == 2).sum())
 
@@ -1380,7 +1990,11 @@ class DataLoader:
         # ─────────────────────────────────────────────
         # Preprocessing
         # ─────────────────────────────────────────────
+        preprocessing_started_at = time.perf_counter()
         df, prep_stats = self._preprocess_binary_matrix(df)
+        stage_timings["matrix_preprocessing"] = (
+            time.perf_counter() - preprocessing_started_at
+        )
         logger.info(
             "DataLoader: matrix preprocessing (post-encoding)\n"
             "  The preprocessing stage applied invariant-site removal and minor allele count filtering.\n"
@@ -1400,15 +2014,14 @@ class DataLoader:
             prep_stats["removed_invariant"],
             prep_stats["removed_low_minor_count"],
             prep_stats["features_after"],
-        )    
+        )
         retained_variant_ids_for_artifacts = df.columns.astype(str).tolist()
+        artifact_matrix_df = df
 
         lookup = None
         if self.use_integer_variant_ids:
             df, lookup = self._convert_to_integer_variant_ids(df)
-            logger.info(
-                "DataLoader: compacted variant IDs and created lookup table."
-            )
+            logger.info("DataLoader: compacted variant IDs and created lookup table.")
 
         if output_dir:
             out = Path(output_dir)
@@ -1444,11 +2057,11 @@ class DataLoader:
             )
 
             logger.info(
-                "DataLoader: writing artifacts\n"
-                "  output_dir=%s",
+                "DataLoader: writing artifacts\n" "  output_dir=%s",
                 output_dir,
             )
 
+            artifacts_started_at = time.perf_counter()
             matrices_final_markers = self._write_all_artifacts(
                 out_root=out,
                 kept_sites=artifact_kept_sites,
@@ -1458,21 +2071,42 @@ class DataLoader:
                 sample_allele_strings=artifact_sample_allele_strings,
                 ref_binary=artifact_ref_binary,
                 sample_binary_strings=artifact_sample_binary_strings,
+                matrix_df=artifact_matrix_df,
                 ref_path=Path(ref_path) if ref_path else None,
                 integer_id_lookup=lookup,
+            )
+            stage_timings["artifact_processing"] = (
+                time.perf_counter() - artifacts_started_at
             )
 
             logger.info(
                 "DataLoader: artifact writing complete | matrices_final_markers=%s",
-                str(matrices_final_markers) if matrices_final_markers is not None else "n/a",
+                str(matrices_final_markers)
+                if matrices_final_markers is not None
+                else "n/a",
             )
 
         else:
+            stage_timings["artifact_processing"] = 0.0
             logger.info(
                 "DataLoader: output_dir not provided; skipping artifact writing and returning in-memory matrix."
             )
 
+        total_seconds = time.perf_counter() - load_started_at
+        logger.info(
+            "DataLoader timing summary | vcf_parsing=%.3fs | parse_audit=%.3fs | "
+            "cohort_merge=%.3fs | matrix_construction=%.3fs | "
+            "matrix_preprocessing=%.3fs | artifact_processing=%.3fs | total=%.3fs",
+            stage_timings.get("vcf_parsing", 0.0),
+            stage_timings.get("parse_audit", 0.0),
+            stage_timings.get("cohort_merge", 0.0),
+            stage_timings.get("matrix_construction", 0.0),
+            stage_timings.get("matrix_preprocessing", 0.0),
+            stage_timings.get("artifact_processing", 0.0),
+            total_seconds,
+        )
         return df
+
     def _preprocess_binary_matrix(self, df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
         """
         Apply lightweight, non-statistical preprocessing to the binary matrix.
@@ -1612,6 +2246,7 @@ class DataLoader:
         }
 
         return df, stats
+
     def _filter_artifact_inputs_to_retained_features(
         self,
         *,
@@ -1668,18 +2303,14 @@ class DataLoader:
         filtered_ref_binary = _slice_string(ref_binary)
 
         filtered_sample_alleles = {
-            sample: _slice_string(seq)
-            for sample, seq in sample_allele_strings.items()
+            sample: _slice_string(seq) for sample, seq in sample_allele_strings.items()
         }
 
         filtered_sample_binary = {
-            sample: _slice_string(seq)
-            for sample, seq in sample_binary_strings.items()
+            sample: _slice_string(seq) for sample, seq in sample_binary_strings.items()
         }
 
-        filtered_positions_1based = [
-            pos for _, pos, _, _ in filtered_ordered_keys
-        ]
+        filtered_positions_1based = [pos for _, pos, _, _ in filtered_ordered_keys]
 
         logger.info(
             "DataLoader: synchronized artifact inputs to post-preprocessing feature set\n"
@@ -1699,7 +2330,10 @@ class DataLoader:
             filtered_ref_binary,
             filtered_sample_binary,
         )
-    def _convert_to_integer_variant_ids(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, str]]:
+
+    def _convert_to_integer_variant_ids(
+        self, df: pd.DataFrame
+    ) -> Tuple[pd.DataFrame, Dict[str, str]]:
         """Replace long variant IDs with compact IDs and return a lookup."""
         lookup: Dict[str, str] = {}
         new_cols: List[str] = []
@@ -1712,25 +2346,24 @@ class DataLoader:
         return df2, lookup
 
     # ──────────────────────────────────────────────────────────
-    # Artifact generation 
+    # Artifact generation
     # ──────────────────────────────────────────────────────────
 
     def _write_all_artifacts(
         self,
         out_root: Path,
-        kept_sites: Dict[Tuple[str, int], Tuple[int, str, str]],
-        ordered_keys: List[Tuple[str, int]],
+        kept_sites: Dict[Tuple[str, int, str, str], int],
+        ordered_keys: List[Tuple[str, int, str, str]],
         positions_1based: List[int],
         ref_line: str,
         sample_allele_strings: Dict[str, str],
         ref_binary: str,
         sample_binary_strings: Dict[str, str],
+        matrix_df: pd.DataFrame,
         ref_path: Optional[Path],
         integer_id_lookup: Optional[Dict[str, str]],
     ) -> Optional[int]:
         """Write vcf_counts/*, fasta/*, and matrices/* outputs (with detailed timing logs)."""
-        import time
-
         def _fmt_size(p: Path) -> str:
             try:
                 b = p.stat().st_size
@@ -1794,7 +2427,9 @@ class DataLoader:
         dt = time.perf_counter() - t
         n_rows = len(all_snp_rows) if all_snp_rows is not None else -1
         n_cols = len(all_snp_header) if all_snp_header is not None else -1
-        logger.info("Artifacts: all_snp.txt done (%.2fs) rows=%d cols=%d", dt, n_rows, n_cols)
+        logger.info(
+            "Artifacts: all_snp.txt done (%.2fs) rows=%d cols=%d", dt, n_rows, n_cols
+        )
         _log_written(all_snp_path)
 
         # 2) fasta/<generic>_{alleles,binary}.fasta
@@ -1844,6 +2479,10 @@ class DataLoader:
             fasta_binary=binary_fa,
             annotation_tsv=filtered_tsv,
             out_dir=matrices_dir,
+            matrix_df=matrix_df,
+            ref_line=ref_line,
+            sample_allele_strings=sample_allele_strings,
+            ref_binary=ref_binary,
         )
         dt = time.perf_counter() - t
         logger.info("Artifacts: matrices/* done (%.2fs)", dt)
@@ -1855,12 +2494,16 @@ class DataLoader:
             with open(lookup_path, "w", encoding="utf-8") as f:
                 json.dump(integer_id_lookup, f, indent=2)
             dt = time.perf_counter() - t
-            logger.info("Artifacts: variant_id_lookup.json done (%.2fs) entries=%d", dt, len(integer_id_lookup))
+            logger.info(
+                "Artifacts: variant_id_lookup.json done (%.2fs) entries=%d",
+                dt,
+                len(integer_id_lookup),
+            )
             _log_written(lookup_path)
 
         logger.info("Artifacts: done (total %.2fs)", time.perf_counter() - t_total)
         return matrices_final_markers
-    
+
     def _write_all_snp_table(
         self,
         path: Path,
@@ -1897,7 +2540,19 @@ class DataLoader:
                 do_annotate = True
 
         if do_annotate:
-            rows = annotate_snps_genbank(kept_sites, ref_path)  # type: ignore[arg-type]
+            circular_config = getattr(self.config, "reference_circular_contigs", None)
+            if isinstance(circular_config, str):
+                circular_config = [
+                    value.strip()
+                    for value in circular_config.split(",")
+                    if value.strip()
+                ]
+            rows = annotate_snps_genbank(
+                kept_sites,
+                ref_path,
+                reference_id=getattr(self.config, "reference_id", None),
+                circular_contigs=circular_config,
+            )  # type: ignore[arg-type]
             for row in rows:
                 feature_id = str(row.get("Feature_ID", ""))
                 if baseline_metadata and feature_id in baseline_metadata:
@@ -1906,14 +2561,22 @@ class DataLoader:
                     row.setdefault("Baseline_allele", row.get("Ref_allele", ""))
                     row.setdefault("Binary_reference_value", "0")
                     row.setdefault("Encoding", "1_if_allele_differs_from_baseline")
+            # Annotation rows intentionally carry reference identity, overlap,
+            # strand, and distance fields. Preserve the full auditable schema.
+            for row in rows:
+                for column in row:
+                    if column not in header_annot:
+                        header_annot.append(column)
             with open(path, "w", encoding="utf-8", newline="") as out:
-                w = csv.DictWriter(out, fieldnames=header_annot, delimiter="\t", lineterminator="\n")
+                w = csv.DictWriter(
+                    out, fieldnames=header_annot, delimiter="\t", lineterminator="\n"
+                )
                 w.writeheader()
                 for r in rows:
                     w.writerow(r)
             return rows, header_annot
 
-      # Minimal output keeps enough marker metadata for query-time raw-sequence encoding.
+        # Minimal output keeps enough marker metadata for query-time raw-sequence encoding.
         header_min = [
             "Feature_ID",
             "Position",
@@ -1925,13 +2588,37 @@ class DataLoader:
             "Binary_reference_value",
             "Encoding",
             "Nucleotide_change",
+            "Reference_id",
+            "Reference_build",
+            "Reference_checksum_sha256",
+            "Contig",
         ]
         rows_min: List[Dict[str, str]] = []
 
-        for (chrom, pos, ref_nt, alt_nt) in sorted(kept_sites.keys(), key=lambda x: (x[0], x[1], x[2], x[3])):
+        reference_checksum = ""
+        reference_identity = str(
+            getattr(self.config, "reference_id", None) or ""
+        ).strip()
+        if ref_path and ref_path.exists():
+            import hashlib as _hashlib
+
+            reference_checksum = _hashlib.sha256(ref_path.read_bytes()).hexdigest()
+            if not reference_identity:
+                try:
+                    reference_identity = ";".join(
+                        load_reference_sequences(ref_path).keys()
+                    )
+                except Exception:
+                    reference_identity = ""
+
+        for chrom, pos, ref_nt, alt_nt in sorted(
+            kept_sites.keys(), key=lambda x: (x[0], x[1], x[2], x[3])
+        ):
             count = kept_sites[(chrom, pos, ref_nt, alt_nt)]
             feature_id = f"{chrom}:{pos}:{ref_nt}:{alt_nt}"
-            baseline_row = baseline_metadata.get(feature_id, {}) if baseline_metadata else {}
+            baseline_row = (
+                baseline_metadata.get(feature_id, {}) if baseline_metadata else {}
+            )
             rows_min.append(
                 {
                     "Feature_ID": feature_id,
@@ -1940,15 +2627,27 @@ class DataLoader:
                     "Sequence": chrom,
                     "Ref_allele": ref_nt.upper(),
                     "Alt_allele": alt_nt.upper(),
-                    "Baseline_allele": baseline_row.get("Baseline_allele", ref_nt.upper()),
-                    "Binary_reference_value": baseline_row.get("Binary_reference_value", "0"),
-                    "Encoding": baseline_row.get("Encoding", "1_if_allele_differs_from_baseline"),
+                    "Baseline_allele": baseline_row.get(
+                        "Baseline_allele", ref_nt.upper()
+                    ),
+                    "Binary_reference_value": baseline_row.get(
+                        "Binary_reference_value", "0"
+                    ),
+                    "Encoding": baseline_row.get(
+                        "Encoding", "1_if_allele_differs_from_baseline"
+                    ),
                     "Nucleotide_change": f"{ref_nt}|{alt_nt}",
+                    "Reference_id": reference_identity,
+                    "Reference_build": reference_identity,
+                    "Reference_checksum_sha256": reference_checksum,
+                    "Contig": chrom,
                 }
             )
 
         with open(path, "w", encoding="utf-8", newline="") as out:
-            w = csv.DictWriter(out, fieldnames=header_min, delimiter="\t", lineterminator="\n")
+            w = csv.DictWriter(
+                out, fieldnames=header_min, delimiter="\t", lineterminator="\n"
+            )
             w.writeheader()
             for r in rows_min:
                 w.writerow(r)
@@ -1974,19 +2673,34 @@ class DataLoader:
         ref_seq_fallback: Optional[str] = None
         if ref_path and ref_path.exists():
             lower = ref_path.name.lower()
-            if lower.endswith((".fa", ".fna", ".fasta", ".fas", ".gb", ".gbk", ".gbff")):
+            if lower.endswith(
+                (".fa", ".fna", ".fasta", ".fas", ".gb", ".gbk", ".gbff")
+            ):
                 try:
                     ref_records = load_reference_sequences(ref_path)
-                    ref_seq_fallback = "".join(ref_records.values()).upper() if ref_records else load_reference_sequence(ref_path)
+                    ref_seq_fallback = (
+                        "".join(ref_records.values()).upper()
+                        if ref_records
+                        else load_reference_sequence(ref_path)
+                    )
                 except Exception as e:
-                    logger.warning(f"Reference loading failed; context column skipped. Reason: {e}")
+                    logger.warning(
+                        f"Reference loading failed; context column skipped. Reason: {e}"
+                    )
                     ref_records = {}
                     ref_seq_fallback = None
 
         out_header = list(input_header)
         add_context = ref_seq_fallback is not None and "Position" in input_header
         if add_context:
-            out_header.extend(["Context_±40", "Context_flank", "Context_center_offset", "Context_reference_record"])
+            out_header.extend(
+                [
+                    "Context_±40",
+                    "Context_flank",
+                    "Context_center_offset",
+                    "Context_reference_record",
+                ]
+            )
 
         with open(output_path, "w", encoding="utf-8", newline="") as out:
             w = csv.writer(out, delimiter="\t", lineterminator="\n")
@@ -2005,59 +2719,69 @@ class DataLoader:
                     flank = 40
                     seq_name = str(r.get("Sequence", "")).strip()
                     ref_seq_for_row = ref_records.get(seq_name) if seq_name else None
-                    context_source = seq_name if ref_seq_for_row is not None else "concatenated_reference_fallback"
+                    context_source = (
+                        seq_name
+                        if ref_seq_for_row is not None
+                        else "concatenated_reference_fallback"
+                    )
                     if ref_seq_for_row is None:
                         ref_seq_for_row = ref_seq_fallback
-                    row_vals.extend([
-                        context_around(pos, ref_seq_for_row, flank=flank),
-                        str(flank),
-                        str(flank),
-                        context_source,
-                    ])
+                    row_vals.extend(
+                        [
+                            context_around(pos, ref_seq_for_row, flank=flank),
+                            str(flank),
+                            str(flank),
+                            context_source,
+                        ]
+                    )
                 w.writerow(row_vals)
 
-    
     def _write_matrices_outputs(
         self,
         fasta_alleles: Path,
         fasta_binary: Path,
         annotation_tsv: Path,
         out_dir: Path,
+        *,
+        matrix_df: Optional[pd.DataFrame] = None,
+        ref_line: Optional[str] = None,
+        sample_allele_strings: Optional[Dict[str, str]] = None,
+        ref_binary: Optional[str] = None,
     ) -> int:
         """
-    Generate final cohort-level matrices (TSV + FASTA + filtered annotation).
+        Generate final cohort-level matrices (TSV + FASTA + filtered annotation).
 
-    This stage refines the encoded matrix before downstream modeling.
-    It operates strictly at the feature level and does NOT perform statistical
-    association testing. Instead, it ensures that the final matrix is
-    biologically interpretable, structurally stable, and non-redundant.
+        This stage refines the encoded matrix before downstream modeling.
+        It operates strictly at the feature level and does NOT perform statistical
+        association testing. Instead, it ensures that the final matrix is
+        biologically interpretable, structurally stable, and non-redundant.
 
-    Filtering stages (conceptual flow):
+        Filtering stages (conceptual flow):
 
-    1) Minor-count filter (signal stability control)
-       - Removes markers where the minority state is too rare across genomes.
-       - In small cohorts, extremely rare states introduce instability and
-         can distort downstream tree splits or interaction mining.
+        1) Minor-count filter (signal stability control)
+           - Removes markers where the minority state is too rare across genomes.
+           - In small cohorts, extremely rare states introduce instability and
+             can distort downstream tree splits or interaction mining.
 
-    2) Annotation-driven type filter (biological subset selection)
-       - Retains only markers whose functional annotation matches a requested category.
-       - Skipped if annotation rows do not align with marker count.
+        2) Annotation-driven type filter (biological subset selection)
+           - Retains only markers whose functional annotation matches a requested category.
+           - Skipped if annotation rows do not align with marker count.
 
-    3) Redundancy reduction via pattern grouping (feature de-duplication)
-       - Identifies markers that share an identical 0/1 pattern across all genomes.
-       - These markers represent the exact same cohort-level signal.
-       - Keeps at most `repeat_number` representatives per identical-pattern group.
-       - Purpose: collapse perfectly collinear features to reduce redundancy and prevent
-         one signal from being over-represented by multiple duplicate columns.
+        3) Redundancy reduction via pattern grouping (feature de-duplication)
+           - Identifies markers that share an identical 0/1 pattern across all genomes.
+           - These markers represent the exact same cohort-level signal.
+           - Keeps at most `repeat_number` representatives per identical-pattern group.
+           - Purpose: collapse perfectly collinear features to reduce redundancy and prevent
+             one signal from being over-represented by multiple duplicate columns.
 
-    4) Forced retention of specified positions (controlled override)
-       - User-specified marker indices are force-kept even if filtered out.
-       - Ensures known markers remain present for downstream reporting.
+        4) Forced retention of specified positions (controlled override)
+           - User-specified marker indices are force-kept even if filtered out.
+           - Ensures known markers remain present for downstream reporting.
 
-    Important methodological distinction:
-    - Minor-count and type filters are biological inclusion criteria.
-    - Redundancy reduction is a feature-engineering / de-duplication step.
-    - None of these constitute statistical hypothesis testing.
+        Important methodological distinction:
+        - Minor-count and type filters are biological inclusion criteria.
+        - Redundancy reduction is a feature-engineering / de-duplication step.
+        - None of these constitute statistical hypothesis testing.
         """
         out_dir.mkdir(parents=True, exist_ok=True)
         base = self.generic_name
@@ -2067,60 +2791,142 @@ class DataLoader:
         # ─────────────────────────────────────────────
         logger.info("Matrices/*: start (base=%s)", base)
         logger.info(
-                "Matrices stage: feature refinement prior to downstream modeling\n"
-                "Purpose: structural filtering + redundancy control\n"
-            )
+            "Matrices stage: feature refinement prior to downstream modeling\n"
+            "Purpose: structural filtering + redundancy control\n"
+        )
 
         logger.info(
-                "Matrices configuration:\n"
-                "min_minor_count=%d\n"
-                "annotation_type_filter=%s\n"
-                "repeat_number=%d\n"
-                "forced_positions='%s'",
-                self.matrices_min_count,
-                self.matrices_type,
-                self.matrices_repeat_number,
-                self.matrices_fix,
-            )
+            "Matrices configuration:\n"
+            "min_minor_count=%d\n"
+            "annotation_type_filter=%s\n"
+            "repeat_number=%d\n"
+            "forced_positions='%s'",
+            self.matrices_min_count,
+            self.matrices_type,
+            self.matrices_repeat_number,
+            self.matrices_fix,
+        )
+        direct_matrix_input = matrix_df is not None
         logger.info(
-            "Matrices/*: inputs alleles_fasta=%s | binary_fasta=%s | annotation_tsv=%s",
+            "Matrices/*: inputs source=%s | alleles_fasta=%s | binary_fasta=%s | annotation_tsv=%s",
+            "in_memory_dataframe" if direct_matrix_input else "fasta_fallback",
             str(fasta_alleles),
             str(fasta_binary),
             str(annotation_tsv),
         )
         logger.info("Matrices/*: output_dir=%s", str(out_dir))
 
-        for p, label in (
-            (fasta_alleles, "alleles FASTA"),
-            (fasta_binary, "binary FASTA"),
-            (annotation_tsv, "annotation TSV"),
-        ):
+        required_inputs = [(annotation_tsv, "annotation TSV")]
+        if not direct_matrix_input:
+            required_inputs.extend(
+                [
+                    (fasta_alleles, "alleles FASTA"),
+                    (fasta_binary, "binary FASTA"),
+                ]
+            )
+        for p, label in required_inputs:
             if not p.exists():
                 raise FileNotFoundError(f"Matrices/*: missing {label}: {p}")
 
         # ─────────────────────────────────────────────
         # 1) Load (parse) inputs
         # ─────────────────────────────────────────────
-        alleles = read_fasta_matrix(fasta_alleles)
-        binary = read_fasta_matrix(fasta_binary)
+        load_started_at = time.perf_counter()
         annot_rows, annot_header = read_annotation_tsv(annotation_tsv)
+        allele_sequences: "OrderedDict[str, str]" = OrderedDict()
 
-        if not alleles or not binary:
-            raise ValueError("Matrices/*: empty FASTA matrix detected (alleles or binary).")
+        if direct_matrix_input:
+            if ref_line is None or ref_binary is None or sample_allele_strings is None:
+                raise ValueError(
+                    "Direct matrix artifact processing requires ref_line, ref_binary, "
+                    "and sample_allele_strings."
+                )
+            assert matrix_df is not None
+            sample_ids = [str(sample) for sample in matrix_df.index]
+            S = int(matrix_df.shape[1])
+            if len(ref_line) != S or len(ref_binary) != S:
+                raise ValueError(
+                    "Direct matrix/reference widths differ before artifact filtering."
+                )
 
-        if list(alleles.keys()) != list(binary.keys()):
-            raise ValueError("Matrices/*: genome order differs between alleles and binary FASTA files.")
+            allele_sequences["REF"] = str(ref_line)
+            for sample in sample_ids:
+                if sample not in sample_allele_strings:
+                    raise ValueError(
+                        f"Missing in-memory allele sequence for sample {sample!r}."
+                    )
+                sequence = str(sample_allele_strings[sample])
+                if len(sequence) != S:
+                    raise ValueError(
+                        f"Allele sequence width mismatch for sample {sample!r}."
+                    )
+                allele_sequences[sample] = sequence
 
-        genomes = list(alleles.keys())
-        S = len(next(iter(alleles.values())))
-        if len(next(iter(binary.values()))) != S:
-            raise ValueError("Matrices/*: alleles and binary FASTA have different number of columns (markers).")
+            sample_values = (
+                matrix_df.apply(pd.to_numeric, errors="coerce")
+                .to_numpy(dtype=float, copy=False)
+            )
+            ref_values = np.asarray(
+                [
+                    0.0 if value == "0" else 1.0 if value == "1" else np.nan
+                    for value in ref_binary
+                ],
+                dtype=float,
+            )
+            binary_values = np.vstack([ref_values, sample_values])
+            genomes_order = ["REF"] + sample_ids
+        else:
+            alleles = read_fasta_matrix(fasta_alleles)
+            binary = read_fasta_matrix(fasta_binary)
+            if not alleles or not binary:
+                raise ValueError(
+                    "Matrices/*: empty FASTA matrix detected (alleles or binary)."
+                )
+            if list(alleles.keys()) != list(binary.keys()):
+                raise ValueError(
+                    "Matrices/*: genome order differs between alleles and binary FASTA files."
+                )
 
-        logger.info("Matrices/*: parsed inputs genomes=%d | markers=%d", len(genomes), S)
+            genomes_order = [str(genome) for genome in alleles.keys()]
+            S = len(next(iter(alleles.values())))
+            if len(next(iter(binary.values()))) != S:
+                raise ValueError(
+                    "Matrices/*: alleles and binary FASTA have different marker counts."
+                )
+            allele_sequences = OrderedDict(
+                (str(genome), "".join(values))
+                for genome, values in alleles.items()
+            )
+            binary_values = np.asarray(
+                [
+                    [
+                        0.0
+                        if value == "0"
+                        else 1.0
+                        if value == "1"
+                        else np.nan
+                        for value in values
+                    ]
+                    for values in binary.values()
+                ],
+                dtype=float,
+            )
+
+        load_seconds = time.perf_counter() - load_started_at
+
+        logger.info(
+            "Matrices/*: inputs ready | source=%s | genomes=%d | markers=%d | seconds=%.3f",
+            "in_memory_dataframe" if direct_matrix_input else "fasta_fallback",
+            len(genomes_order),
+            S,
+            load_seconds,
+        )
 
         annotation_matches = len(annot_rows) == S
         if annotation_matches:
-            logger.info("Matrices/*: annotation rows match markers (rows=%d)", len(annot_rows))
+            logger.info(
+                "Matrices/*: annotation rows match markers (rows=%d)", len(annot_rows)
+            )
         else:
             logger.warning(
                 "Matrices/*: annotation rows do NOT match markers (rows=%d vs markers=%d). "
@@ -2140,9 +2946,6 @@ class DataLoader:
             self.matrices_fix,
         )
 
-        genomes_order, allele_cols = transpose_rows_to_columns(alleles)
-        _, binary_cols = transpose_rows_to_columns(binary)
-
         # ─────────────────────────────────────────────
         # 3) Filter 1: minor-count
         #
@@ -2158,20 +2961,25 @@ class DataLoader:
             "  Note: this should remove nothing if DataLoader artifact synchronization worked correctly."
         )
 
-        mask_minor = minor_count_filter(binary_cols, self.matrices_min_count)
+        filter_started_at = time.perf_counter()
+        count_0 = np.sum(binary_values == 0.0, axis=0)
+        count_1 = np.sum(binary_values == 1.0, axis=0)
+        mask_minor = list(
+            np.minimum(count_0, count_1) >= int(self.matrices_min_count)
+        )
         kept_minor = int(sum(mask_minor))
 
         logger.info(
             "Minor-count sanity filter result: kept=%d/%d (removed=%d)",
             kept_minor,
-            len(binary_cols),
-            len(binary_cols) - kept_minor,
+            S,
+            S - kept_minor,
         )
         logger.info(
             "Minor-count filter result: kept=%d/%d (removed=%d)",
             kept_minor,
-            len(binary_cols),
-            len(binary_cols) - kept_minor,
+            S,
+            S - kept_minor,
         )
 
         # ─────────────────────────────────────────────
@@ -2215,9 +3023,10 @@ class DataLoader:
         logger.info("Matrices/*: combined (minor AND type) kept=%d/%d", kept_12, S)
 
         idx12 = [i for i, k in enumerate(mask_12) if k]
-        allele_cols_12 = [c for c, k in zip(allele_cols, mask_12) if k]
-        binary_cols_12 = [c for c, k in zip(binary_cols, mask_12) if k]
-        annot_rows_12 = [r for r, k in zip(annot_rows, mask_12) if k] if annotation_matches else []
+        binary_values_12 = binary_values[:, np.asarray(mask_12, dtype=bool)]
+        annot_rows_12 = (
+            [r for r, k in zip(annot_rows, mask_12) if k] if annotation_matches else []
+        )
 
         # ─────────────────────────────────────────────
         # 6) Filter 3: redundancy reduction by identical binary pattern
@@ -2254,8 +3063,9 @@ class DataLoader:
         #   - The logging includes `unique_patterns` as a compact summary:
         #       *many columns* collapsing to *few patterns* suggests strong redundancy in the matrix.
         # ─────────────────────────────────────────────
-        if binary_cols_12:
-            unique_patterns = len({tuple(col) for col in binary_cols_12})
+        if binary_values_12.shape[1] > 0:
+            pattern_keys = binary_pattern_keys(binary_values_12)
+            unique_patterns = len(set(pattern_keys))
 
             logger.info(
                 "Applying redundancy reduction (pattern grouping):\n"
@@ -2270,15 +3080,20 @@ class DataLoader:
             annotation_for_grouping = (
                 annot_rows_12
                 if annotation_matches
-                else [{"Position": str(i + 1)} for i in range(len(binary_cols_12))]
+                else [{"Position": str(i + 1)} for i in range(binary_values_12.shape[1])]
             )
 
             mask_group = group_and_reduce_by_pattern(
-                binary_cols_12,
+                [[] for _ in pattern_keys],
                 annotation_for_grouping,
                 self.matrices_repeat_number,
-                sample_threshold=int(getattr(self.config, "matrices_redundancy_sample_threshold", 2000)),
-                sample_size=int(getattr(self.config, "matrices_redundancy_sample_size", 256)),
+                sample_threshold=int(
+                    getattr(self.config, "matrices_redundancy_sample_threshold", 2000)
+                ),
+                sample_size=int(
+                    getattr(self.config, "matrices_redundancy_sample_size", 256)
+                ),
+                pattern_keys=pattern_keys,
             )
 
             kept_group = int(sum(mask_group))
@@ -2288,13 +3103,15 @@ class DataLoader:
                 "  retained=%d/%d\n"
                 "  removed_duplicate_representations=%d",
                 kept_group,
-                len(binary_cols_12),
-                len(binary_cols_12) - kept_group,
+                binary_values_12.shape[1],
+                binary_values_12.shape[1] - kept_group,
             )
         else:
             mask_group = []
             kept_group = 0
-            logger.info("Redundancy reduction skipped (no markers after biological filtering).")
+            logger.info(
+                "Redundancy reduction skipped (no markers after biological filtering)."
+            )
 
         # Convert redundancy mask back to full length
         mask_final = [False] * S
@@ -2322,25 +3139,36 @@ class DataLoader:
         kept_final = int(sum(mask_final))
 
         logger.info(
-            "Final marker count after all filters:\n"
-            "  %d/%d retained",
+            "Final marker count after all filters:\n" "  %d/%d retained",
             kept_final,
             S,
         )
 
-        # Apply final mask to FASTA matrices
-        alleles_filt = apply_mask_to_char_rows(alleles, mask_final)
-        binary_filt = apply_mask_to_char_rows(binary, mask_final)
+        # Apply the final mask directly to the in-memory row representation.
+        keep_indices = np.flatnonzero(np.asarray(mask_final, dtype=bool))
+        alleles_filt: "OrderedDict[str, List[str]]" = OrderedDict(
+            (
+                genome,
+                [sequence[index] for index in keep_indices],
+            )
+            for genome, sequence in allele_sequences.items()
+        )
+        binary_filt: "OrderedDict[str, List[str]]" = OrderedDict()
+        for row_index, genome in enumerate(genomes_order):
+            binary_filt[genome] = [
+                "0"
+                if binary_values[row_index, index] == 0.0
+                else "1"
+                if binary_values[row_index, index] == 1.0
+                else "?"
+                for index in keep_indices
+            ]
 
         # Filter annotation rows if possible; otherwise keep original
         if annotation_matches:
             annot_filt = [r for r, k in zip(annot_rows, mask_final) if k]
         else:
             annot_filt = annot_rows
-
-        # Prepare TSV matrix outputs
-        _, allele_cols_f = transpose_rows_to_columns(alleles_filt)
-        _, binary_cols_f = transpose_rows_to_columns(binary_filt)
 
         if annotation_matches:
             # Carry the full marker identity into the matrix columns.  Position-only
@@ -2351,7 +3179,15 @@ class DataLoader:
                 for r in annot_filt
             ]
         else:
-            positions_f = [str(i + 1) for i in range(len(allele_cols_f))]
+            positions_f = [str(i + 1) for i in range(kept_final)]
+
+        filter_seconds = time.perf_counter() - filter_started_at
+        logger.info(
+            "Matrices/*: filtering complete | markers_in=%d | markers_out=%d | seconds=%.3f",
+            S,
+            kept_final,
+            filter_seconds,
+        )
 
         # ─────────────────────────────────────────────
         # 8) Write outputs
@@ -2363,8 +3199,9 @@ class DataLoader:
         out_filtered_tsv = out_dir / f"{base}_filtered.tsv"
         out_feature_manifest_tsv = out_dir / f"{base}_feature_manifest.tsv"
 
-        write_matrix_tsv(out_alleles_tsv, genomes_order, positions_f, allele_cols_f)
-        write_matrix_tsv(out_binary_tsv, genomes_order, positions_f, binary_cols_f)
+        write_started_at = time.perf_counter()
+        write_matrix_tsv_rows(out_alleles_tsv, positions_f, alleles_filt)
+        write_matrix_tsv_rows(out_binary_tsv, positions_f, binary_filt)
         write_fasta_matrix_wrapped(out_alleles_fa, alleles_filt)
         write_fasta_matrix_wrapped(out_binary_fa, binary_filt)
 
@@ -2372,9 +3209,13 @@ class DataLoader:
             write_annotation_tsv(out_filtered_tsv, annot_filt, annot_header)
             write_annotation_tsv(out_feature_manifest_tsv, annot_filt, annot_header)
         else:
-            copied_annotation = annotation_tsv.read_text(encoding="utf-8", errors="replace")
+            copied_annotation = annotation_tsv.read_text(
+                encoding="utf-8", errors="replace"
+            )
             out_filtered_tsv.write_text(copied_annotation, encoding="utf-8")
             out_feature_manifest_tsv.write_text(copied_annotation, encoding="utf-8")
+
+        write_seconds = time.perf_counter() - write_started_at
 
         logger.info(
             "Matrices/*: wrote outputs: %s | %s | %s | %s | %s | %s",
@@ -2385,7 +3226,14 @@ class DataLoader:
             str(out_filtered_tsv),
             str(out_feature_manifest_tsv),
         )
-        logger.info("Matrices/*: done")
+        logger.info(
+            "Matrices/*: done | load_seconds=%.3f | filter_seconds=%.3f | "
+            "write_seconds=%.3f | total_seconds=%.3f",
+            load_seconds,
+            filter_seconds,
+            write_seconds,
+            load_seconds + filter_seconds + write_seconds,
+        )
         return kept_final
 
     # ──────────────────────────────────────────────────────────
@@ -2418,7 +3266,11 @@ class DataLoader:
                 status="missing_cells_detected" if missing_cells else "complete",
             )
         else:
-            logger.info("Loaded prebuilt matrix | samples=%d | features=%d", df.shape[0], df.shape[1])
+            logger.info(
+                "Loaded prebuilt matrix | samples=%d | features=%d",
+                df.shape[0],
+                df.shape[1],
+            )
 
         if missing_cells > 0:
             logger.info(

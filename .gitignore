@@ -16,3 +16,6 @@
 *.pkl
 /data/
 /results/
+
+# Python tooling caches
+.mypy_cache/

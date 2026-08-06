@@ -10,6 +10,12 @@ dependencies:
   - python=3.10
   - pip
 
+  # Development and verification
+  - black
+  - flake8
+  - mypy
+  - pytest
+
   # Scientific Python stack
   - numpy
   - pandas

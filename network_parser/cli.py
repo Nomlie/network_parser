@@ -10,7 +10,7 @@ Supports four entry points:
    load -> align -> RF-FDR central feature filtering -> ML protocol/model selector
    -> conditional decision-tree interpretability -> optional downstream validation.
 
-2) train-two-level
+2) train-hierarchy  (alias: train-two-level)
    Two-label / recursive hierarchical protocol:
    Level 1: strain / lineage / group placement
    Level 2+: phenotype / AMR-profile / terminal endpoint prediction
@@ -39,23 +39,35 @@ from typing import Any, Dict, List, Optional, Tuple
 try:
     from network_parser.config import NetworkParserConfig
     from network_parser.network_parser import run_networkparser_analysis
-    from network_parser.two_level_protocol import TwoLevelProtocol
+    from network_parser.hierarchy_protocol import HierarchyProtocol
     from network_parser.query_engine import NetworkParserQueryEngine
-except Exception:  # pragma: no cover - allows direct execution from source tree
+except ImportError:  # pragma: no cover - allows direct execution from source tree
     from config import NetworkParserConfig  # type: ignore
     from network_parser import run_networkparser_analysis  # type: ignore
-    from two_level_protocol import TwoLevelProtocol  # type: ignore
+    from hierarchy_protocol import HierarchyProtocol  # type: ignore
     from query_engine import NetworkParserQueryEngine  # type: ignore
 
 
 LOGGER = logging.getLogger(__name__)
 VALID_PIPELINE_MODES = {"matrix_only", "decision_tree_only", "ml_only", "both"}
-VALID_SUBCOMMANDS = {"run", "train-two-level", "bundle", "query", "evaluate", "cross-validate", "cross_validation"}
+VALID_SUBCOMMANDS = {
+    "run",
+    "train-hierarchy",
+    "train-two-level",
+    "bundle",
+    "query",
+    "evaluate",
+    "evaluate-hierarchy",
+    "cross-validate",
+    "cross_validation",
+    "annotate-panels",
+}
 
 
 # -----------------------------------------------------------------------------
 # Logging / config helpers
 # -----------------------------------------------------------------------------
+
 
 def configure_logging(verbose: bool = False, quiet: bool = False) -> None:
     if quiet:
@@ -100,52 +112,157 @@ def set_if_provided(config: NetworkParserConfig, key: str, value: Any) -> None:
         setattr(config, key, value)
 
 
-def apply_common_overrides(config: NetworkParserConfig, args: argparse.Namespace) -> NetworkParserConfig:
+def apply_common_overrides(
+    config: NetworkParserConfig, args: argparse.Namespace
+) -> NetworkParserConfig:
     """Apply CLI overrides that are shared across commands."""
     set_if_provided(config, "n_jobs", getattr(args, "n_jobs", None))
-    set_if_provided(config, "central_feature_filter_method", getattr(args, "central_feature_filter_method", None))
+    set_if_provided(
+        config,
+        "central_feature_filter_method",
+        getattr(args, "central_feature_filter_method", None),
+    )
 
     # RF-FDR selector controls. These are optional so config files remain the
     # canonical place for tuned runs, while CLI remains convenient for testing.
-    set_if_provided(config, "rf_selector_n_estimators", getattr(args, "rf_selector_n_estimators", None))
-    set_if_provided(config, "rf_selector_n_observed_repeats", getattr(args, "rf_selector_n_observed_repeats", None))
-    set_if_provided(config, "rf_selector_n_permutations", getattr(args, "rf_selector_n_permutations", None))
-    set_if_provided(config, "rf_selector_fdr_alpha", getattr(args, "rf_selector_fdr_alpha", None))
-    set_if_provided(config, "rf_selector_random_state", getattr(args, "rf_selector_random_state", None))
-    set_if_provided(config, "rf_selector_top_n", getattr(args, "rf_selector_top_n", None))
-    set_if_provided(config, "rf_selector_min_importance", getattr(args, "rf_selector_min_importance", None))
-    set_if_provided(config, "rf_selector_fallback_strategy", getattr(args, "rf_selector_fallback_strategy", None))
-    set_if_provided(config, "rf_selector_fallback_top_n", getattr(args, "rf_selector_fallback_top_n", None))
-    set_if_provided(config, "feature_filter_fallback_strategy", getattr(args, "feature_filter_fallback_strategy", None))
-    set_if_provided(config, "n_permutation_tests", getattr(args, "n_permutation_tests", None))
+    set_if_provided(
+        config,
+        "rf_selector_n_estimators",
+        getattr(args, "rf_selector_n_estimators", None),
+    )
+    set_if_provided(
+        config,
+        "rf_selector_n_observed_repeats",
+        getattr(args, "rf_selector_n_observed_repeats", None),
+    )
+    set_if_provided(
+        config,
+        "rf_selector_n_permutations",
+        getattr(args, "rf_selector_n_permutations", None),
+    )
+    set_if_provided(
+        config, "rf_selector_fdr_alpha", getattr(args, "rf_selector_fdr_alpha", None)
+    )
+    set_if_provided(
+        config,
+        "rf_selector_random_state",
+        getattr(args, "rf_selector_random_state", None),
+    )
+    set_if_provided(
+        config, "rf_selector_top_n", getattr(args, "rf_selector_top_n", None)
+    )
+    set_if_provided(
+        config,
+        "rf_selector_min_importance",
+        getattr(args, "rf_selector_min_importance", None),
+    )
+    set_if_provided(
+        config,
+        "rf_selector_fallback_strategy",
+        getattr(args, "rf_selector_fallback_strategy", None),
+    )
+    set_if_provided(
+        config,
+        "rf_selector_fallback_top_n",
+        getattr(args, "rf_selector_fallback_top_n", None),
+    )
+    set_if_provided(
+        config,
+        "feature_filter_fallback_strategy",
+        getattr(args, "feature_filter_fallback_strategy", None),
+    )
+    set_if_provided(
+        config, "n_permutation_tests", getattr(args, "n_permutation_tests", None)
+    )
     set_if_provided(config, "fdr_alpha", getattr(args, "fdr_alpha", None))
-    set_if_provided(config, "multiple_testing_method", getattr(args, "multiple_testing_method", None))
+    set_if_provided(
+        config,
+        "multiple_testing_method",
+        getattr(args, "multiple_testing_method", None),
+    )
 
     feature_panel_check = getattr(args, "feature_panel_check", None)
     if feature_panel_check is not None:
         config.run_feature_panel_separability_check = feature_panel_check == "on"
-    set_if_provided(config, "feature_panel_sizes", getattr(args, "feature_panel_sizes", None))
-    set_if_provided(config, "feature_panel_metric", getattr(args, "feature_panel_metric", None))
-    set_if_provided(config, "feature_panel_classifier", getattr(args, "feature_panel_classifier", None))
-    set_if_provided(config, "feature_panel_lr_max_iter", getattr(args, "feature_panel_lr_max_iter", None))
-    set_if_provided(config, "feature_panel_lr_tol", getattr(args, "feature_panel_lr_tol", None))
-    set_if_provided(config, "feature_panel_rf_n_estimators", getattr(args, "feature_panel_rf_n_estimators", None))
-    set_if_provided(config, "feature_panel_rf_max_features", getattr(args, "feature_panel_rf_max_features", None))
-    set_if_provided(config, "feature_panel_rf_min_samples_leaf", getattr(args, "feature_panel_rf_min_samples_leaf", None))
-    set_if_provided(config, "feature_panel_rf_class_weight", getattr(args, "feature_panel_rf_class_weight", None))
-    set_if_provided(config, "feature_panel_rf_n_jobs", getattr(args, "feature_panel_rf_n_jobs", None))
-    set_if_provided(config, "feature_panel_min_score", getattr(args, "feature_panel_min_score", None))
-    set_if_provided(config, "feature_panel_selection_rule", getattr(args, "feature_panel_selection_rule", None))
-    set_if_provided(config, "feature_panel_cv_splits", getattr(args, "feature_panel_cv_splits", None))
+    set_if_provided(
+        config, "feature_panel_sizes", getattr(args, "feature_panel_sizes", None)
+    )
+    set_if_provided(
+        config, "feature_panel_metric", getattr(args, "feature_panel_metric", None)
+    )
+    set_if_provided(
+        config,
+        "feature_panel_classifier",
+        getattr(args, "feature_panel_classifier", None),
+    )
+    set_if_provided(
+        config,
+        "feature_panel_lr_max_iter",
+        getattr(args, "feature_panel_lr_max_iter", None),
+    )
+    set_if_provided(
+        config, "feature_panel_lr_tol", getattr(args, "feature_panel_lr_tol", None)
+    )
+    set_if_provided(
+        config,
+        "feature_panel_rf_n_estimators",
+        getattr(args, "feature_panel_rf_n_estimators", None),
+    )
+    set_if_provided(
+        config,
+        "feature_panel_rf_max_features",
+        getattr(args, "feature_panel_rf_max_features", None),
+    )
+    set_if_provided(
+        config,
+        "feature_panel_rf_min_samples_leaf",
+        getattr(args, "feature_panel_rf_min_samples_leaf", None),
+    )
+    set_if_provided(
+        config,
+        "feature_panel_rf_class_weight",
+        getattr(args, "feature_panel_rf_class_weight", None),
+    )
+    set_if_provided(
+        config,
+        "feature_panel_rf_n_jobs",
+        getattr(args, "feature_panel_rf_n_jobs", None),
+    )
+    set_if_provided(
+        config,
+        "feature_panel_min_score",
+        getattr(args, "feature_panel_min_score", None),
+    )
+    set_if_provided(
+        config,
+        "feature_panel_selection_rule",
+        getattr(args, "feature_panel_selection_rule", None),
+    )
+    set_if_provided(
+        config,
+        "feature_panel_cv_splits",
+        getattr(args, "feature_panel_cv_splits", None),
+    )
 
-    set_if_provided(config, "global_level2_label_column", getattr(args, "global_level2_label", None))
+    set_if_provided(
+        config, "global_level2_label_column", getattr(args, "global_level2_label", None)
+    )
 
     if bool(getattr(args, "keep_low_support_classes", False)):
         config.level2_drop_low_support_classes = False
     elif bool(getattr(args, "level2_drop_low_support_classes", False)):
         config.level2_drop_low_support_classes = True
-    set_if_provided(config, "level2_min_class_count", getattr(args, "level2_min_class_count", None))
+    set_if_provided(
+        config, "level2_min_class_count", getattr(args, "level2_min_class_count", None)
+    )
 
+    set_if_provided(
+        config,
+        "hierarchy_global_fallback_labels",
+        getattr(args, "global_fallback_labels", None),
+    )
+    if bool(getattr(args, "no_parent_conditioned_fallbacks", False)):
+        config.hierarchy_train_parent_conditioned_fallbacks = False
     if bool(getattr(args, "no_hierarchy_global_lineage_fallback", False)):
         config.hierarchy_train_global_lineage_fallback = False
     set_if_provided(
@@ -153,7 +270,9 @@ def apply_common_overrides(config: NetworkParserConfig, args: argparse.Namespace
         "hierarchy_global_lineage_fallback_label",
         getattr(args, "hierarchy_global_lineage_fallback_label", None),
     )
-    if bool(getattr(args, "no_hierarchy_global_lineage_low_confidence_fallback", False)):
+    if bool(
+        getattr(args, "no_hierarchy_global_lineage_low_confidence_fallback", False)
+    ):
         config.hierarchy_global_lineage_fallback_on_low_confidence = False
     if bool(getattr(args, "no_hierarchy_global_lineage_disagreement_fallback", False)):
         config.hierarchy_global_lineage_fallback_on_disagreement = False
@@ -168,10 +287,26 @@ def apply_common_overrides(config: NetworkParserConfig, args: argparse.Namespace
     apply_low_support_review_overrides(config, args)
     apply_amr_evidence_guard_overrides(config, args)
     apply_performance_overrides(config, args)
-    set_if_provided(config, "level2_binary_label_column", getattr(args, "level2_binary_label_column", None))
-    set_if_provided(config, "level2_binary_label_mapping_file", getattr(args, "level2_binary_label_mapping_file", None))
-    set_if_provided(config, "level2_binary_resistant_values", getattr(args, "level2_binary_resistant_values", None))
-    set_if_provided(config, "level2_binary_susceptible_values", getattr(args, "level2_binary_susceptible_values", None))
+    set_if_provided(
+        config,
+        "level2_binary_label_column",
+        getattr(args, "level2_binary_label_column", None),
+    )
+    set_if_provided(
+        config,
+        "level2_binary_label_mapping_file",
+        getattr(args, "level2_binary_label_mapping_file", None),
+    )
+    set_if_provided(
+        config,
+        "level2_binary_resistant_values",
+        getattr(args, "level2_binary_resistant_values", None),
+    )
+    set_if_provided(
+        config,
+        "level2_binary_susceptible_values",
+        getattr(args, "level2_binary_susceptible_values", None),
+    )
 
     if hasattr(config, "__post_init__"):
         config.__post_init__()
@@ -180,12 +315,23 @@ def apply_common_overrides(config: NetworkParserConfig, args: argparse.Namespace
 
 def add_logging_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging.")
-    parser.add_argument("--quiet", action="store_true", help="Only show warnings and errors.")
+    parser.add_argument(
+        "--quiet", action="store_true", help="Only show warnings and errors."
+    )
 
 
 def add_config_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--config", default=None, help="Optional JSON file with NetworkParserConfig overrides.")
-    parser.add_argument("--n_jobs", type=int, default=None, help="Number of parallel workers where supported.")
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="Optional JSON file with NetworkParserConfig overrides.",
+    )
+    parser.add_argument(
+        "--n_jobs",
+        type=int,
+        default=None,
+        help="Number of parallel workers where supported.",
+    )
 
 
 def add_amr_evidence_guard_args(parser: argparse.ArgumentParser) -> None:
@@ -194,8 +340,18 @@ def add_amr_evidence_guard_args(parser: argparse.ArgumentParser) -> None:
         "--no_amr_weak_evidence_review",
         action="store_true",
         help=(
-            "Disable query-time blocking of weak-evidence susceptible AMR branch "
-            "predictions. When enabled, such calls are surfaced for manual review."
+            "Disable the query-time AMR weak-evidence guard entirely "
+            "(no warn flags and no blocking of susceptible calls)."
+        ),
+    )
+    group.add_argument(
+        "--amr_weak_evidence_mode",
+        choices=["warn", "block"],
+        default=None,
+        help=(
+            "How to handle weak-evidence susceptible AMR calls: "
+            "'warn' keeps the class label (cleaner TP/FP/TN/FN) and attaches a reason; "
+            "'block' replaces the prediction with the review label (legacy)."
         ),
     )
     group.add_argument(
@@ -204,13 +360,16 @@ def add_amr_evidence_guard_args(parser: argparse.ArgumentParser) -> None:
         default=None,
         help=(
             "Minimum fraction of branch AMR panel features that must resolve before "
-            "a susceptible call is reported confidently."
+            "a susceptible call is reported without a weak-evidence warning."
         ),
     )
     group.add_argument(
         "--amr_weak_evidence_review_label",
         default=None,
-        help="Label reported when a susceptible AMR call is blocked for weak marker evidence.",
+        help=(
+            "Label used only when --amr_weak_evidence_mode=block replaces a weak "
+            "susceptible call (default: amr_evidence_review_required)."
+        ),
     )
     group.add_argument(
         "--no_hierarchy_global_amr_fallback_on_weak_evidence",
@@ -236,9 +395,16 @@ def add_amr_evidence_guard_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def apply_amr_evidence_guard_overrides(config: NetworkParserConfig, args: argparse.Namespace) -> None:
+def apply_amr_evidence_guard_overrides(
+    config: NetworkParserConfig, args: argparse.Namespace
+) -> None:
     if bool(getattr(args, "no_amr_weak_evidence_review", False)):
         config.amr_weak_evidence_review_enabled = False
+    set_if_provided(
+        config,
+        "amr_weak_evidence_mode",
+        getattr(args, "amr_weak_evidence_mode", None),
+    )
     set_if_provided(
         config,
         "amr_weak_evidence_min_resolved_fraction",
@@ -290,7 +456,9 @@ def add_low_support_review_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def apply_low_support_review_overrides(config: NetworkParserConfig, args: argparse.Namespace) -> None:
+def apply_low_support_review_overrides(
+    config: NetworkParserConfig, args: argparse.Namespace
+) -> None:
     if bool(getattr(args, "no_low_support_review", False)):
         config.low_support_review_enabled = False
     set_if_provided(
@@ -298,7 +466,11 @@ def apply_low_support_review_overrides(config: NetworkParserConfig, args: argpar
         "low_support_review_min_class_count",
         getattr(args, "low_support_review_min_class_count", None),
     )
-    set_if_provided(config, "low_support_review_label", getattr(args, "low_support_review_label", None))
+    set_if_provided(
+        config,
+        "low_support_review_label",
+        getattr(args, "low_support_review_label", None),
+    )
 
 
 def add_performance_args(parser: argparse.ArgumentParser) -> None:
@@ -325,9 +497,32 @@ def add_performance_args(parser: argparse.ArgumentParser) -> None:
         help="Train Level-2 group-specific models sequentially instead of in parallel.",
     )
     group.add_argument(
+        "--no_hierarchy_parallel_child_nodes",
+        action="store_true",
+        help=(
+            "Train sibling hierarchy child nodes sequentially. "
+            "By default children train in parallel when RAM/CPU allow."
+        ),
+    )
+    group.add_argument(
         "--no_feature_panel_parallel_scoring",
         action="store_true",
         help="Score feature-panel candidate sizes sequentially instead of in parallel.",
+    )
+    group.add_argument(
+        "--parallel_memory_per_worker_gb",
+        type=float,
+        default=None,
+        help=(
+            "Soft RAM budget per concurrent outer model fit (default 4). "
+            "Caps parallel model training on small machines (e.g. 16 GB → ~1–2 workers)."
+        ),
+    )
+    group.add_argument(
+        "--parallel_max_workers",
+        type=int,
+        default=None,
+        help="Hard cap on parallel workers regardless of --n_jobs / CPU count.",
     )
     group.add_argument(
         "--association_test_batch_size",
@@ -337,17 +532,37 @@ def add_performance_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def apply_performance_overrides(config: NetworkParserConfig, args: argparse.Namespace) -> None:
+def apply_performance_overrides(
+    config: NetworkParserConfig, args: argparse.Namespace
+) -> None:
     if bool(getattr(args, "no_query_parallel_samples", False)):
         config.query_parallel_samples = False
-    set_if_provided(config, "query_parallel_n_jobs", getattr(args, "query_parallel_n_jobs", None))
+    set_if_provided(
+        config, "query_parallel_n_jobs", getattr(args, "query_parallel_n_jobs", None)
+    )
     if bool(getattr(args, "no_hierarchy_parallel_fallback_training", False)):
         config.hierarchy_parallel_fallback_training = False
     if bool(getattr(args, "no_level2_parallel_group_training", False)):
         config.level2_parallel_group_training = False
+    if bool(getattr(args, "no_hierarchy_parallel_child_nodes", False)):
+        config.hierarchy_parallel_child_nodes = False
     if bool(getattr(args, "no_feature_panel_parallel_scoring", False)):
         config.feature_panel_parallel_scoring = False
-    set_if_provided(config, "association_test_batch_size", getattr(args, "association_test_batch_size", None))
+    set_if_provided(
+        config,
+        "parallel_memory_per_worker_gb",
+        getattr(args, "parallel_memory_per_worker_gb", None),
+    )
+    set_if_provided(
+        config,
+        "parallel_max_workers",
+        getattr(args, "parallel_max_workers", None),
+    )
+    set_if_provided(
+        config,
+        "association_test_batch_size",
+        getattr(args, "association_test_batch_size", None),
+    )
 
 
 def add_rf_fdr_args(parser: argparse.ArgumentParser) -> None:
@@ -366,16 +581,66 @@ def add_rf_fdr_args(parser: argparse.ArgumentParser) -> None:
             "chi2_perm_fdr uses chi-square label permutations, empirical p-values, and FDR correction."
         ),
     )
-    group.add_argument("--n_permutation_tests", type=int, default=None, help="Label permutations for chi2_perm_fdr and downstream permutation utilities.")
-    group.add_argument("--fdr_alpha", type=float, default=None, help="FDR alpha used by association-FDR and chi2_perm_fdr.")
-    group.add_argument("--multiple_testing_method", choices=["fdr_bh", "bonferroni"], default=None, help="Multiple-testing correction method for association-FDR and chi2_perm_fdr.")
-    group.add_argument("--rf_selector_n_estimators", type=int, default=None, help="Random Forest trees used during RF-FDR scoring.")
-    group.add_argument("--rf_selector_n_observed_repeats", type=int, default=None, help="Observed RF importance repeats.")
-    group.add_argument("--rf_selector_n_permutations", type=int, default=None, help="Label permutations for empirical p-values.")
-    group.add_argument("--rf_selector_fdr_alpha", type=float, default=None, help="FDR-BH alpha for RF-FDR retention.")
-    group.add_argument("--rf_selector_random_state", type=int, default=None, help="Random seed for RF-FDR.")
-    group.add_argument("--rf_selector_top_n", type=int, default=None, help="Optional cap on retained RF-FDR features.")
-    group.add_argument("--rf_selector_min_importance", type=float, default=None, help="Minimum observed RF importance for retained features.")
+    group.add_argument(
+        "--n_permutation_tests",
+        type=int,
+        default=None,
+        help="Label permutations for chi2_perm_fdr and downstream permutation utilities.",
+    )
+    group.add_argument(
+        "--fdr_alpha",
+        type=float,
+        default=None,
+        help="FDR alpha used by association-FDR and chi2_perm_fdr.",
+    )
+    group.add_argument(
+        "--multiple_testing_method",
+        choices=["fdr_bh", "bonferroni"],
+        default=None,
+        help="Multiple-testing correction method for association-FDR and chi2_perm_fdr.",
+    )
+    group.add_argument(
+        "--rf_selector_n_estimators",
+        type=int,
+        default=None,
+        help="Random Forest trees used during RF-FDR scoring.",
+    )
+    group.add_argument(
+        "--rf_selector_n_observed_repeats",
+        type=int,
+        default=None,
+        help="Observed RF importance repeats.",
+    )
+    group.add_argument(
+        "--rf_selector_n_permutations",
+        type=int,
+        default=None,
+        help="Label permutations for empirical p-values.",
+    )
+    group.add_argument(
+        "--rf_selector_fdr_alpha",
+        type=float,
+        default=None,
+        help="FDR-BH alpha for RF-FDR retention.",
+    )
+    group.add_argument(
+        "--rf_selector_random_state",
+        type=int,
+        default=None,
+        help="Random seed for RF-FDR.",
+    )
+    group.add_argument(
+        "--rf_selector_top_n",
+        type=int,
+        default=None,
+        help="Optional cap on retained RF-FDR features.",
+    )
+    group.add_argument(
+        "--rf_selector_min_importance",
+        type=float,
+        default=None,
+        help="Minimum observed RF importance for retained features.",
+    )
     group.add_argument(
         "--rf_selector_fallback_strategy",
         choices=["stop", "top_n", "unfiltered"],
@@ -410,7 +675,12 @@ def add_rf_fdr_args(parser: argparse.ArgumentParser) -> None:
     )
     group.add_argument(
         "--feature_panel_metric",
-        choices=["balanced_accuracy", "adjusted_rand", "normalized_mutual_info", "silhouette"],
+        choices=[
+            "balanced_accuracy",
+            "adjusted_rand",
+            "normalized_mutual_info",
+            "silhouette",
+        ],
         default=None,
         help="Metric used to choose the model-ready feature panel.",
     )
@@ -484,11 +754,15 @@ def add_rf_fdr_args(parser: argparse.ArgumentParser) -> None:
         help="Cross-validation folds used by the supervised panel diagnostic.",
     )
 
+
 # -----------------------------------------------------------------------------
 # Parser builders
 # -----------------------------------------------------------------------------
 
-def build_run_parser(prog: Optional[str] = None, add_help: bool = True) -> argparse.ArgumentParser:
+
+def build_run_parser(
+    prog: Optional[str] = None, add_help: bool = True
+) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=prog,
         description="Run the single-label NetworkParser workflow.",
@@ -496,11 +770,32 @@ def build_run_parser(prog: Optional[str] = None, add_help: bool = True) -> argpa
         add_help=add_help,
     )
 
-    parser.add_argument("--genomic", required=True, help="Genomic input file or directory: VCF/VCF.gz/CSV/TSV.")
-    parser.add_argument("--meta", required=True, help="Metadata CSV/TSV containing the supervised label column.")
-    parser.add_argument("--label", required=True, help="Metadata column used as the supervised target.")
-    parser.add_argument("--known_markers", default=None, help="Optional known-marker file for comparison or annotation.")
-    parser.add_argument("--ref_fasta", default=None, help="Optional reference FASTA/GenBank context for VCF-oriented workflows.")
+    parser.add_argument(
+        "--genomic",
+        required=True,
+        help="Genomic input file or directory: VCF/VCF.gz/CSV/TSV.",
+    )
+    parser.add_argument(
+        "--meta",
+        required=True,
+        help="Metadata CSV/TSV containing the supervised label column.",
+    )
+    parser.add_argument(
+        "--label", required=True, help="Metadata column used as the supervised target."
+    )
+    parser.add_argument(
+        "--known_markers",
+        default=None,
+        help=(
+            "Optional known-marker file for comparison against the feature space only. "
+            "Writes known_markers_feature_overlap.json; does NOT filter or train on these markers."
+        ),
+    )
+    parser.add_argument(
+        "--ref_fasta",
+        default=None,
+        help="Optional reference FASTA/GenBank context for VCF-oriented workflows.",
+    )
     parser.add_argument("--output_dir", required=True, help="Output directory.")
 
     parser.add_argument(
@@ -509,20 +804,75 @@ def build_run_parser(prog: Optional[str] = None, add_help: bool = True) -> argpa
         choices=sorted(VALID_PIPELINE_MODES),
         help="Workflow mode.",
     )
-    parser.add_argument("--validate_statistics", action="store_true", help="Keep validation flag for compatibility; central filtering is config-controlled.")
-    parser.add_argument("--validate_interactions", action="store_true", help="Run optional post-tree interaction validation when available.")
+    parser.add_argument(
+        "--validate_statistics",
+        action="store_true",
+        help=(
+            "Deprecated alias: forces run_central_feature_filtering=True. "
+            "Prefer --disable_central_feature_filtering / config.run_central_feature_filtering."
+        ),
+    )
+    parser.add_argument(
+        "--validate_interactions",
+        action="store_true",
+        help="Run optional post-tree interaction validation when available.",
+    )
 
-    parser.add_argument("--run_ml_protocol", action="store_true", help="Force ML protocol branch on through config.")
-    parser.add_argument("--disable_central_feature_filtering", action="store_true", help="Pass aligned matrix forward without central feature filtering.")
-    parser.add_argument("--disable_model_selector", action="store_true", help="Disable automatic model-selector behaviour where supported.")
-    parser.add_argument("--disable_conditional_dt", action="store_true", help="Prevent selector-driven decision-tree triggering where supported.")
+    parser.add_argument(
+        "--run_ml_protocol",
+        action="store_true",
+        help="Force ML protocol branch on through config.",
+    )
+    parser.add_argument(
+        "--disable_central_feature_filtering",
+        action="store_true",
+        help="Pass aligned matrix forward without central feature filtering.",
+    )
+    parser.add_argument(
+        "--disable_model_selector",
+        action="store_true",
+        help="Disable automatic model-selector behaviour where supported.",
+    )
+    parser.add_argument(
+        "--disable_conditional_dt",
+        action="store_true",
+        help="Prevent selector-driven decision-tree triggering where supported.",
+    )
 
-    parser.add_argument("--ml_algorithm", default=None, help="Optional ML algorithm override, e.g. auto, RF, MLP, LR, DT, SVC, MBCS, DNL.")
-    parser.add_argument("--ml_min_sensitivity", type=float, default=None, help="Optional ML protocol sensitivity lower bound.")
-    parser.add_argument("--ml_max_sensitivity", type=float, default=None, help="Optional ML protocol sensitivity upper bound.")
-    parser.add_argument("--ml_step_sensitivity", type=float, default=None, help="Optional ML protocol sensitivity step.")
-    parser.add_argument("--ml_empty_symbol", default=None, help="Optional empty symbol for ML-formatted data.")
-    parser.add_argument("--ml_remove_empty_field_threshold", type=float, default=None, help="Optional empty-field removal threshold.")
+    parser.add_argument(
+        "--ml_algorithm",
+        default=None,
+        help="Optional ML algorithm override, e.g. auto, RF, MLP, LR, DT, SVC, MBCS, DNL.",
+    )
+    parser.add_argument(
+        "--ml_min_sensitivity",
+        type=float,
+        default=None,
+        help="Optional ML protocol sensitivity lower bound.",
+    )
+    parser.add_argument(
+        "--ml_max_sensitivity",
+        type=float,
+        default=None,
+        help="Optional ML protocol sensitivity upper bound.",
+    )
+    parser.add_argument(
+        "--ml_step_sensitivity",
+        type=float,
+        default=None,
+        help="Optional ML protocol sensitivity step.",
+    )
+    parser.add_argument(
+        "--ml_empty_symbol",
+        default=None,
+        help="Optional empty symbol for ML-formatted data.",
+    )
+    parser.add_argument(
+        "--ml_remove_empty_field_threshold",
+        type=float,
+        default=None,
+        help="Optional empty-field removal threshold.",
+    )
 
     add_config_args(parser)
     add_low_support_review_args(parser)
@@ -533,18 +883,36 @@ def build_run_parser(prog: Optional[str] = None, add_help: bool = True) -> argpa
     return parser
 
 
-def build_train_two_level_parser(prog: Optional[str] = None, add_help: bool = True) -> argparse.ArgumentParser:
+def build_train_hierarchy_parser(
+    prog: Optional[str] = None, add_help: bool = True
+) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=prog,
-        description="Train the two-level NetworkParser protocol: strain placement first, resistance profile second.",
+        description="Train the hierarchical NetworkParser protocol (2+ levels): placement first, phenotype endpoints under parent branches.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         add_help=add_help,
     )
 
-    parser.add_argument("--genomic", required=True, help="Genomic input file or directory: VCF/VCF.gz/CSV/TSV.")
-    parser.add_argument("--meta", required=True, help="Metadata CSV/TSV containing both supervised labels.")
-    parser.add_argument("--level1_label", default=None, help="Metadata column for first-level strain/lineage/group placement. Required unless --hierarchy_labels is used.")
-    parser.add_argument("--level2_label", default=None, help="Metadata column for second-level phenotype/profile. Required unless --hierarchy_labels is used.")
+    parser.add_argument(
+        "--genomic",
+        required=True,
+        help="Genomic input file or directory: VCF/VCF.gz/CSV/TSV.",
+    )
+    parser.add_argument(
+        "--meta",
+        required=True,
+        help="Metadata CSV/TSV containing both supervised labels.",
+    )
+    parser.add_argument(
+        "--level1_label",
+        default=None,
+        help="Metadata column for first-level strain/lineage/group placement. Required unless --hierarchy_labels is used.",
+    )
+    parser.add_argument(
+        "--level2_label",
+        default=None,
+        help="Metadata column for second-level phenotype/profile. Required unless --hierarchy_labels is used.",
+    )
     parser.add_argument(
         "--hierarchy_labels",
         nargs="+",
@@ -553,6 +921,27 @@ def build_train_two_level_parser(prog: Optional[str] = None, add_help: bool = Tr
             "Ordered metadata columns for true recursive hierarchy training. "
             "When provided, this supersedes --level1_label/--level2_label and trains one model per hierarchy node."
         ),
+    )
+    parser.add_argument(
+        "--hierarchy_preset",
+        default=None,
+        choices=[
+            "lineage_amr_profile",
+            "lineage_family_amr_profile",
+            "lineage_amr_binary",
+        ],
+        help=(
+            "Biological hierarchy preset (no artificial Lineage_Supergroup). "
+            "lineage_amr_profile: Lineage_clean→AMR_binary→Resistance_Profile_Collapsed; "
+            "lineage_family_amr_profile: Lineage_family→Lineage_clean→AMR_binary→Resistance_Profile_Collapsed; "
+            "lineage_amr_binary: Lineage_clean→AMR_binary. "
+            "Can be combined with --hierarchy_labels (labels win if both set)."
+        ),
+    )
+    parser.add_argument(
+        "--hierarchy_resume",
+        action="store_true",
+        help="Skip nodes that already have node_summary.json + model under the output directory.",
     )
     parser.add_argument(
         "--global_level2_label",
@@ -565,9 +954,21 @@ def build_train_two_level_parser(prog: Optional[str] = None, add_help: bool = Tr
         ),
     )
     parser.add_argument("--output_dir", required=True, help="Output directory.")
-    parser.add_argument("--ref_fasta", default=None, help="Optional reference FASTA/GenBank context for VCF-oriented workflows.")
-    parser.add_argument("--algorithm", default=None, help="Optional ML algorithm override passed to the ML protocol.")
-    parser.add_argument("--no_global_level2", action="store_true", help="Disable the global Level 2 fallback model.")
+    parser.add_argument(
+        "--ref_fasta",
+        default=None,
+        help="Optional reference FASTA/GenBank context for VCF-oriented workflows.",
+    )
+    parser.add_argument(
+        "--algorithm",
+        default=None,
+        help="Optional ML algorithm override passed to the ML protocol.",
+    )
+    parser.add_argument(
+        "--no_global_level2",
+        action="store_true",
+        help="Disable the global Level 2 fallback model.",
+    )
     parser.add_argument(
         "--min_level2_samples_per_group",
         type=int,
@@ -600,9 +1001,32 @@ def build_train_two_level_parser(prog: Optional[str] = None, add_help: bool = Tr
         help="Minimum samples per class required when low-support class dropping is enabled.",
     )
     parser.add_argument(
+        "--global_fallback_labels",
+        default=None,
+        help=(
+            "Which hierarchy levels get cohort-wide global models. "
+            "Comma-separated label names, or special tokens: "
+            "none (default; no globals), terminal (last hierarchy label only), "
+            "lineage (resolved lineage column), legacy (old defaults: terminal+lineage). "
+            "Example: --global_fallback_labels Lineage_clean,AMR_binary"
+        ),
+    )
+    parser.add_argument(
+        "--no_parent_conditioned_fallbacks",
+        action="store_true",
+        help=(
+            "Do not train parent-conditioned fallbacks "
+            "(e.g. terminal phenotype within each lineage). "
+            "Path-local hierarchy nodes still train."
+        ),
+    )
+    parser.add_argument(
         "--no_hierarchy_global_lineage_fallback",
         action="store_true",
-        help="Disable the global lineage fallback model trained for recursive hierarchy query mode.",
+        help=(
+            "Disable the dedicated global lineage fallback model even if lineage "
+            "appears in --global_fallback_labels / legacy mode."
+        ),
     )
     parser.add_argument(
         "--hierarchy_global_lineage_fallback_label",
@@ -693,28 +1117,45 @@ def build_train_two_level_parser(prog: Optional[str] = None, add_help: bool = Tr
     return parser
 
 
-def build_query_parser(prog: Optional[str] = None, add_help: bool = True) -> argparse.ArgumentParser:
+def build_query_parser(
+    prog: Optional[str] = None, add_help: bool = True
+) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=prog,
-        description="Apply a trained two-level NetworkParser registry or binary model bundle to new strain/sample input.",
+        description="Apply a trained hierarchical NetworkParser registry or binary model bundle to new strain/sample input.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         add_help=add_help,
     )
 
-    parser.add_argument("--genomic", required=True, help="New genomic input file or directory: VCF/VCF.gz/CSV/TSV/FASTA/FASTQ directory.")
+    parser.add_argument(
+        "--genomic",
+        required=True,
+        help="New genomic input file or directory: VCF/VCF.gz/CSV/TSV/FASTA/FASTQ directory.",
+    )
     parser.add_argument(
         "--registry",
         default=None,
-        help="Path to two_level_model_registry.json from training. For backward compatibility, a .npb path here is treated as --bundle.",
+        help="Path to hierarchy_model_registry.json / two_level_model_registry.json / hierarchical_model_registry.json from training. For backward compatibility, a .npb path here is treated as --bundle.",
     )
     parser.add_argument(
         "--bundle",
         default=None,
         help="Path to networkparser_model_bundle.npb. Preferred for portable end-to-end query inference.",
     )
-    parser.add_argument("--output_dir", required=True, help="Prediction output directory.")
-    parser.add_argument("--ref_fasta", default=None, help="Optional reference FASTA/GenBank context for VCF-oriented workflows.")
-    parser.add_argument("--max_markers", type=int, default=10, help="Maximum supporting markers to report per prediction level.")
+    parser.add_argument(
+        "--output_dir", required=True, help="Prediction output directory."
+    )
+    parser.add_argument(
+        "--ref_fasta",
+        default=None,
+        help="Optional reference FASTA/GenBank context for VCF-oriented workflows.",
+    )
+    parser.add_argument(
+        "--max_markers",
+        type=int,
+        default=10,
+        help="Maximum supporting markers to report per prediction level.",
+    )
     parser.add_argument(
         "--query_input_type",
         choices=["auto", "matrix", "vcf", "fasta", "raw_sequence", "fastq"],
@@ -772,7 +1213,9 @@ def build_query_parser(prog: Optional[str] = None, add_help: bool = True) -> arg
     return parser
 
 
-def build_evaluate_parser(prog: Optional[str] = None, add_help: bool = True) -> argparse.ArgumentParser:
+def build_evaluate_parser(
+    prog: Optional[str] = None, add_help: bool = True
+) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=prog,
         description=(
@@ -783,10 +1226,22 @@ def build_evaluate_parser(prog: Optional[str] = None, add_help: bool = True) -> 
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         add_help=add_help,
     )
-    parser.add_argument("--predictions", required=True, help="Path to query_predictions.csv or another saved prediction table.")
-    parser.add_argument("--meta", required=True, help="Path to metadata file containing the true labels.")
-    parser.add_argument("--output_dir", required=True, help="Output directory for evaluation artifacts.")
-    parser.add_argument("--label", default=None, help="Single metadata label column to evaluate.")
+    parser.add_argument(
+        "--predictions",
+        required=True,
+        help="Path to query_predictions.csv or another saved prediction table.",
+    )
+    parser.add_argument(
+        "--meta",
+        required=True,
+        help="Path to metadata file containing the true labels.",
+    )
+    parser.add_argument(
+        "--output_dir", required=True, help="Output directory for evaluation artifacts."
+    )
+    parser.add_argument(
+        "--label", default=None, help="Single metadata label column to evaluate."
+    )
     parser.add_argument(
         "--hierarchy_labels",
         nargs="+",
@@ -797,7 +1252,7 @@ def build_evaluate_parser(prog: Optional[str] = None, add_help: bool = True) -> 
         "--global_level2_label",
         default=None,
         help=(
-            "Optional truth label for standard two-level global fallback evaluation. "
+            "Optional truth label for standard two-level/hierarchy global fallback evaluation. "
             "When supplied with --hierarchy_labels, it replaces the second requested "
             "truth label during evaluation only."
         ),
@@ -821,7 +1276,9 @@ def build_evaluate_parser(prog: Optional[str] = None, add_help: bool = True) -> 
     return parser
 
 
-def build_cross_validate_parser(prog: Optional[str] = None, add_help: bool = True) -> argparse.ArgumentParser:
+def build_cross_validate_parser(
+    prog: Optional[str] = None, add_help: bool = True
+) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=prog,
         description=(
@@ -832,15 +1289,42 @@ def build_cross_validate_parser(prog: Optional[str] = None, add_help: bool = Tru
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         add_help=add_help,
     )
-    parser.add_argument("--genomic", required=True, help="Training genomic input file or directory.")
-    parser.add_argument("--meta", required=True, help="Metadata file containing the supervised label.")
-    parser.add_argument("--label", required=True, help="Metadata label column to cross-validate.")
-    parser.add_argument("--output_dir", required=True, help="Output directory for repeated cross-validation artifacts.")
-    parser.add_argument("--ref_fasta", default=None, help="Optional reference FASTA/GenBank context for VCF-oriented workflows.")
-    parser.add_argument("--algorithm", default=None, help="Optional fixed downstream algorithm. Leave unset to use the normal selector pathway.")
-    parser.add_argument("--n_repeats", type=int, default=3, help="Number of repeated CV rounds.")
-    parser.add_argument("--n_splits", type=int, default=5, help="Requested stratified folds per repeat.")
-    parser.add_argument("--random_state", type=int, default=None, help="Random seed for repeat/fold generation.")
+    parser.add_argument(
+        "--genomic", required=True, help="Training genomic input file or directory."
+    )
+    parser.add_argument(
+        "--meta", required=True, help="Metadata file containing the supervised label."
+    )
+    parser.add_argument(
+        "--label", required=True, help="Metadata label column to cross-validate."
+    )
+    parser.add_argument(
+        "--output_dir",
+        required=True,
+        help="Output directory for repeated cross-validation artifacts.",
+    )
+    parser.add_argument(
+        "--ref_fasta",
+        default=None,
+        help="Optional reference FASTA/GenBank context for VCF-oriented workflows.",
+    )
+    parser.add_argument(
+        "--algorithm",
+        default=None,
+        help="Optional fixed downstream algorithm. Leave unset to use the normal selector pathway.",
+    )
+    parser.add_argument(
+        "--n_repeats", type=int, default=3, help="Number of repeated CV rounds."
+    )
+    parser.add_argument(
+        "--n_splits", type=int, default=5, help="Requested stratified folds per repeat."
+    )
+    parser.add_argument(
+        "--random_state",
+        type=int,
+        default=None,
+        help="Random seed for repeat/fold generation.",
+    )
     add_rf_fdr_args(parser)
     add_config_args(parser)
     add_performance_args(parser)
@@ -848,7 +1332,9 @@ def build_cross_validate_parser(prog: Optional[str] = None, add_help: bool = Tru
     return parser
 
 
-def build_bundle_parser(prog: Optional[str] = None, add_help: bool = True) -> argparse.ArgumentParser:
+def build_bundle_parser(
+    prog: Optional[str] = None, add_help: bool = True
+) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=prog,
         description=(
@@ -862,7 +1348,7 @@ def build_bundle_parser(prog: Optional[str] = None, add_help: bool = True) -> ar
     parser.add_argument(
         "--registry",
         required=True,
-        help="Path to two_level_model_registry.json or hierarchical_model_registry.json from training.",
+        help="Path to hierarchy/two-level/hierarchical model registry JSON from training.",
     )
     parser.add_argument(
         "--output",
@@ -895,6 +1381,7 @@ def build_bundle_parser(prog: Optional[str] = None, add_help: bool = True) -> ar
     add_logging_args(parser)
     return parser
 
+
 def build_top_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="NetworkParser command-line interface.",
@@ -902,16 +1389,74 @@ def build_top_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    run = subparsers.add_parser("run", help="Run the single-label NetworkParser workflow.", parents=[build_run_parser(add_help=False)], add_help=True)
-    run.set_defaults(command="run")
-
-    train_two = subparsers.add_parser(
-        "train-two-level",
-        help="Train the two-label strain-identity and resistance-profile protocol.",
-        parents=[build_train_two_level_parser(add_help=False)],
+    run = subparsers.add_parser(
+        "run",
+        help="Run the single-label NetworkParser workflow.",
+        parents=[build_run_parser(add_help=False)],
         add_help=True,
     )
-    train_two.set_defaults(command="train-two-level")
+    run.set_defaults(command="run")
+
+    train_hier = subparsers.add_parser(
+        "train-hierarchy",
+        help="Train hierarchical models (2+ levels): placement and nested phenotype endpoints.",
+        parents=[build_train_hierarchy_parser(add_help=False)],
+        add_help=True,
+    )
+    train_hier.set_defaults(command="train-hierarchy")
+
+    # Backward-compatible alias (same implementation as train-hierarchy)
+    train_two = subparsers.add_parser(
+        "train-two-level",
+        help="Deprecated alias for train-hierarchy (classic two-level or multi-level).",
+        parents=[build_train_hierarchy_parser(add_help=False)],
+        add_help=True,
+    )
+    train_two.set_defaults(command="train-hierarchy")
+
+    annotate = subparsers.add_parser(
+        "annotate-panels",
+        help=(
+            "Annotate selected feature panels with genes, predicted consequences "
+            "and optional resistance-catalogue labels (post-training biological summary)."
+        ),
+        add_help=True,
+    )
+    annotate.add_argument(
+        "--registry",
+        required=True,
+        help="Path to hierarchical_model_registry.json or two_level_model_registry.json",
+    )
+    annotate.add_argument(
+        "--output_dir", required=True, help="Directory for annotation tables"
+    )
+    annotate.add_argument(
+        "--catalogue",
+        default=None,
+        help="Optional TSV/CSV of known resistance mutations/genes (flexible column names)",
+    )
+    annotate.add_argument(
+        "--stability",
+        default=None,
+        help="Optional TSV/CSV with Feature_ID and selection_frequency from leakage-aware CV",
+    )
+    annotate.add_argument(
+        "--min_stability",
+        type=float,
+        default=0.0,
+        help="If --stability is set, keep features with selection_frequency >= this value (0-1)",
+    )
+    annotate.add_argument(
+        "--write_stable_report",
+        action="store_true",
+        help="Write stable_panel_features_annotated.tsv (uses min_stability or 0.5 default).",
+    )
+    annotate.add_argument(
+        "--write_catalogue_circularity",
+        action="store_true",
+        help="Write catalogue circularity audit (known vs non-catalogue by node).",
+    )
+    annotate.set_defaults(command="annotate-panels")
 
     bundle = subparsers.add_parser(
         "bundle",
@@ -937,6 +1482,53 @@ def build_top_parser() -> argparse.ArgumentParser:
     )
     evaluate.set_defaults(command="evaluate")
 
+    evaluate_hier = subparsers.add_parser(
+        "evaluate-hierarchy",
+        help=(
+            "Hierarchy evaluation pack: per-level metrics/confusions, full-path "
+            "accuracy, bootstrap CIs, optional resistance-label harmonization."
+        ),
+        add_help=True,
+    )
+    evaluate_hier.add_argument(
+        "--predictions",
+        required=True,
+        help="query_predictions.csv from hierarchy query",
+    )
+    evaluate_hier.add_argument(
+        "--meta",
+        required=True,
+        help="Metadata with hierarchy label columns",
+    )
+    evaluate_hier.add_argument(
+        "--hierarchy_labels",
+        nargs="+",
+        required=True,
+        help="Ordered hierarchy label columns (same as training)",
+    )
+    evaluate_hier.add_argument(
+        "--output_dir",
+        required=True,
+        help="Output directory for the evaluation pack",
+    )
+    evaluate_hier.add_argument(
+        "--sample_id_column",
+        default=None,
+        help="Optional sample-id column in predictions",
+    )
+    evaluate_hier.add_argument(
+        "--harmonize_resistance_labels",
+        action="store_true",
+        help="Map susceptible/Sensitive (and similar) for fair resistance scoring",
+    )
+    evaluate_hier.add_argument(
+        "--n_bootstrap",
+        type=int,
+        default=500,
+        help="Bootstrap resamples for principal metric CIs",
+    )
+    evaluate_hier.set_defaults(command="evaluate-hierarchy")
+
     cross_validate = subparsers.add_parser(
         "cross-validate",
         aliases=["cross_validation"],
@@ -952,6 +1544,7 @@ def build_top_parser() -> argparse.ArgumentParser:
 # Command runners
 # -----------------------------------------------------------------------------
 
+
 def run_single_label(args: argparse.Namespace) -> Dict[str, Any]:
     config = load_config(args.config)
     config = apply_common_overrides(config, args)
@@ -964,11 +1557,12 @@ def run_single_label(args: argparse.Namespace) -> Dict[str, Any]:
     if args.disable_central_feature_filtering:
         config.run_central_feature_filtering = False
     else:
-        config.run_central_feature_filtering = bool(getattr(config, "run_central_feature_filtering", True))
+        config.run_central_feature_filtering = bool(
+            getattr(config, "run_central_feature_filtering", True)
+        )
 
     if args.disable_model_selector:
         config.run_model_selector = False
-        config.disable_model_selector = True
 
     if args.disable_conditional_dt:
         config.run_conditional_dt = False
@@ -979,12 +1573,16 @@ def run_single_label(args: argparse.Namespace) -> Dict[str, Any]:
     set_if_provided(config, "ml_max_sensitivity", args.ml_max_sensitivity)
     set_if_provided(config, "ml_step_sensitivity", args.ml_step_sensitivity)
     set_if_provided(config, "ml_empty_symbol", args.ml_empty_symbol)
-    set_if_provided(config, "ml_remove_empty_field_threshold", args.ml_remove_empty_field_threshold)
+    set_if_provided(
+        config, "ml_remove_empty_field_threshold", args.ml_remove_empty_field_threshold
+    )
 
     if hasattr(config, "__post_init__"):
         config.__post_init__()
 
-    LOGGER.info("Starting NetworkParser single-label workflow | mode=%s", config.pipeline_mode)
+    LOGGER.info(
+        "Starting NetworkParser single-label workflow | mode=%s", config.pipeline_mode
+    )
     return run_networkparser_analysis(
         genomic_path=args.genomic,
         meta_path=args.meta,
@@ -1005,7 +1603,9 @@ def _build_training_bundle(
 ) -> Optional[Path]:
     """Create the default portable .npb bundle after successful training."""
     if bool(getattr(args, "no_model_bundle", False)):
-        LOGGER.info("Skipping automatic model bundle creation because --no_model_bundle was supplied.")
+        LOGGER.info(
+            "Skipping automatic model bundle creation because --no_model_bundle was supplied."
+        )
         return None
 
     registry_path = Path(registry_path)
@@ -1022,7 +1622,7 @@ def _build_training_bundle(
 
     try:
         from network_parser.model_bundle import build_bundle_from_registry
-    except Exception:  # pragma: no cover - supports direct source-tree execution
+    except ImportError:  # pragma: no cover - supports direct source-tree execution
         from model_bundle import build_bundle_from_registry  # type: ignore
 
     LOGGER.info(
@@ -1037,31 +1637,56 @@ def _build_training_bundle(
         include_feature_manifests=True,
         include_ranked_feature_tables=True,
     )
-    LOGGER.info("Automatic NetworkParser model bundle complete | output=%s", output_path)
+    LOGGER.info(
+        "Automatic NetworkParser model bundle complete | output=%s", output_path
+    )
     return output_path
 
 
-def run_train_two_level(args: argparse.Namespace) -> Dict[str, Any]:
+def run_train_hierarchy(args: argparse.Namespace) -> Dict[str, Any]:
     config = load_config(args.config)
     config = apply_common_overrides(config, args)
+    if bool(getattr(args, "hierarchy_resume", False)):
+        config.hierarchy_resume_completed_nodes = True
+    preset = getattr(args, "hierarchy_preset", None)
+    if preset:
+        config.hierarchy_preset = str(preset)
 
     if hasattr(config, "__post_init__"):
         config.__post_init__()
 
-    protocol = TwoLevelProtocol(config=config)
+    protocol = HierarchyProtocol(config=config)
+
+    try:
+        from network_parser.hierarchy_artifacts import resolve_hierarchy_labels
+    except ImportError:  # pragma: no cover
+        from hierarchy_artifacts import resolve_hierarchy_labels  # type: ignore
 
     hierarchy_labels = getattr(args, "hierarchy_labels", None)
-    if hierarchy_labels:
+    try:
+        resolved_labels = None
+        if hierarchy_labels or preset:
+            resolved_labels = resolve_hierarchy_labels(
+                hierarchy_labels=hierarchy_labels,
+                preset=preset,
+            )
+    except ValueError:
+        resolved_labels = list(hierarchy_labels) if hierarchy_labels else None
+
+    if resolved_labels:
         if getattr(args, "global_level2_label", None):
             LOGGER.warning(
                 "Ignoring --global_level2_label in recursive hierarchy mode. "
                 "Use a terminal hierarchy label such as AMR_binary directly in --hierarchy_labels."
             )
-        LOGGER.info("Starting NetworkParser multi-level hierarchy training")
+        LOGGER.info(
+            "Starting NetworkParser multi-level hierarchy training | labels=%s",
+            resolved_labels,
+        )
         registry = protocol.train_hierarchy(
             genomic_path=args.genomic,
             meta_path=args.meta,
-            hierarchy_labels=list(hierarchy_labels),
+            hierarchy_labels=list(resolved_labels),
             output_dir=args.output_dir,
             ref_fasta=args.ref_fasta,
             algorithm=args.algorithm,
@@ -1075,11 +1700,11 @@ def run_train_two_level(args: argparse.Namespace) -> Dict[str, Any]:
 
     if not args.level1_label or not args.level2_label:
         raise ValueError(
-            "train-two-level requires either --hierarchy_labels with at least two columns "
-            "or both --level1_label and --level2_label."
+            "train-hierarchy requires either --hierarchy_labels / --hierarchy_preset "
+            "with at least two columns, or both --level1_label and --level2_label."
         )
 
-    LOGGER.info("Starting NetworkParser two-level training")
+    LOGGER.info("Starting NetworkParser hierarchy training")
     registry = protocol.train(
         genomic_path=args.genomic,
         meta_path=args.meta,
@@ -1101,11 +1726,15 @@ def run_train_two_level(args: argparse.Namespace) -> Dict[str, Any]:
 
 def run_bundle(args: argparse.Namespace) -> Any:
     registry_path = Path(args.registry)
-    output_path = Path(args.output) if args.output else registry_path.parent / "networkparser_model_bundle.npb"
+    output_path = (
+        Path(args.output)
+        if args.output
+        else registry_path.parent / "networkparser_model_bundle.npb"
+    )
 
     try:
         from network_parser.model_bundle import build_bundle_from_registry
-    except Exception:  # pragma: no cover - supports direct source-tree execution
+    except ImportError:  # pragma: no cover - supports direct source-tree execution
         from model_bundle import build_bundle_from_registry  # type: ignore
 
     LOGGER.info(
@@ -1118,8 +1747,12 @@ def run_bundle(args: argparse.Namespace) -> Any:
         registry_path=registry_path,
         output_path=output_path,
         include_model_payloads=not bool(getattr(args, "no_model_payloads", False)),
-        include_feature_manifests=not bool(getattr(args, "no_feature_manifests", False)),
-        include_ranked_feature_tables=not bool(getattr(args, "no_ranked_feature_tables", False)),
+        include_feature_manifests=not bool(
+            getattr(args, "no_feature_manifests", False)
+        ),
+        include_ranked_feature_tables=not bool(
+            getattr(args, "no_ranked_feature_tables", False)
+        ),
     )
 
     LOGGER.info(
@@ -1196,7 +1829,10 @@ def _ensure_query_bundle_available(bundle_path: str | Path) -> Path:
                 child.name
                 for child in base_dir.iterdir()
                 if child.is_dir()
-                and any(candidate.exists() for candidate in _registry_candidates_for_bundle_dir(child))
+                and any(
+                    candidate.exists()
+                    for candidate in _registry_candidates_for_bundle_dir(child)
+                )
             )
             if siblings:
                 hint = (
@@ -1209,13 +1845,13 @@ def _ensure_query_bundle_available(bundle_path: str | Path) -> Path:
             f"Expected bundle: {path}; checked registries: "
             + ", ".join(str(candidate) for candidate in checked)
             + hint
-            + " Retrain with `train-two-level` (bundle is created automatically), "
+            + " Retrain with `train-hierarchy` (alias: `train-two-level`) (bundle is created automatically), "
             "run `network_parser bundle`, or query with --registry instead of --bundle."
         )
 
     try:
         from network_parser.model_bundle import build_bundle_from_registry
-    except Exception:  # pragma: no cover - supports direct source-tree execution
+    except ImportError:  # pragma: no cover - supports direct source-tree execution
         from model_bundle import build_bundle_from_registry  # type: ignore
 
     LOGGER.warning(
@@ -1231,18 +1867,46 @@ def _ensure_query_bundle_available(bundle_path: str | Path) -> Path:
         include_ranked_feature_tables=True,
     )
     if not path.exists():
-        raise FileNotFoundError(f"Bundle rebuild completed but bundle is still missing: {path}")
+        raise FileNotFoundError(
+            f"Bundle rebuild completed but bundle is still missing: {path}"
+        )
     return path
 
 
 def run_query(args: argparse.Namespace) -> Any:
+    try:
+        from network_parser.hierarchy_artifacts import write_resource_profile
+    except ImportError:  # pragma: no cover
+        from hierarchy_artifacts import write_resource_profile  # type: ignore
+    try:
+        config_for_log = load_config(getattr(args, "config", None))
+        config_for_log = apply_common_overrides(config_for_log, args)
+    except Exception:
+        config_for_log = None
+    write_resource_profile(
+        getattr(args, "output_dir", "."),
+        config=config_for_log,
+        stage="query",
+    )
     config = load_config(args.config)
     config = apply_common_overrides(config, args)
 
-    set_if_provided(config, "fastq_max_parallel_samples", getattr(args, "fastq_max_parallel_samples", None))
+    set_if_provided(
+        config,
+        "fastq_max_parallel_samples",
+        getattr(args, "fastq_max_parallel_samples", None),
+    )
     set_if_provided(config, "fastq_threads", getattr(args, "fastq_threads", None))
-    set_if_provided(config, "fastq_memory_per_sample_mb", getattr(args, "fastq_memory_per_sample_mb", None))
-    set_if_provided(config, "fastq_min_mapping_quality", getattr(args, "fastq_min_mapping_quality", None))
+    set_if_provided(
+        config,
+        "fastq_memory_per_sample_mb",
+        getattr(args, "fastq_memory_per_sample_mb", None),
+    )
+    set_if_provided(
+        config,
+        "fastq_min_mapping_quality",
+        getattr(args, "fastq_min_mapping_quality", None),
+    )
     if bool(getattr(args, "fastq_clean_intermediates", False)):
         config.fastq_clean_intermediates = True
     if bool(getattr(args, "fastq_no_auto_index_reference", False)):
@@ -1256,22 +1920,28 @@ def run_query(args: argparse.Namespace) -> Any:
 
     # Backward-compatible convenience: allow users to pass the binary bundle
     # through --registry while newer commands use the clearer --bundle flag.
-    if registry_path and str(registry_path).lower().endswith(".npb") and not bundle_path:
+    if (
+        registry_path
+        and str(registry_path).lower().endswith(".npb")
+        and not bundle_path
+    ):
         bundle_path = registry_path
         registry_path = None
 
     if bool(registry_path) == bool(bundle_path):
         raise ValueError(
             "Query mode requires exactly one trained model source: "
-            "provide --bundle networkparser_model_bundle.npb or --registry two_level_model_registry.json."
+            "provide --bundle networkparser_model_bundle.npb or --registry hierarchical_model_registry.json / two_level_model_registry.json."
         )
 
     if bundle_path:
         bundle_path = _ensure_query_bundle_available(bundle_path)
-        LOGGER.info("Starting NetworkParser bundled query workflow | bundle=%s", bundle_path)
+        LOGGER.info(
+            "Starting NetworkParser bundled query workflow | bundle=%s", bundle_path
+        )
         try:
             from network_parser.model_bundle import query_bundle
-        except Exception:  # pragma: no cover - supports direct source-tree execution
+        except ImportError:  # pragma: no cover - supports direct source-tree execution
             from model_bundle import query_bundle  # type: ignore
 
         return query_bundle(
@@ -1325,8 +1995,11 @@ def run_evaluate(args: argparse.Namespace) -> Dict[str, Any]:
     import pandas as pd
 
     try:
-        from network_parser.model_evaluation import evaluate_predictions, load_labels_from_metadata
-    except Exception:  # pragma: no cover - supports direct source-tree execution
+        from network_parser.model_evaluation import (
+            evaluate_predictions,
+            load_labels_from_metadata,
+        )
+    except ImportError:  # pragma: no cover - supports direct source-tree execution
         from model_evaluation import evaluate_predictions, load_labels_from_metadata  # type: ignore
 
     labels: List[str] = []
@@ -1359,7 +2032,14 @@ def run_evaluate(args: argparse.Namespace) -> Dict[str, Any]:
         if len(labels) == 1 and getattr(args, "predicted_column", None):
             pred_col = str(args.predicted_column)
         else:
-            pred_col = next((c for c in _candidate_prediction_columns(level_idx) if c in predictions.columns), None)
+            pred_col = next(
+                (
+                    c
+                    for c in _candidate_prediction_columns(level_idx)
+                    if c in predictions.columns
+                ),
+                None,
+            )
 
         if not pred_col:
             message = {
@@ -1412,14 +2092,16 @@ def run_evaluate(args: argparse.Namespace) -> Dict[str, Any]:
         json.dump(summary, handle, indent=2)
         handle.write("\n")
 
-    LOGGER.info("Evaluation complete | levels=%d | output_dir=%s", len(results), out_dir)
+    LOGGER.info(
+        "Evaluation complete | levels=%d | output_dir=%s", len(results), out_dir
+    )
     return summary
 
 
 def run_cross_validate(args: argparse.Namespace) -> Dict[str, Any]:
     try:
         from network_parser.cross_validation import run_repeated_cv
-    except Exception:  # pragma: no cover - supports direct source-tree execution
+    except ImportError:  # pragma: no cover - supports direct source-tree execution
         from cross_validation import run_repeated_cv  # type: ignore
 
     config = load_config(args.config)
@@ -1451,6 +2133,7 @@ def run_cross_validate(args: argparse.Namespace) -> Dict[str, Any]:
 # Main dispatcher
 # -----------------------------------------------------------------------------
 
+
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     tokens = list(sys.argv[1:] if argv is None else argv)
 
@@ -1467,21 +2150,60 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = parse_args(argv)
-    configure_logging(verbose=bool(getattr(args, "verbose", False)), quiet=bool(getattr(args, "quiet", False)))
+    configure_logging(
+        verbose=bool(getattr(args, "verbose", False)),
+        quiet=bool(getattr(args, "quiet", False)),
+    )
 
     try:
         if args.command == "run":
             run_single_label(args)
-        elif args.command == "train-two-level":
-            run_train_two_level(args)
+        elif args.command in {"train-hierarchy", "train-two-level"}:
+            run_train_hierarchy(args)
         elif args.command == "bundle":
             run_bundle(args)
         elif args.command == "query":
             run_query(args)
         elif args.command == "evaluate":
             run_evaluate(args)
+        elif args.command == "evaluate-hierarchy":
+            try:
+                from network_parser.hierarchy_evaluation_pack import (
+                    run_hierarchy_evaluation_pack,
+                )
+            except ImportError:  # pragma: no cover
+                from hierarchy_evaluation_pack import (  # type: ignore
+                    run_hierarchy_evaluation_pack,
+                )
+            run_hierarchy_evaluation_pack(
+                predictions_path=args.predictions,
+                meta_path=args.meta,
+                hierarchy_labels=list(args.hierarchy_labels),
+                output_dir=args.output_dir,
+                sample_id_column=getattr(args, "sample_id_column", None),
+                harmonize_resistance_labels=bool(
+                    getattr(args, "harmonize_resistance_labels", False)
+                ),
+                n_bootstrap=int(getattr(args, "n_bootstrap", 500)),
+            )
         elif args.command == "cross-validate":
             run_cross_validate(args)
+        elif args.command == "annotate-panels":
+            try:
+                from network_parser.panel_annotation import annotate_registry_panels
+            except ImportError:  # pragma: no cover
+                from panel_annotation import annotate_registry_panels  # type: ignore
+            annotate_registry_panels(
+                registry_path=Path(args.registry),
+                output_dir=Path(args.output_dir),
+                catalogue_path=Path(args.catalogue) if args.catalogue else None,
+                stability_path=Path(args.stability) if args.stability else None,
+                min_stability=float(args.min_stability),
+                write_stable_report=bool(getattr(args, "write_stable_report", False)),
+                write_catalogue_circularity=bool(
+                    getattr(args, "write_catalogue_circularity", False)
+                ),
+            )
         else:
             raise ValueError(f"Unsupported command: {args.command}")
     except Exception as exc:
