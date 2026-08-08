@@ -1,6 +1,8 @@
 # NetworkParser
 
-NetworkParser trains microbial genomic classifiers from VCF files or feature matrices and applies trained models to new samples. It supports single-label analyses and ordered hierarchies such as lineage → AMR status → resistance profile.
+NetworkParser is a research pipeline for microbial genomics. From per-sample VCFs (or precomputed feature matrices) and labelled metadata, it builds interpretable classifiers for **single labels** or **ordered biological hierarchies** (for example lineage → AMR → resistance profile). In hierarchical mode, each child model is trained only on samples that follow its parent branch; at query time the same route is walked and audited end to end.
+
+It packages the trained feature space into portable model bundles and applies those models to new samples as matrix, VCF, FASTA, or paired FASTQ. Predictions stay tied to the genomic markers and hierarchy route that produced them. Typical outputs include model registries, portable `.npb` bundles, ranked marker tables, route audits, readable query reports, evaluation metrics, and optional post-training panel annotations.
 
 > NetworkParser is a research tool. Its predictions are not validated clinical diagnoses.
 

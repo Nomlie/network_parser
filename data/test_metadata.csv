@@ -1,0 +1,31 @@
+ID,Country,Lineage,Pheno,Lineage_clean,Resistance_Profile,Resistance_Profile_Collapsed,AMR_binary,vcf_file,split
+ERR181775,Malawi,lineage 1,susceptible,lineage 1,susceptible,susceptible,susceptible,ERR181775.vcf.gz,test
+ERR190356,Malawi,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,ERR190356.vcf.gz,test
+ERR245706,Malawi,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,ERR245706.vcf.gz,test
+ERR245767,Malawi,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,ERR245767.vcf.gz,test
+ERR2706994,Congo,lineage 4,Mono,lineage 4,Mono,Mono,resistant,ERR2706994.vcf.gz,test
+ERR2707111,Congo,lineage 4,Mono,lineage 4,Mono,Mono,resistant,ERR2707111.vcf.gz,test
+ERR3170409,Ghana,lineage 6,susceptible,lineage 6,susceptible,susceptible,susceptible,ERR3170409.vcf.gz,test
+ERR3470643,Sudan,lineage 3,susceptible,lineage 3,susceptible,susceptible,susceptible,ERR3470643.vcf.gz,test
+ERR4423760,Nigeria,lineage 4,Mono,lineage 4,Mono,Mono,resistant,ERR4423760.vcf.gz,test
+ERR4872248,Cameroon,lineage 4,Mono,lineage 4,Mono,Mono,resistant,ERR4872248.vcf.gz,test
+ERR553045,Sierra Leone,lineage 4,Mono,lineage 4,Mono,Mono,resistant,ERR553045.vcf.gz,test
+ERR5758315,South Africa,lineage 2,Pre-XDR,lineage 2,Pre_XDR,Pre_XDR,resistant,ERR5758315.vcf.gz,test
+ERR5987208,South Africa,lineage 2,Mono,lineage 2,Mono,Mono,resistant,ERR5987208.vcf.gz,test
+ERR6362727,South Africa,lineage 2,susceptible,lineage 2,susceptible,susceptible,susceptible,ERR6362727.vcf.gz,test
+ERR7801232,Tanzania,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,ERR7801232.vcf.gz,test
+ERR7801280,Tanzania,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,ERR7801280.vcf.gz,test
+ERR8025481,South Africa,lineage 2,Pre-XDR,lineage 2,Pre_XDR,Pre_XDR,resistant,ERR8025481.vcf.gz,test
+SRR10869282,South Africa,lineage 2,Pre-XDR,lineage 2,Pre_XDR,Pre_XDR,resistant,SRR10869282.vcf.gz,test
+SRR11444211,Ghana,lineage 4,Mono,lineage 4,Mono,Mono,resistant,SRR11444211.vcf.gz,test
+SRR1172851,South Africa,lineage 4,MDR,lineage 4,MDR,MDR,resistant,SRR1172851.vcf.gz,test
+SRR12882156,Tanzania,lineage 3,susceptible,lineage 3,susceptible,susceptible,susceptible,SRR12882156.vcf.gz,test
+SRR4033843,South Africa,lineage 2,susceptible,lineage 2,susceptible,susceptible,susceptible,SRR4033843.vcf.gz,test
+SRR4034235,South Africa,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,SRR4034235.vcf.gz,test
+SRR4034365,South Africa,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,SRR4034365.vcf.gz,test
+SRR4034601,South Africa,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,SRR4034601.vcf.gz,test
+SRR4037605,South Africa,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,SRR4037605.vcf.gz,test
+SRR4037740,South Africa,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,SRR4037740.vcf.gz,test
+SRR5818639,Djibouti,lineage 3,Mono,lineage 3,Mono,Mono,resistant,SRR5818639.vcf.gz,test
+SRR6207273,South Africa,lineage 2,susceptible,lineage 2,susceptible,susceptible,susceptible,SRR6207273.vcf.gz,test
+SRR9971171,South Africa,lineage 4,Mono,lineage 4,Mono,Mono,resistant,SRR9971171.vcf.gz,test

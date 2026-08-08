@@ -1,0 +1,181 @@
+ID,Country,Lineage,Pheno,Lineage_clean,Resistance_Profile,Resistance_Profile_Collapsed,AMR_binary,vcf_file,split
+ERR037517,Malawi,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,ERR037517.vcf.gz,train
+ERR040139,Uganda,lineage 3,MDR,lineage 3,MDR,MDR,resistant,ERR040139.vcf.gz,train
+ERR108135,South Africa,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,ERR108135.vcf.gz,train
+ERR124635,Malawi,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,ERR124635.vcf.gz,train
+ERR1452611,South Africa,lineage 2,susceptible,lineage 2,susceptible,susceptible,susceptible,ERR1452611.vcf.gz,train
+ERR161073,Malawi,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,ERR161073.vcf.gz,train
+ERR163959,Malawi,lineage 2,susceptible,lineage 2,susceptible,susceptible,susceptible,ERR163959.vcf.gz,train
+ERR163994,Malawi,lineage 1,susceptible,lineage 1,susceptible,susceptible,susceptible,ERR163994.vcf.gz,train
+ERR176609,Malawi,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,ERR176609.vcf.gz,train
+ERR176628,Malawi,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,ERR176628.vcf.gz,train
+ERR176789,Malawi,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,ERR176789.vcf.gz,train
+ERR181721,Malawi,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,ERR181721.vcf.gz,train
+ERR181783,Malawi,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,ERR181783.vcf.gz,train
+ERR181787,Malawi,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,ERR181787.vcf.gz,train
+ERR181798,Malawi,lineage 1,susceptible,lineage 1,susceptible,susceptible,susceptible,ERR181798.vcf.gz,train
+ERR216974,Malawi,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,ERR216974.vcf.gz,train
+ERR221606,Malawi,lineage 1,susceptible,lineage 1,susceptible,susceptible,susceptible,ERR221606.vcf.gz,train
+ERR245765,Malawi,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,ERR245765.vcf.gz,train
+ERR245766,Malawi,lineage 3,susceptible,lineage 3,susceptible,susceptible,susceptible,ERR245766.vcf.gz,train
+ERR245841,Malawi,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,ERR245841.vcf.gz,train
+ERR2679273,Mali,lineage 4,MDR,lineage 4,MDR,MDR,resistant,ERR2679273.vcf.gz,train
+ERR2679292,Mali,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,ERR2679292.vcf.gz,train
+ERR2707094,Congo,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,ERR2707094.vcf.gz,train
+ERR3077983,Tanzania,lineage 3,susceptible,lineage 3,susceptible,susceptible,susceptible,ERR3077983.vcf.gz,train
+ERR3077989,Tanzania,lineage 4,Mono,lineage 4,Mono,Mono,resistant,ERR3077989.vcf.gz,train
+ERR3170452,Ghana,lineage 6,susceptible,lineage 6,susceptible,susceptible,susceptible,ERR3170452.vcf.gz,train
+ERR3324335,Liberia,lineage 1,susceptible,lineage 1,susceptible,susceptible,susceptible,ERR3324335.vcf.gz,train
+ERR3340705,South Africa,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,ERR3340705.vcf.gz,train
+ERR3470565,Sudan,lineage 3,susceptible,lineage 3,susceptible,susceptible,susceptible,ERR3470565.vcf.gz,train
+ERR3509869,Mozambique,lineage 1,Mono,lineage 1,Mono,Mono,resistant,ERR3509869.vcf.gz,train
+ERR3803803,Gambia,lineage 6,susceptible,lineage 6,susceptible,susceptible,susceptible,ERR3803803.vcf.gz,train
+ERR3803806,Gambia,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,ERR3803806.vcf.gz,train
+ERR3804027,Gambia,lineage 6,susceptible,lineage 6,susceptible,susceptible,susceptible,ERR3804027.vcf.gz,train
+ERR3806601,Gambia,lineage 6,susceptible,lineage 6,susceptible,susceptible,susceptible,ERR3806601.vcf.gz,train
+ERR3806837,Gambia,lineage 6,susceptible,lineage 6,susceptible,susceptible,susceptible,ERR3806837.vcf.gz,train
+ERR4011124,South Africa,lineage 2,Mono,lineage 2,Mono,Mono,resistant,ERR4011124.vcf.gz,train
+ERR4011964,South Africa,lineage 4,MDR,lineage 4,MDR,MDR,resistant,ERR4011964.vcf.gz,train
+ERR4423504,South Africa,lineage 4,Mono,lineage 4,Mono,Mono,resistant,ERR4423504.vcf.gz,train
+ERR4423544,South Africa,lineage 4,MDR,lineage 4,MDR,MDR,resistant,ERR4423544.vcf.gz,train
+ERR4423551,South Africa,lineage 4,Mono,lineage 4,Mono,Mono,resistant,ERR4423551.vcf.gz,train
+ERR4423581,South Africa,lineage 2,Mono,lineage 2,Mono,Mono,resistant,ERR4423581.vcf.gz,train
+ERR4423712,Botswana,lineage 4,Mono,lineage 4,Mono,Mono,resistant,ERR4423712.vcf.gz,train
+ERR4423780,Nigeria,lineage 4,MDR,lineage 4,MDR,MDR,resistant,ERR4423780.vcf.gz,train
+ERR4829980,Nigeria,lineage 4,Pre-XDR,lineage 4,Pre_XDR,Pre_XDR,resistant,ERR4829980.vcf.gz,train
+ERR4829984,Nigeria,lineage 4,Mono,lineage 4,Mono,Mono,resistant,ERR4829984.vcf.gz,train
+ERR4830668,Algeria,lineage 4,Mono,lineage 4,Mono,Mono,resistant,ERR4830668.vcf.gz,train
+ERR4830795,Ethiopia,lineage 4,Pre-XDR,lineage 4,Pre_XDR,Pre_XDR,resistant,ERR4830795.vcf.gz,train
+ERR4830846,Ethiopia,lineage 1,Pre-XDR,lineage 1,Pre_XDR,Pre_XDR,resistant,ERR4830846.vcf.gz,train
+ERR4872075,Cameroon,lineage 4,MDR,lineage 4,MDR,MDR,resistant,ERR4872075.vcf.gz,train
+ERR4872113,Cameroon,lineage 4,Mono,lineage 4,Mono,Mono,resistant,ERR4872113.vcf.gz,train
+ERR4872138,Cameroon,lineage 5,MDR,lineage 5,MDR,MDR,resistant,ERR4872138.vcf.gz,train
+ERR4872212,Cameroon,lineage 4,MDR,lineage 4,MDR,MDR,resistant,ERR4872212.vcf.gz,train
+ERR551192,Sierra Leone,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,ERR551192.vcf.gz,train
+ERR551491,Congo,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,ERR551491.vcf.gz,train
+ERR552506,Congo,lineage 5,susceptible,lineage 5,susceptible,susceptible,susceptible,ERR552506.vcf.gz,train
+ERR5758350,South Africa,lineage 2,Pre-XDR,lineage 2,Pre_XDR,Pre_XDR,resistant,ERR5758350.vcf.gz,train
+ERR5758442,South Africa,lineage 2,MDR,lineage 2,MDR,MDR,resistant,ERR5758442.vcf.gz,train
+ERR5987227,South Africa,lineage 2,Mono,lineage 2,Mono,Mono,resistant,ERR5987227.vcf.gz,train
+ERR5987271,South Africa,lineage 2,Mono,lineage 2,Mono,Mono,resistant,ERR5987271.vcf.gz,train
+ERR5987341,South Africa,lineage 4,MDR,lineage 4,MDR,MDR,resistant,ERR5987341.vcf.gz,train
+ERR6052111,South Africa,lineage 2,MDR,lineage 2,MDR,MDR,resistant,ERR6052111.vcf.gz,train
+ERR6052118,South Africa,lineage 2,Pre-XDR,lineage 2,Pre_XDR,Pre_XDR,resistant,ERR6052118.vcf.gz,train
+ERR6358710,Rwanda,lineage 4,MDR,lineage 4,MDR,MDR,resistant,ERR6358710.vcf.gz,train
+ERR6358791,Rwanda,lineage 4,MDR,lineage 4,MDR,MDR,resistant,ERR6358791.vcf.gz,train
+ERR6358829,Rwanda,lineage 4,MDR,lineage 4,MDR,MDR,resistant,ERR6358829.vcf.gz,train
+ERR6358994,Rwanda,lineage 4,MDR,lineage 4,MDR,MDR,resistant,ERR6358994.vcf.gz,train
+ERR6359060,Rwanda,lineage 4,Mono,lineage 4,Mono,Mono,resistant,ERR6359060.vcf.gz,train
+ERR6359097,Rwanda,lineage 4,MDR,lineage 4,MDR,MDR,resistant,ERR6359097.vcf.gz,train
+ERR6362283,South Africa,lineage 2,Pre-XDR,lineage 2,Pre_XDR,Pre_XDR,resistant,ERR6362283.vcf.gz,train
+ERR7737696,South Africa,lineage 4,Pre-XDR,lineage 4,Pre_XDR,Pre_XDR,resistant,ERR7737696.vcf.gz,train
+ERR7801127,Tanzania,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,ERR7801127.vcf.gz,train
+ERR7801208,Tanzania,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,ERR7801208.vcf.gz,train
+ERR7801212,Tanzania,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,ERR7801212.vcf.gz,train
+ERR8025414,South Africa,lineage 2,Mono,lineage 2,Mono,Mono,resistant,ERR8025414.vcf.gz,train
+ERR8025509,South Africa,lineage 2,Mono,lineage 2,Mono,Mono,resistant,ERR8025509.vcf.gz,train
+ERR8025694,South Africa,lineage 2,Pre-XDR,lineage 2,Pre_XDR,Pre_XDR,resistant,ERR8025694.vcf.gz,train
+ERR990543,Uganda,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,ERR990543.vcf.gz,train
+SRR10315650,South Africa,lineage 4,MDR,lineage 4,MDR,MDR,resistant,SRR10315650.vcf.gz,train
+SRR1049618,Uganda,lineage 3,Mono,lineage 3,Mono,Mono,resistant,SRR1049618.vcf.gz,train
+SRR10868998,South Africa,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,SRR10868998.vcf.gz,train
+SRR10869110,South Africa,lineage 2,susceptible,lineage 2,susceptible,susceptible,susceptible,SRR10869110.vcf.gz,train
+SRR10869157,South Africa,lineage 2,Mono,lineage 2,Mono,Mono,resistant,SRR10869157.vcf.gz,train
+SRR10869270,South Africa,lineage 2,Mono,lineage 2,Mono,Mono,resistant,SRR10869270.vcf.gz,train
+SRR11349160,South Africa,lineage 4,MDR,lineage 4,MDR,MDR,resistant,SRR11349160.vcf.gz,train
+SRR11444153,Ghana,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,SRR11444153.vcf.gz,train
+SRR11461654,Ghana,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,SRR11461654.vcf.gz,train
+SRR1165689,South Africa,lineage 4,MDR,lineage 4,MDR,MDR,resistant,SRR1165689.vcf.gz,train
+SRR1169081,South Africa,lineage 4,MDR,lineage 4,MDR,MDR,resistant,SRR1169081.vcf.gz,train
+SRR1169307,South Africa,lineage 4,MDR,lineage 4,MDR,MDR,resistant,SRR1169307.vcf.gz,train
+SRR1169309,South Africa,lineage 4,MDR,lineage 4,MDR,MDR,resistant,SRR1169309.vcf.gz,train
+SRR1172147,South Africa,lineage 2,MDR,lineage 2,MDR,MDR,resistant,SRR1172147.vcf.gz,train
+SRR1173249,Uganda,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,SRR1173249.vcf.gz,train
+SRR1173406,South Africa,lineage 2,MDR,lineage 2,MDR,MDR,resistant,SRR1173406.vcf.gz,train
+SRR1173538,South Africa,lineage 2,MDR,lineage 2,MDR,MDR,resistant,SRR1173538.vcf.gz,train
+SRR1173707,South Africa,lineage 2,Pre-XDR,lineage 2,Pre_XDR,Pre_XDR,resistant,SRR1173707.vcf.gz,train
+SRR1175083,South Africa,lineage 4,MDR,lineage 4,MDR,MDR,resistant,SRR1175083.vcf.gz,train
+SRR1180445,South Africa,lineage 4,Pre-XDR,lineage 4,Pre_XDR,Pre_XDR,resistant,SRR1180445.vcf.gz,train
+SRR12634576,Uganda,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,SRR12634576.vcf.gz,train
+SRR12634581,Uganda,lineage 4,Mono,lineage 4,Mono,Mono,resistant,SRR12634581.vcf.gz,train
+SRR12634636,Uganda,lineage 3,susceptible,lineage 3,susceptible,susceptible,susceptible,SRR12634636.vcf.gz,train
+SRR12882019,Tanzania,lineage 3,susceptible,lineage 3,susceptible,susceptible,susceptible,SRR12882019.vcf.gz,train
+SRR12882152,Tanzania,lineage 3,susceptible,lineage 3,susceptible,susceptible,susceptible,SRR12882152.vcf.gz,train
+SRR12882561,Mozambique,lineage 1,susceptible,lineage 1,susceptible,susceptible,susceptible,SRR12882561.vcf.gz,train
+SRR1577822,Mali,lineage 2,Other*,lineage 2,Other*,Other,resistant,SRR1577822.vcf.gz,train
+SRR3086371,Mozambique,lineage 4,MDR,lineage 4,MDR,MDR,resistant,SRR3086371.vcf.gz,train
+SRR3732725,C√å√Ñ√•√Ñ√å¬†√•√ï√å√Ñ√•¬†√å¬¢√•√õ√•¬™√å√Ñ√•√Ñ√å¬¢√•√õ√•_√å√Ñ√•√¢√å√¢√•¬´te d'Ivoire,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,SRR3732725.vcf.gz,train
+SRR4033110,South Africa,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,SRR4033110.vcf.gz,train
+SRR4033772,South Africa,lineage 2,susceptible,lineage 2,susceptible,susceptible,susceptible,SRR4033772.vcf.gz,train
+SRR4033780,South Africa,lineage 2,susceptible,lineage 2,susceptible,susceptible,susceptible,SRR4033780.vcf.gz,train
+SRR4033865,South Africa,lineage 2,susceptible,lineage 2,susceptible,susceptible,susceptible,SRR4033865.vcf.gz,train
+SRR4033869,South Africa,lineage 2,susceptible,lineage 2,susceptible,susceptible,susceptible,SRR4033869.vcf.gz,train
+SRR4033964,South Africa,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,SRR4033964.vcf.gz,train
+SRR4034017,South Africa,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,SRR4034017.vcf.gz,train
+SRR4034240,South Africa,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,SRR4034240.vcf.gz,train
+SRR4034287,South Africa,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,SRR4034287.vcf.gz,train
+SRR4034288,South Africa,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,SRR4034288.vcf.gz,train
+SRR4034410,South Africa,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,SRR4034410.vcf.gz,train
+SRR4034414,South Africa,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,SRR4034414.vcf.gz,train
+SRR4034465,South Africa,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,SRR4034465.vcf.gz,train
+SRR4034576,South Africa,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,SRR4034576.vcf.gz,train
+SRR4034659,South Africa,lineage 2,susceptible,lineage 2,susceptible,susceptible,susceptible,SRR4034659.vcf.gz,train
+SRR4034685,South Africa,lineage 2,susceptible,lineage 2,susceptible,susceptible,susceptible,SRR4034685.vcf.gz,train
+SRR4034689,South Africa,lineage 2,susceptible,lineage 2,susceptible,susceptible,susceptible,SRR4034689.vcf.gz,train
+SRR4034696,South Africa,lineage 2,susceptible,lineage 2,susceptible,susceptible,susceptible,SRR4034696.vcf.gz,train
+SRR4034700,South Africa,lineage 2,susceptible,lineage 2,susceptible,susceptible,susceptible,SRR4034700.vcf.gz,train
+SRR4034783,South Africa,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,SRR4034783.vcf.gz,train
+SRR4034811,South Africa,lineage 2,susceptible,lineage 2,susceptible,susceptible,susceptible,SRR4034811.vcf.gz,train
+SRR4035733,South Africa,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,SRR4035733.vcf.gz,train
+SRR4035747,South Africa,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,SRR4035747.vcf.gz,train
+SRR4035828,South Africa,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,SRR4035828.vcf.gz,train
+SRR4035859,South Africa,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,SRR4035859.vcf.gz,train
+SRR4035949,South Africa,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,SRR4035949.vcf.gz,train
+SRR4036019,South Africa,lineage 3,Mono,lineage 3,Mono,Mono,resistant,SRR4036019.vcf.gz,train
+SRR4037650,South Africa,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,SRR4037650.vcf.gz,train
+SRR4037680,South Africa,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,SRR4037680.vcf.gz,train
+SRR4037927,South Africa,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,SRR4037927.vcf.gz,train
+SRR4037948,South Africa,lineage 2,susceptible,lineage 2,susceptible,susceptible,susceptible,SRR4037948.vcf.gz,train
+SRR5818627,Djibouti,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,SRR5818627.vcf.gz,train
+SRR5818682,Djibouti,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,SRR5818682.vcf.gz,train
+SRR6789618,Botswana,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,SRR6789618.vcf.gz,train
+SRR7535062,Uganda,lineage 4,Mono,lineage 4,Mono,Mono,resistant,SRR7535062.vcf.gz,train
+SRR8063654,Ethiopia,lineage BOV_AFRI,Other*,lineage BOV_AFRI,Other*,Other,resistant,SRR8063654.vcf.gz,train
+SRR833064,South Africa,lineage 4,Pre-XDR,lineage 4,Pre_XDR,Pre_XDR,resistant,SRR833064.vcf.gz,train
+SRR833134,South Africa,lineage 4,MDR,lineage 4,MDR,MDR,resistant,SRR833134.vcf.gz,train
+SRR833175,South Africa,lineage 4,Pre-XDR,lineage 4,Pre_XDR,Pre_XDR,resistant,SRR833175.vcf.gz,train
+SRR9588017,South Africa,lineage 4,MDR,lineage 4,MDR,MDR,resistant,SRR9588017.vcf.gz,train
+SRR9970985,South Africa,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,SRR9970985.vcf.gz,train
+SRR9971316,South Africa,lineage 4,Mono,lineage 4,Mono,Mono,resistant,SRR9971316.vcf.gz,train
+SRR9971322,South Africa,lineage 2,Mono,lineage 2,Mono,Mono,resistant,SRR9971322.vcf.gz,train
+SRR9971348,South Africa,lineage 4,MDR,lineage 4,MDR,MDR,resistant,SRR9971348.vcf.gz,train
+ERR181775,Malawi,lineage 1,susceptible,lineage 1,susceptible,susceptible,susceptible,ERR181775.vcf.gz,test
+ERR190356,Malawi,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,ERR190356.vcf.gz,test
+ERR245706,Malawi,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,ERR245706.vcf.gz,test
+ERR245767,Malawi,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,ERR245767.vcf.gz,test
+ERR2706994,Congo,lineage 4,Mono,lineage 4,Mono,Mono,resistant,ERR2706994.vcf.gz,test
+ERR2707111,Congo,lineage 4,Mono,lineage 4,Mono,Mono,resistant,ERR2707111.vcf.gz,test
+ERR3170409,Ghana,lineage 6,susceptible,lineage 6,susceptible,susceptible,susceptible,ERR3170409.vcf.gz,test
+ERR3470643,Sudan,lineage 3,susceptible,lineage 3,susceptible,susceptible,susceptible,ERR3470643.vcf.gz,test
+ERR4423760,Nigeria,lineage 4,Mono,lineage 4,Mono,Mono,resistant,ERR4423760.vcf.gz,test
+ERR4872248,Cameroon,lineage 4,Mono,lineage 4,Mono,Mono,resistant,ERR4872248.vcf.gz,test
+ERR553045,Sierra Leone,lineage 4,Mono,lineage 4,Mono,Mono,resistant,ERR553045.vcf.gz,test
+ERR5758315,South Africa,lineage 2,Pre-XDR,lineage 2,Pre_XDR,Pre_XDR,resistant,ERR5758315.vcf.gz,test
+ERR5987208,South Africa,lineage 2,Mono,lineage 2,Mono,Mono,resistant,ERR5987208.vcf.gz,test
+ERR6362727,South Africa,lineage 2,susceptible,lineage 2,susceptible,susceptible,susceptible,ERR6362727.vcf.gz,test
+ERR7801232,Tanzania,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,ERR7801232.vcf.gz,test
+ERR7801280,Tanzania,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,ERR7801280.vcf.gz,test
+ERR8025481,South Africa,lineage 2,Pre-XDR,lineage 2,Pre_XDR,Pre_XDR,resistant,ERR8025481.vcf.gz,test
+SRR10869282,South Africa,lineage 2,Pre-XDR,lineage 2,Pre_XDR,Pre_XDR,resistant,SRR10869282.vcf.gz,test
+SRR11444211,Ghana,lineage 4,Mono,lineage 4,Mono,Mono,resistant,SRR11444211.vcf.gz,test
+SRR1172851,South Africa,lineage 4,MDR,lineage 4,MDR,MDR,resistant,SRR1172851.vcf.gz,test
+SRR12882156,Tanzania,lineage 3,susceptible,lineage 3,susceptible,susceptible,susceptible,SRR12882156.vcf.gz,test
+SRR4033843,South Africa,lineage 2,susceptible,lineage 2,susceptible,susceptible,susceptible,SRR4033843.vcf.gz,test
+SRR4034235,South Africa,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,SRR4034235.vcf.gz,test
+SRR4034365,South Africa,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,SRR4034365.vcf.gz,test
+SRR4034601,South Africa,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,SRR4034601.vcf.gz,test
+SRR4037605,South Africa,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,SRR4037605.vcf.gz,test
+SRR4037740,South Africa,lineage 4,susceptible,lineage 4,susceptible,susceptible,susceptible,SRR4037740.vcf.gz,test
+SRR5818639,Djibouti,lineage 3,Mono,lineage 3,Mono,Mono,resistant,SRR5818639.vcf.gz,test
+SRR6207273,South Africa,lineage 2,susceptible,lineage 2,susceptible,susceptible,susceptible,SRR6207273.vcf.gz,test
+SRR9971171,South Africa,lineage 4,Mono,lineage 4,Mono,Mono,resistant,SRR9971171.vcf.gz,test
