@@ -1,10 +1,9 @@
 
-# Large data
+# Large bulk data (not the small demo split under data/)
 *.bam
 *.cram
 *.fastq
 *.fq
-*.vcf.gz
 *.bed
 *.sam
 *.h5
@@ -14,7 +13,16 @@
 *.npz
 *.parquet
 *.pkl
-/data/
+
+# Ignore VCF archives by default...
+*.vcf.gz
+# ...but keep the curated demo train/test subset tracked in-repo
+!data/
+!data/**
+!data/train/*.vcf.gz
+!data/test/*.vcf.gz
+
+# Large local result trees
 /results/
 
 # Python tooling caches

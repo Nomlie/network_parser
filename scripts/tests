@@ -282,8 +282,7 @@ biber NetworkParser_manuscript
 pdflatex NetworkParser_manuscript.tex
 pdflatex NetworkParser_manuscript.tex
 
-cd /Users/nmfuphicsir.co.za/Documents/pHDProject/Manuscript/Thesis
-pdflatex main.tex
+cd pdflatex main.tex
 biblatex main
 pdflatex main.tex
 pdflatex main.tex
