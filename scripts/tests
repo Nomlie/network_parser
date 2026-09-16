@@ -373,3 +373,43 @@ export CLUSTER="nmfuphi@lengau.chpc.ac.za"   # your host
 rsync -avh --progress \
   /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser/scripts/testing_scripts_cluster/ \
   "${CLUSTER}:/home/nmfuphi/network_parser/scripts/testing_scripts_cluster/"
+
+
+  mamba  env create \
+    -f environment.yml \
+    -p /apps/chpc/bio/anaconda3-2020.02/envs/bact
+
+    
+
+
+for id in CRR1866226  CRR1866306  CRR1866353  CRR1866400 CRR1866352  CRR1866399; do
+  rsync -avP \
+    "nmfuphi@scp.chpc.ac.za:/mnt/lustre/users/nmfuphi/phDproject/Data/PRJCA040523/CRA025985/${id}/${id}_r1.fq.gz" \
+    "nmfuphi@scp.chpc.ac.za:/mnt/lustre/users/nmfuphi/phDproject/Data/PRJCA040523/CRA025985/${id}/${id}_r2.fq.gz" \
+    "$DEST/"
+done
+
+
+export NXF_OFFLINE=true
+nextflow run /mnt/lustre/users/$USER/nf_workflows/.nextflow/assets/nf-core/bactmap \
+-c /mnt/lustre/users/nmfuphi/nf_workflows/runs/bactmap/bactmap.config \
+--input /mnt/lustre/users/nmfuphi/nf_workflows/inputs/bactmap/samplesheet.csv \
+--reference /mnt/lustre/users/nmfuphi/phDproject/Data/PRJCA040523/ref/H37Rv_M.tuberculosis_H37Rv.fasta \
+--outdir results \
+-with-report report.html \
+-with-trace trace.txt \
+-with-timeline timeline.html \
+-resume \
+-offline
+
+
+cat > /mnt/lustre/users/nmfuphi/Winter_School/Data/samplesheet.csv <<'EOF'
+sample,fastq_1,fastq_2
+M1,/mnt/lustre/users/nmfuphi/Winter_School/Data/CRR1866306_r1.fq.gz,/mnt/lustre/users/nmfuphi/Winter_School/Data/CRR1866306_r2.fq.gz
+M10,/mnt/lustre/users/nmfuphi/Winter_School/Data/CRR1866352_r1.fq.gz,/mnt/lustre/users/nmfuphi/Winter_School/Data/CRR1866352_r2.fq.gz
+M100,/mnt/lustre/users/nmfuphi/Winter_School/Data/CRR1866353_r1.fq.gz,/mnt/lustre/users/nmfuphi/Winter_School/Data/CRR1866353_r2.fq.gz
+M101,/mnt/lustre/users/nmfuphi/Winter_School/Data/CRR1866399_r1.fq.gz,/mnt/lustre/users/nmfuphi/Winter_School/Data/CRR1866399_r2.fq.gz
+M102,/mnt/lustre/users/nmfuphi/Winter_School/Data/CRR1866400_r1.fq.gz,/mnt/lustre/users/nmfuphi/Winter_School/Data/CRR1866400_r2.fq.gz
+EOF
+
+nextflow run /mnt/lustre/users/$USER/nf_workflows/.nextflow/assets/nf-core/bactmap \ -c /mnt/lustre/users/nmfuphi/nf_workflows/runs/bactmap/bactmap.config \ --input /mnt/lustre/users/nmfuphi/nf_workflows/inputs/bactmap/samplesheet.csv \ --reference /mnt/lustre/users/nmfuphi/phDproject/Data/PRJCA040523/ref/H37Rv_M.tuberculosis_H37Rv.fasta \ --outdir /mnt/lustre/users/nmfuphi/nf_workflows/runs/bactmap/results \ -w /mnt/lustre/users/nmfuphi/nf_workflows/runs/bactmap/work \ -with-report report.html \ -with-trace trace.txt \ -with-timeline timeline.html \ -resume \ -offline

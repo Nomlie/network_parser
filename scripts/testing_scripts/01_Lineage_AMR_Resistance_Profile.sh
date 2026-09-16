@@ -2,6 +2,10 @@
 # =============================================================================
 # Biological 3-level hierarchy:
 #   Lineage_clean → AMR_binary → Resistance_Profile_Collapsed
+#
+# Default: WHO catalogue seeded into phenotype panels (AMR / profile stages).
+# Leakage-aware CV is OFF by default (set RUN_LEAKAGE_AWARE_CV=1 to enable).
+# Control arm: SEED_KNOWN_MARKERS=0 bash 01_Lineage_AMR_Resistance_Profile.sh
 # =============================================================================
 set -euo pipefail
 
@@ -20,9 +24,38 @@ if [[ -n "${STABILITY_TSV}" && "${STABILITY_TSV}" != /* ]]; then
   STABILITY_TSV="${SCRIPT_DIR}/${STABILITY_TSV}"
 fi
 
-RUN_NAME="Hierarchy_Lineage_AMR_Resistance_Profile_01"
-RUN_DIR="${BASE_OUT}/${RUN_NAME}"
 HIER_LABELS=(Lineage_clean AMR_binary Resistance_Profile_Collapsed)
+SEED_KNOWN_MARKERS="${SEED_KNOWN_MARKERS:-1}"
+# Explicit default: CV is expensive; enable with RUN_LEAKAGE_AWARE_CV=1
+RUN_LEAKAGE_AWARE_CV="${RUN_LEAKAGE_AWARE_CV:-0}"
+
+# Resolve train config: seeded phenotype panels (default) or pure statistical.
+if [[ "${SEED_KNOWN_MARKERS}" == "1" || "${SEED_KNOWN_MARKERS}" == "true" ]]; then
+  RUN_NAME="${RUN_NAME_OVERRIDE:-Hierarchy_Lineage_AMR_Resistance_Profile_seeded_01}"
+  # Runtime config so known_markers_path always matches CATALOGUE from 00_config.
+  SEED_CFG_DIR="${BASE_OUT}/.runtime_configs"
+  mkdir -p "${SEED_CFG_DIR}"
+  NETWORKPARSER_CONFIG="${SEED_CFG_DIR}/afro_seed_known_markers.runtime.json"
+  cat > "${NETWORKPARSER_CONFIG}" <<EOF
+{
+  "min_gq_per_sample": 0,
+  "assume_absent_variant_is_reference": true,
+  "seed_known_markers": true,
+  "known_markers_path": "${CATALOGUE}",
+  "seed_known_markers_mode": "force_include",
+  "seed_known_markers_stage_substrings": "amr,resistance,pheno,profile,resistant,susceptible",
+  "seed_known_markers_max": null
+}
+EOF
+  echo "Known-marker seed ENABLED | catalogue=${CATALOGUE}"
+  echo "Runtime config: ${NETWORKPARSER_CONFIG}"
+else
+  RUN_NAME="${RUN_NAME_OVERRIDE:-Hierarchy_Lineage_AMR_Resistance_Profile_01}"
+  NETWORKPARSER_CONFIG="${NETWORKPARSER_CONFIG:-${SCRIPT_DIR}/afro_vcf_config.json}"
+  echo "Known-marker seed DISABLED | config=${NETWORKPARSER_CONFIG}"
+fi
+
+RUN_DIR="${BASE_OUT}/${RUN_NAME}"
 
 mkdir -p \
   "${RUN_DIR}" \
@@ -30,6 +63,19 @@ mkdir -p \
   "${RUN_DIR}/evaluate" \
   "${RUN_DIR}/validate_cv" \
   "${RUN_DIR}/panel_annotation"
+
+cat > "${RUN_DIR}/experiment_manifest.json" <<EOF
+{
+  "experiment": "01_Lineage_AMR_Resistance_Profile",
+  "seed_known_markers": $( [[ "${SEED_KNOWN_MARKERS}" == "1" || "${SEED_KNOWN_MARKERS}" == "true" ]] && echo true || echo false ),
+  "catalogue": "${CATALOGUE}",
+  "hierarchy_labels": ["Lineage_clean", "AMR_binary", "Resistance_Profile_Collapsed"],
+  "config": "${NETWORKPARSER_CONFIG}",
+  "run_dir": "${RUN_DIR}",
+  "run_leakage_aware_cv": $( [[ "${RUN_LEAKAGE_AWARE_CV}" == "1" ]] && echo true || echo false ),
+  "note": "Default: WHO catalogue force_include on phenotype stages; CV off unless RUN_LEAKAGE_AWARE_CV=1."
+}
+EOF
 
 # ---------------------------------------------------------------------------
 # 1. Train
@@ -40,7 +86,7 @@ mkdir -p \
   --meta "${META}" \
   --hierarchy_labels "${HIER_LABELS[@]}" \
   --hierarchy_preset lineage_amr_profile \
-  --global_fallback_labels terminal \
+  --global_fallback_labels "${GLOBAL_FALLBACK_LABELS:-none}" \
   --central_feature_filter_method "${FILTER}" \
   --ref_fasta "${REF}" \
   --output_dir "${RUN_DIR}" \
@@ -70,7 +116,7 @@ mkdir -p \
   --harmonize_resistance_labels
 
 # ---------------------------------------------------------------------------
-# 4. Leakage-aware cross-validation (training partition only)
+# 4. Leakage-aware cross-validation (training partition only; default OFF)
 # ---------------------------------------------------------------------------
 if [[ "${RUN_LEAKAGE_AWARE_CV}" == "1" ]]; then
   cv_algorithm_args=()
@@ -139,3 +185,6 @@ if [[ "${RUN_PANEL_ANNOTATION}" == "1" ]]; then
 fi
 
 echo "Done: ${RUN_DIR}"
+if [[ "${RUN_LEAKAGE_AWARE_CV}" != "1" ]]; then
+  echo "Note: leakage-aware CV was skipped (default). Re-run with RUN_LEAKAGE_AWARE_CV=1 to enable."
+fi
