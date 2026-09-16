@@ -57,9 +57,14 @@ RANDOM_STATE="${RANDOM_STATE:-42}"
 # unavailable threshold and opts into absence-as-reference for this known
 # variant-only callset. The same policy is passed to train, query, and CV.
 NETWORKPARSER_CONFIG="${NETWORKPARSER_CONFIG:-${SCRIPT_DIR}/afro_vcf_config.json}"
+# Experiment 01 defaults to a runtime seed config when SEED_KNOWN_MARKERS=1.
+# WHO catalogue force_include for phenotype stages (AMR / resistance profile).
+# Set SEED_KNOWN_MARKERS=0 for a pure statistical control arm.
+SEED_KNOWN_MARKERS="${SEED_KNOWN_MARKERS:-1}"
 
 # --- Leakage-aware cross-validation ---
-# Uses TRAIN_GENOMIC only. Held-out TEST_GENOMIC is not used in CV.
+# Default OFF (expensive). Uses TRAIN_GENOMIC only; held-out TEST_GENOMIC is
+# reserved for query/evaluation. Enable with RUN_LEAKAGE_AWARE_CV=1.
 RUN_LEAKAGE_AWARE_CV="${RUN_LEAKAGE_AWARE_CV:-0}"
 CV_REPEATS="${CV_REPEATS:-5}"
 CV_SPLITS="${CV_SPLITS:-5}"

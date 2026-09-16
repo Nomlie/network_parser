@@ -43,10 +43,12 @@ Optional `split` column must be `train` / `test` respectively.
 | `11_leakage_aware_cv.sh` | **Standalone** leakage-aware CV (train partition) |
 | `12_prjca_external_fastq_query.sh` | PRJCA FASTQ query with **`panel_bcftools`** + evaluate |
 | `13_prjca_phenotype_seeded10_vcf_query.sh` | Query **Phenotype_AMR_Profile_seeded_10** on **existing Chinese VCFs** + evaluate (AMR→Profile) |
+| `14_prjca_hierarchy_seeded01_vcf_query.sh` | Query **Hierarchy_*_seeded_01** on **existing Chinese VCFs** + evaluate (Lineage→AMR→Profile) |
 | `pbs_01_*.pbs` | Main seeded hierarchy job |
 | `pbs_11_leakage_aware_cv.pbs` | CV job (same PBS resources as 01) |
 | `pbs_12_prjca_external_fastq.pbs` | External PRJCA FASTQ job |
 | `pbs_13_prjca_phenotype_seeded10_vcf.pbs` | Phenotype light model × Chinese VCFs |
+| `pbs_14_prjca_hierarchy_seeded01_vcf.pbs` | Full hierarchy seeded_01 × Chinese VCFs |
 | `pbs_run_experiment.sh` | Generic: `qsub -v EXPERIMENT=01\|11\|12 ...` |
 | `afro_vcf_config.json` | AFRO callability without seed |
 | `afro_seed_known_markers_config.json` | Template seed config (01 writes runtime copy with catalogue path) |
@@ -73,10 +75,32 @@ qsub pbs_11_leakage_aware_cv.pbs
 qsub pbs_12_prjca_external_fastq.pbs
 # smoke: qsub -v LIMIT=5 pbs_12_prjca_external_fastq.pbs
 
-# 4) Light phenotype model (seeded_10) on already-called Chinese VCFs
+# 4) Full hierarchy (seeded_01) on already-called Chinese VCFs (recommended external VCF path)
+qsub pbs_14_prjca_hierarchy_seeded01_vcf.pbs
+# smoke: qsub -v LIMIT=20 pbs_14_prjca_hierarchy_seeded01_vcf.pbs
+
+# 5) Light phenotype model (seeded_10) on already-called Chinese VCFs
 qsub pbs_13_prjca_phenotype_seeded10_vcf.pbs
 # control arm: qsub -v ARM=control pbs_13_prjca_phenotype_seeded10_vcf.pbs
 ```
+
+### Local Mac: full hierarchy seeded_01 × Chinese VCFs (no re-calling)
+
+```bash
+cd /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser
+export PYTHONPATH=.
+source ~/anaconda3/etc/profile.d/conda.sh && conda activate networkparser
+
+# Smoke
+LIMIT=10 N_JOBS=8 bash scripts/testing_scripts/14_prjca_hierarchy_seeded01_vcf_query.sh
+
+# All available Chinese final/vcf
+N_JOBS=8 bash scripts/testing_scripts/14_prjca_hierarchy_seeded01_vcf_query.sh
+# or:
+N_JOBS=8 bash /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/PRJCA040523/scripts/query_hierarchy_seeded01_chinese_vcfs.sh
+```
+
+Output: `Results/PRJCA040523_external/Hierarchy_Lineage_AMR_Resistance_Profile_seeded_01_chinese_vcfs/`
 
 ### Local Mac: phenotype seeded_10 × Chinese VCFs (no re-calling)
 
@@ -84,9 +108,7 @@ qsub pbs_13_prjca_phenotype_seeded10_vcf.pbs
 cd /Users/nmfuphicsir.co.za/Documents/pHDProject/Code/network_parser
 export PYTHONPATH=.
 
-# All available Chinese final/vcf (~198)
-bash ../Data/PRJCA040523/scripts/query_phenotype_seeded10_chinese_vcfs.sh
-# path if run from repo:
+# All available Chinese final/vcf
 bash /Users/nmfuphicsir.co.za/Documents/pHDProject/Data/PRJCA040523/scripts/query_phenotype_seeded10_chinese_vcfs.sh
 
 # Smoke

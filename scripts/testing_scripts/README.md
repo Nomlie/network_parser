@@ -24,6 +24,7 @@ Important: the current NetworkParser `cross-validate` CLI validates **one superv
 
 | File | Role |
 |------|------|
+| `14_prjca_hierarchy_seeded01_vcf_query.sh` | External Chinese VCFs × **seeded_01** full hierarchy (Lineage→AMR→Profile); no FASTQ re-calling |
 | `00_config.sh` | Settings only (paths, flags, CV, catalogue). Edit like a config file. |
 | `afro_vcf_config.json` | Explicit callability policy shared by train, query, and CV for the AFRO bcftools VCFs. |
 | `00_prepare_inputs.sh` | Builds clean, disjoint train/test symlink views; derives **`Lineage_family`**; writes training + held-out evaluation metadata. |
@@ -34,7 +35,7 @@ Important: the current NetworkParser `cross-validate` CLI validates **one superv
 | **`10_phenotype_AMR_profile_known_marker_seed.sh`** | **Light A/B:** `AMR_binary → Resistance_Profile` only (+ optional known-marker seed). No lineage. CV/annotate off by default. |
 | `run_all_networkparser_validation.sh` | Runs selected experiments sequentially (default: `01` `02`) |
 
-**Config keys:** `META_SOURCE`, `META`, `EVALUATION_META`, `TRAIN_GENOMIC`, `TEST_GENOMIC`, `REF`, `BASE_OUT`, `N_JOBS`, `FILTER`, `RUN_LEAKAGE_AWARE_CV`, `CV_*`, `RUN_PANEL_ANNOTATION`, `CATALOGUE`, `STABILITY_TSV`, `MIN_STABILITY`, `HIERARCHY_RESUME`, `GLOBAL_FALLBACK_LABELS`.
+**Config keys:** `META_SOURCE`, `META`, `EVALUATION_META`, `TRAIN_GENOMIC`, `TEST_GENOMIC`, `REF`, `BASE_OUT`, `N_JOBS`, `FILTER`, `SEED_KNOWN_MARKERS`, `RUN_LEAKAGE_AWARE_CV`, `CV_*`, `RUN_PANEL_ANNOTATION`, `CATALOGUE`, `STABILITY_TSV`, `MIN_STABILITY`, `HIERARCHY_RESUME`, `GLOBAL_FALLBACK_LABELS`.
 
 ### Global fallbacks (opt-in)
 
@@ -61,7 +62,7 @@ Disable parent-conditioned terminal fallbacks: `--no_parent_conditioned_fallback
 
 | Script | Hierarchy | Notes |
 |--------|-----------|--------|
-| **`01_Lineage_AMR_Resistance_Profile.sh`** | `Lineage_clean → AMR_binary → Resistance_Profile_Collapsed` | Primary 3-level biological recipe |
+| **`01_Lineage_AMR_Resistance_Profile.sh`** | `Lineage_clean → AMR_binary → Resistance_Profile_Collapsed` | Primary 3-level biological recipe. **Default: WHO catalogue known-marker seed** (`SEED_KNOWN_MARKERS=1`); leakage-aware CV **off** (`RUN_LEAKAGE_AWARE_CV=0`). Control: `SEED_KNOWN_MARKERS=0`. |
 | **`02_Lineage_family_Lineage_AMR_profile.sh`** | `Lineage_family → Lineage_clean → AMR_binary → Resistance_Profile_Collapsed` | 4-level with coarse lineage families |
 
 `Lineage_family` groups:
@@ -97,12 +98,14 @@ Disable parent-conditioned terminal fallbacks: `--no_parent_conditioned_fallback
 cd scripts/testing_scripts
 # edit 00_config.sh if needed
 bash 01_Lineage_AMR_Resistance_Profile.sh
+# Defaults: SEED_KNOWN_MARKERS=1, RUN_LEAKAGE_AWARE_CV=0
 ```
 
-Skip CV for a faster smoke run:
+Control arm (no catalogue seed) or enable CV:
 
 ```bash
-RUN_LEAKAGE_AWARE_CV=0 bash 01_Lineage_AMR_Resistance_Profile.sh
+SEED_KNOWN_MARKERS=0 bash 01_Lineage_AMR_Resistance_Profile.sh
+RUN_LEAKAGE_AWARE_CV=1 bash 01_Lineage_AMR_Resistance_Profile.sh
 ```
 
 Resume interrupted hierarchy training:
