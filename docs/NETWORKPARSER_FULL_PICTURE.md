@@ -9,6 +9,14 @@ Not a clinical diagnostic product.
 
 ---
 
+Run everything from the repository root:
+
+```bash
+python run_network_parser.py --help
+python run_network_parser.py train-hierarchy --help
+python run_network_parser.py query --help
+```
+
 ## 1. Lifecycle (what you run)
 
 ```text
@@ -21,6 +29,8 @@ Not a clinical diagnostic product.
        │         train-only stats                │  frozen feature space
        │         (no query leakage)              │  (no re-filter / retrain)
 ```
+
+Each command is `python run_network_parser.py <command>`.
 
 | CLI | Role |
 |-----|------|
@@ -392,7 +402,7 @@ Query engine injects **Feature_IDs from the trained selected-feature manifest** 
 ### CLI hints
 
 ```bash
-python -m network_parser.cli query \
+python run_network_parser.py query \
   --config prjca_fastq_config.json \
   --genomic /path/to/fastq_dir \
   --bundle model.npb \

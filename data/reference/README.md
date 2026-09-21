@@ -10,10 +10,12 @@ manuscript.
 | `H37Rv.gbk` | GenBank annotation used for marker annotation / gene context |
 | `reference_manifest.json` | File sizes and SHA-256 checksums |
 
-## Usage with the demo VCF split
+## How to run with this reference
+
+From the repository root:
 
 ```bash
-python -m network_parser.cli train-hierarchy \
+python run_network_parser.py train-hierarchy \
   --genomic data/train \
   --meta data/train_metadata.csv \
   --hierarchy_labels Lineage_clean AMR_binary Resistance_Profile_Collapsed \
@@ -21,7 +23,7 @@ python -m network_parser.cli train-hierarchy \
   --ref_fasta data/reference/H37Rv.gbk \
   --output_dir demo_results/train
 
-python -m network_parser.cli query \
+python run_network_parser.py query \
   --genomic data/test \
   --bundle demo_results/train/networkparser_model_bundle.npb \
   --query_input_type vcf \
