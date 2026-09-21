@@ -21,6 +21,7 @@ import logging
 import os
 import re
 import sys
+import warnings
 from datetime import datetime
 from pathlib import Path
 from contextvars import ContextVar
@@ -43,6 +44,28 @@ try:
     import yaml  # type: ignore
 except ImportError:  # pragma: no cover
     yaml = None
+
+_EXPECTED_WARNING_FILTERS_INSTALLED = False
+
+
+def silence_expected_runtime_warnings() -> None:
+    """Hide warnings that are expected during query of trained NetworkParser models."""
+    global _EXPECTED_WARNING_FILTERS_INSTALLED
+    if _EXPECTED_WARNING_FILTERS_INSTALLED:
+        return
+    warnings.filterwarnings(
+        "ignore",
+        message=r"LEGACY CALLABILITY MODE:.*",
+        category=UserWarning,
+    )
+    try:
+        from sklearn.exceptions import InconsistentVersionWarning
+    except Exception:  # pragma: no cover
+        InconsistentVersionWarning = None  # type: ignore
+    if InconsistentVersionWarning is not None:
+        warnings.filterwarnings("ignore", category=InconsistentVersionWarning)
+    _EXPECTED_WARNING_FILTERS_INSTALLED = True
+
 
 # ──────────────────────────────────────────────────────────────
 # General helpers expected by the pipeline

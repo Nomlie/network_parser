@@ -194,6 +194,12 @@ def load_pickle(path: Path) -> Any:
         raise FileNotFoundError(f"Model payload not found: {path}")
 
     try:
+        from network_parser.utils import silence_expected_runtime_warnings
+    except ImportError:  # pragma: no cover
+        from utils import silence_expected_runtime_warnings  # type: ignore
+
+    silence_expected_runtime_warnings()
+    try:
         import joblib
 
         loaded = joblib.load(path)
@@ -504,13 +510,18 @@ def align_to_training_features(
             len(missing),
         )
 
-    if warning:
+    if alignment_status == "low_feature_coverage":
         logger.warning(warning)
-
-    if missing_fraction > 0.3 or noncallable_fraction > 0.3:
         logger.warning(
             "High missing/non-callable feature fraction (missing=%.2f, noncallable=%.2f). "
             "Check callability (gVCF/depth) and reference/contig naming.",
+            missing_fraction,
+            noncallable_fraction,
+        )
+    elif warning:
+        logger.debug(
+            "%s | missing=%.3f noncallable=%.3f",
+            warning,
             missing_fraction,
             noncallable_fraction,
         )
@@ -5224,6 +5235,12 @@ def configure_logging() -> None:
         level=logging.INFO,
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     )
+    try:
+        from network_parser.utils import silence_expected_runtime_warnings
+    except ImportError:  # pragma: no cover
+        from utils import silence_expected_runtime_warnings  # type: ignore
+
+    silence_expected_runtime_warnings()
 
 
 def main(argv: Optional[List[str]] = None) -> int:

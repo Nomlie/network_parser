@@ -81,6 +81,12 @@ def configure_logging(verbose: bool = False, quiet: bool = False) -> None:
         level=level,
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     )
+    try:
+        from network_parser.utils import silence_expected_runtime_warnings
+    except ImportError:  # pragma: no cover
+        from utils import silence_expected_runtime_warnings  # type: ignore
+
+    silence_expected_runtime_warnings()
 
 
 def load_config(config_path: Optional[str]) -> NetworkParserConfig:
