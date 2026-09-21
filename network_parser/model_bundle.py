@@ -160,7 +160,7 @@ def _patch_sklearn_estimator_compat(obj: Any, _seen: Optional[set] = None) -> An
     except Exception:
         pass
 
-    # Decision trees / forests
+    # Decision trees / forests (sklearn>=1.4 expects monotonic_cst on trees)
     if hasattr(obj, "tree_") and not hasattr(obj, "monotonic_cst"):
         try:
             object.__setattr__(obj, "monotonic_cst", None)
@@ -185,8 +185,33 @@ def _patch_sklearn_estimator_compat(obj: Any, _seen: Optional[set] = None) -> An
         for child in steps:
             _patch_sklearn_estimator_compat(child, _seen)
 
+    # RandomForest / Bagging / Voting / stacking: patch each base estimator
+    for attr in ("estimators_", "estimators", "estimator_list"):
+        if not hasattr(obj, attr):
+            continue
+        try:
+            children = getattr(obj, attr)
+        except Exception:
+            continue
+        if isinstance(children, (list, tuple)):
+            for child in children:
+                if isinstance(child, (list, tuple)) and len(child) >= 2:
+                    # VotingClassifier style (name, est)
+                    _patch_sklearn_estimator_compat(child[1], _seen)
+                else:
+                    _patch_sklearn_estimator_compat(child, _seen)
+
     # NetworkParser wrapper often stores .pipeline or .model
-    for attr in ("pipeline", "model", "estimator", "classifier", "best_estimator_"):
+    for attr in (
+        "pipeline",
+        "model",
+        "estimator",
+        "estimator_",
+        "base_estimator",
+        "base_estimator_",
+        "classifier",
+        "best_estimator_",
+    ):
         if hasattr(obj, attr):
             try:
                 child = getattr(obj, attr)
@@ -203,12 +228,22 @@ def _patch_sklearn_estimator_compat(obj: Any, _seen: Optional[set] = None) -> An
     return obj
 
 
+def _silence_unpickle_warnings() -> None:
+    try:
+        from network_parser.utils import silence_expected_runtime_warnings
+    except ImportError:  # pragma: no cover
+        from utils import silence_expected_runtime_warnings  # type: ignore
+
+    silence_expected_runtime_warnings()
+
+
 def _load_pickle_or_joblib(path: Path) -> Any:
     """Load a trained model payload using joblib first, then pickle."""
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"Model payload not found: {path}")
 
+    _silence_unpickle_warnings()
     try:
         import joblib  # type: ignore
 
@@ -221,6 +256,7 @@ def _load_pickle_or_joblib(path: Path) -> Any:
 
 def _load_pickle_or_joblib_bytes(raw: bytes) -> Any:
     """Load a trusted serialized model from its exact embedded file bytes."""
+    _silence_unpickle_warnings()
     try:
         import joblib  # type: ignore
 
