@@ -34,7 +34,7 @@ import json
 import logging
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Type
 
 try:
     from network_parser.config import NetworkParserConfig
@@ -1388,12 +1388,20 @@ def build_bundle_parser(
     return parser
 
 
-def build_top_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+def build_top_parser(
+    prog: Optional[str] = None,
+    parser_class: Type[argparse.ArgumentParser] = argparse.ArgumentParser,
+) -> argparse.ArgumentParser:
+    parser = parser_class(
+        prog=prog,
         description="NetworkParser command-line interface.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers = parser.add_subparsers(
+        dest="command",
+        required=True,
+        parser_class=parser_class,
+    )
 
     run = subparsers.add_parser(
         "run",
@@ -2154,6 +2162,59 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     return parser.parse_args(tokens)
 
 
+def run_parsed_command(args: argparse.Namespace) -> Any:
+    """Dispatch a parsed CLI namespace to the matching command runner."""
+    if args.command == "run":
+        return run_single_label(args)
+    if args.command in {"train-hierarchy", "train-two-level"}:
+        return run_train_hierarchy(args)
+    if args.command == "bundle":
+        return run_bundle(args)
+    if args.command == "query":
+        return run_query(args)
+    if args.command == "evaluate":
+        return run_evaluate(args)
+    if args.command == "evaluate-hierarchy":
+        try:
+            from network_parser.hierarchy_evaluation_pack import (
+                run_hierarchy_evaluation_pack,
+            )
+        except ImportError:  # pragma: no cover
+            from hierarchy_evaluation_pack import (  # type: ignore
+                run_hierarchy_evaluation_pack,
+            )
+        return run_hierarchy_evaluation_pack(
+            predictions_path=args.predictions,
+            meta_path=args.meta,
+            hierarchy_labels=list(args.hierarchy_labels),
+            output_dir=args.output_dir,
+            sample_id_column=getattr(args, "sample_id_column", None),
+            harmonize_resistance_labels=bool(
+                getattr(args, "harmonize_resistance_labels", False)
+            ),
+            n_bootstrap=int(getattr(args, "n_bootstrap", 500)),
+        )
+    if args.command in {"cross-validate", "cross_validation"}:
+        return run_cross_validate(args)
+    if args.command == "annotate-panels":
+        try:
+            from network_parser.panel_annotation import annotate_registry_panels
+        except ImportError:  # pragma: no cover
+            from panel_annotation import annotate_registry_panels  # type: ignore
+        return annotate_registry_panels(
+            registry_path=Path(args.registry),
+            output_dir=Path(args.output_dir),
+            catalogue_path=Path(args.catalogue) if args.catalogue else None,
+            stability_path=Path(args.stability) if args.stability else None,
+            min_stability=float(args.min_stability),
+            write_stable_report=bool(getattr(args, "write_stable_report", False)),
+            write_catalogue_circularity=bool(
+                getattr(args, "write_catalogue_circularity", False)
+            ),
+        )
+    raise ValueError(f"Unsupported command: {args.command}")
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     args = parse_args(argv)
     configure_logging(
@@ -2162,56 +2223,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
 
     try:
-        if args.command == "run":
-            run_single_label(args)
-        elif args.command in {"train-hierarchy", "train-two-level"}:
-            run_train_hierarchy(args)
-        elif args.command == "bundle":
-            run_bundle(args)
-        elif args.command == "query":
-            run_query(args)
-        elif args.command == "evaluate":
-            run_evaluate(args)
-        elif args.command == "evaluate-hierarchy":
-            try:
-                from network_parser.hierarchy_evaluation_pack import (
-                    run_hierarchy_evaluation_pack,
-                )
-            except ImportError:  # pragma: no cover
-                from hierarchy_evaluation_pack import (  # type: ignore
-                    run_hierarchy_evaluation_pack,
-                )
-            run_hierarchy_evaluation_pack(
-                predictions_path=args.predictions,
-                meta_path=args.meta,
-                hierarchy_labels=list(args.hierarchy_labels),
-                output_dir=args.output_dir,
-                sample_id_column=getattr(args, "sample_id_column", None),
-                harmonize_resistance_labels=bool(
-                    getattr(args, "harmonize_resistance_labels", False)
-                ),
-                n_bootstrap=int(getattr(args, "n_bootstrap", 500)),
-            )
-        elif args.command == "cross-validate":
-            run_cross_validate(args)
-        elif args.command == "annotate-panels":
-            try:
-                from network_parser.panel_annotation import annotate_registry_panels
-            except ImportError:  # pragma: no cover
-                from panel_annotation import annotate_registry_panels  # type: ignore
-            annotate_registry_panels(
-                registry_path=Path(args.registry),
-                output_dir=Path(args.output_dir),
-                catalogue_path=Path(args.catalogue) if args.catalogue else None,
-                stability_path=Path(args.stability) if args.stability else None,
-                min_stability=float(args.min_stability),
-                write_stable_report=bool(getattr(args, "write_stable_report", False)),
-                write_catalogue_circularity=bool(
-                    getattr(args, "write_catalogue_circularity", False)
-                ),
-            )
-        else:
-            raise ValueError(f"Unsupported command: {args.command}")
+        run_parsed_command(args)
     except Exception as exc:
         LOGGER.exception("NetworkParser CLI failed: %s", exc)
         return 1

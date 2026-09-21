@@ -1,20 +1,12 @@
 # NetworkParser
 
-NetworkParser is a research pipeline for microbial genomics. From per-sample VCFs (or precomputed feature matrices) and labelled metadata, it builds interpretable classifiers for **single labels** or **ordered biological hierarchies** (for example lineage → AMR → resistance profile). In hierarchical mode, each child model is trained only on samples that follow its parent branch; at query time the same route is walked and audited end to end.
+NetworkParser trains genomic classifiers from labelled VCF files (or a feature matrix) and uses those models to predict labels on new samples.
 
-It packages the trained feature space into portable model bundles and applies those models to new samples as matrix, VCF, FASTA, or paired FASTQ. Predictions stay tied to the genomic markers and hierarchy route that produced them. Typical outputs include model registries, portable `.npb` bundles, ranked marker tables, route audits, readable query reports, evaluation metrics, and optional post-training panel annotations.
+Typical use: train a model → query new samples → evaluate the predictions.
 
-> NetworkParser is a research tool. Its predictions are not validated clinical diagnoses.
-
-## Workflow
-
-```text
-Training data + metadata → train model → model bundle → query new samples → evaluate predictions
-```
+This is a research tool. Predictions are not clinical diagnoses.
 
 ## 1. Install
-
-Clone the repository and create the Conda environment:
 
 ```bash
 git clone https://github.com/Nomlie/network_parser.git
@@ -23,176 +15,126 @@ conda env create -f environment.yml
 conda activate networkparser
 ```
 
-NetworkParser currently runs from the repository root and does not require a `pip install` step.
+Stay in this folder for every command below.
 
-Check that the command-line interface is available:
+## 2. How to run
 
-```bash
-python -m network_parser.cli run --help
-```
-
-## 2. Prepare the inputs
-
-NetworkParser requires genomic data and matching metadata.
-
-### Genomic data
-
-Use either:
-
-- a directory containing one VCF or gVCF per sample; or
-- a CSV/TSV feature matrix with sample IDs in the first column.
-
-Example feature matrix:
-
-```csv
-Sample,chr1:761155:C:T,chr1:2155168:C:T
-sample_001,0,1
-sample_002,1,NaN
-```
-
-Matrix values are:
-
-- `0` — reference or baseline
-- `1` — alternate or non-baseline
-- `NaN` — missing or unresolved
-
-### Metadata
-
-Metadata must be a CSV or TSV file. Use a `Sample` column for sample IDs and add the labels you want to predict.
-
-```csv
-Sample,Lineage,AMR_binary
-sample_001,L4.1,resistant
-sample_002,L2.2,susceptible
-```
-
-Sample IDs must match between the genomic data and metadata.
-
-### Reference genome
-
-Use `--ref_fasta` with a FASTA or GenBank reference when working with VCF, FASTA, or FASTQ inputs. It is optional for a precomputed feature matrix.
-
-## 3. Train a model
-
-### Single-label training
-
-Use `run` when predicting one metadata column:
+The program is the file `run_network_parser.py` in this folder.
 
 ```bash
-python -m network_parser.cli run \
-  --genomic /path/to/training_vcfs \
-  --meta /path/to/metadata.csv \
-  --label Lineage \
-  --ref_fasta /path/to/reference.fasta \
-  --output_dir /path/to/results/single_label \
-  --n_jobs -1
+python run_network_parser.py <command> [options]
 ```
 
-### Hierarchical training
-
-List hierarchy labels from broadest to most specific:
+Start here:
 
 ```bash
-python -m network_parser.cli train-hierarchy \
-  --genomic /path/to/training_vcfs \
-  --meta /path/to/metadata.csv \
-  --hierarchy_labels Lineage AMR_binary \
-  --ref_fasta /path/to/reference.fasta \
-  --output_dir /path/to/results/hierarchy \
-  --n_jobs -1
+python run_network_parser.py --help
+python run_network_parser.py train-hierarchy --help
+python run_network_parser.py query --help
+python run_network_parser.py evaluate --help
 ```
 
-Hierarchical training writes a model registry and, by default, a portable bundle named `networkparser_model_bundle.npb`.
+If a setting is wrong (missing files, bad `config.json`, too few VCFs), the program prints the problems and exits.
 
-Available hierarchy presets:
+The examples below use the demo data in `data/`. Training can take a while.
 
-| Preset | Metadata columns |
-|---|---|
-| `lineage_amr_binary` | `Lineage_clean` → `AMR_binary` |
-| `lineage_amr_profile` | `Lineage_clean` → `AMR_binary` → `Resistance_Profile_Collapsed` |
-| `lineage_family_amr_profile` | `Lineage_family` → `Lineage_clean` → `AMR_binary` → `Resistance_Profile_Collapsed` |
-
-Use a preset instead of `--hierarchy_labels` when your metadata uses those column names:
+### Train
 
 ```bash
-python -m network_parser.cli train-hierarchy \
-  --genomic /path/to/training_vcfs \
-  --meta /path/to/metadata.csv \
-  --hierarchy_preset lineage_amr_binary \
-  --ref_fasta /path/to/reference.fasta \
-  --output_dir /path/to/results/hierarchy
+python run_network_parser.py train-hierarchy \
+  --genomic data/train \
+  --meta data/train_metadata.csv \
+  --hierarchy_labels Lineage_clean AMR_binary \
+  --ref_fasta data/reference/H37Rv.fasta \
+  --output_dir results/train
 ```
 
-## 4. Query new samples
+This writes:
 
-Use the bundle created during hierarchical training:
+- `results/train/networkparser_model_bundle.npb` — use this for query
+- `results/train/hierarchical_model_registry.json`
+
+One label only:
 
 ```bash
-python -m network_parser.cli query \
-  --genomic /path/to/query_input \
-  --bundle /path/to/results/hierarchy/networkparser_model_bundle.npb \
-  --query_input_type auto \
-  --ref_fasta /path/to/reference.fasta \
-  --output_dir /path/to/results/query \
-  --n_jobs -1
+python run_network_parser.py run \
+  --genomic data/train \
+  --meta data/train_metadata.csv \
+  --label Lineage_clean \
+  --ref_fasta data/reference/H37Rv.fasta \
+  --output_dir results/single_label
 ```
 
-Supported query types are:
-
-| Type | Input |
-|---|---|
-| `matrix` | CSV/TSV feature matrix |
-| `vcf` | One VCF or a directory of VCFs |
-| `fasta` | FASTA sequence |
-| `fastq` | Directory of paired-end FASTQ files |
-| `auto` | Detect the type from the input |
-
-The main result is `query_predictions.csv`. NetworkParser also writes compact, readable, and audit reports to the query output directory.
-
-> Model bundles contain Python pickle objects. Only load `.npb` files from trusted sources.
-
-## 5. Evaluate predictions
-
-Evaluate a single label:
+### Query
 
 ```bash
-python -m network_parser.cli evaluate \
-  --predictions /path/to/results/query/query_predictions.csv \
-  --meta /path/to/test_metadata.csv \
+python run_network_parser.py query \
+  --genomic data/test \
+  --bundle results/train/networkparser_model_bundle.npb \
+  --ref_fasta data/reference/H37Rv.fasta \
+  --output_dir results/query
+```
+
+Main output: `results/query/query_predictions.csv`.
+
+`--query_input_type auto` is the default. You can set it to `vcf`, `matrix`, `fasta`, or `fastq`.
+
+Load `.npb` files only from sources you trust.
+
+### Evaluate
+
+```bash
+python run_network_parser.py evaluate \
+  --predictions results/query/query_predictions.csv \
+  --meta data/test_metadata.csv \
   --label AMR_binary \
-  --output_dir /path/to/results/evaluation
+  --output_dir results/evaluation
 ```
 
-Evaluate an entire hierarchy:
+Full hierarchy:
 
 ```bash
-python -m network_parser.cli evaluate-hierarchy \
-  --predictions /path/to/results/query/query_predictions.csv \
-  --meta /path/to/test_metadata.csv \
-  --hierarchy_labels Lineage AMR_binary \
-  --output_dir /path/to/results/hierarchy_evaluation
+python run_network_parser.py evaluate-hierarchy \
+  --predictions results/query/query_predictions.csv \
+  --meta data/test_metadata.csv \
+  --hierarchy_labels Lineage_clean AMR_binary \
+  --output_dir results/hierarchy_evaluation
 ```
 
-## Other commands
+## 3. Your own data
 
-| Command | Purpose |
+| Input | What it is |
 |---|---|
-| `bundle` | Build a portable `.npb` bundle from an existing model registry |
-| `cross-validate` | Run repeated cross-validation for one label |
-| `annotate-panels` | Add gene, catalogue, and stability annotations to selected panels |
+| `--genomic` | Folder of per-sample VCF/VCF.gz files, or a CSV/TSV matrix |
+| `--meta` | CSV/TSV with sample IDs and label columns |
+| `--ref_fasta` | FASTA or GenBank file, for VCF / FASTA / FASTQ input |
 
-Run any command with `--help` to see all available options:
+VCF file names without `.vcf` / `.vcf.gz` must match the sample IDs in the metadata.
+
+Training from a VCF folder needs at least 10 VCF files by default.
+
+Replace the `data/...` paths in the commands above with your paths.
+
+## 4. Commands
 
 ```bash
-python -m network_parser.cli cross-validate --help
-python -m network_parser.cli annotate-panels --help
+python run_network_parser.py <command> --help
 ```
 
-`train-two-level` remains available as a legacy alias for `train-hierarchy`.
+| Command | What it does |
+|---|---|
+| `train-hierarchy` | Train a hierarchy of models |
+| `query` | Predict labels for new samples |
+| `evaluate` | Score predictions for one label |
+| `evaluate-hierarchy` | Score a full hierarchy |
+| `run` | Train a model for one label |
+| `bundle` | Build a `.npb` file from an existing registry |
+| `cross-validate` | Repeated cross-validation for one label |
+| `annotate-panels` | Add gene/catalogue notes to selected markers |
 
-## Configuration
+## 5. Optional settings
 
-Most settings are available as command-line options. For repeatable runs, place configuration overrides in a JSON file and pass it with `--config`:
+Save extra settings in a JSON file and pass it with `--config`:
 
 ```json
 {
@@ -204,57 +146,46 @@ Most settings are available as command-line options. For repeatable runs, place 
 ```
 
 ```bash
-python -m network_parser.cli run \
-  --genomic /path/to/training_matrix.csv \
-  --meta /path/to/metadata.csv \
-  --label Lineage \
-  --config /path/to/config.json \
-  --output_dir /path/to/results
+python run_network_parser.py train-hierarchy \
+  --genomic data/train \
+  --meta data/train_metadata.csv \
+  --hierarchy_labels Lineage_clean AMR_binary \
+  --config path/to/config.json \
+  --output_dir results/train
 ```
 
-See [`network_parser/config.py`](network_parser/config.py) for all configuration fields.
+All setting names are in [`network_parser/config.py`](network_parser/config.py).
 
-## Main output files
+If your metadata uses these column names, you can pass a preset:
 
-File names depend on the selected command. The files most users need are:
-
-| File | Purpose |
+| `--hierarchy_preset` | Columns |
 |---|---|
-| `hierarchical_model_registry.json` | Records the trained hierarchy and model paths |
-| `networkparser_model_bundle.npb` | Portable model used for queries |
-| `query_predictions.csv` | Full prediction table |
-| `query_predictions_compact.tsv` | Compact prediction table |
-| `query_predictions_readable.html` | Human-readable prediction report |
-| `query_route_audit.json` | Hierarchy route and fallback audit |
-| `query_alignment_summary.json` | Query feature-recovery summary |
+| `lineage_amr_binary` | `Lineage_clean` → `AMR_binary` |
+| `lineage_amr_profile` | `Lineage_clean` → `AMR_binary` → `Resistance_Profile_Collapsed` |
+| `lineage_family_amr_profile` | `Lineage_family` → `Lineage_clean` → `AMR_binary` → `Resistance_Profile_Collapsed` |
 
-## Troubleshooting
+## 6. Useful output files
 
-**Samples do not align**
+| File | Where |
+|---|---|
+| `networkparser_model_bundle.npb` | Training folder — use this for query |
+| `hierarchical_model_registry.json` | Training folder |
+| `query_predictions.csv` | Query folder |
+| `query_predictions_readable.html` | Query folder |
 
-Check that sample IDs match exactly between the genomic input and metadata. Also check for duplicate IDs and extra whitespace.
+## 7. If something goes wrong
 
-**Many values are missing**
+- **Sample IDs do not match.** VCF names (without `.vcf` / `.vcf.gz`) must match the ID column in metadata.
+- **Too few VCF files.** Training needs at least 10 VCFs in the genomic folder by default.
+- **Query recovery is low.** Use the same reference genome as training.
+- **A hierarchy branch was skipped.** That branch had too few samples or classes. See the model registry and query audit.
 
-Check VCF filters, depth, genotype quality, mapping quality, ploidy, and the reference genome.
-
-**Query feature recovery is low**
-
-Use the same reference genome, contig names, coordinates, and allele orientation for training and querying.
-
-**A hierarchy branch was skipped**
-
-Check the model registry and query audit. A branch may be skipped when it does not have enough samples or supported classes.
-
-## Testing
-
-Run the test suite from the repository root:
+## Tests and extra docs
 
 ```bash
 pytest -q
 ```
 
-## More documentation
-
+- [Demo data](data/README.md)
 - [Architecture overview](docs/NETWORKPARSER_FULL_PICTURE.md)
 - [Known-marker configuration](docs/KNOWN_MARKER_SEED.md)

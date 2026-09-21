@@ -39,14 +39,14 @@ annotation (`H37Rv.gbk`) required for VCF-oriented demo runs. AFRO demo VCFs
 use contig name `M.tuberculosis_H37Rv`. Checksums are recorded in
 `reference/reference_manifest.json`.
 
-## Suggested NetworkParser usage (after clone)
+## How to run the demo
+
+From the repository root, after `conda activate networkparser`:
 
 ```bash
-git clone https://github.com/Nomlie/network_parser.git
-cd network_parser
-# create/activate the environment from environment.yml as documented in README
+python run_network_parser.py --help
 
-python -m network_parser.cli train-hierarchy \
+python run_network_parser.py train-hierarchy \
   --genomic data/train \
   --meta data/train_metadata.csv \
   --hierarchy_labels Lineage_clean AMR_binary Resistance_Profile_Collapsed \
@@ -54,7 +54,7 @@ python -m network_parser.cli train-hierarchy \
   --ref_fasta data/reference/H37Rv.gbk \
   --output_dir demo_results/train
 
-python -m network_parser.cli query \
+python run_network_parser.py query \
   --genomic data/test \
   --bundle demo_results/train/networkparser_model_bundle.npb \
   --query_input_type vcf \
