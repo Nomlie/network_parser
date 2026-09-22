@@ -63,6 +63,100 @@ VALID_SUBCOMMANDS = {
     "annotate-panels",
 }
 
+# Shown on --help. Everything else is listed by --more.
+CORE_HELP_DESTS = {
+    "command",
+    "genomic",
+    "meta",
+    "label",
+    "output_dir",
+    "output",
+    "config",
+    "ref_fasta",
+    "hierarchy_labels",
+    "hierarchy_preset",
+    "level1_label",
+    "level2_label",
+    "bundle",
+    "registry",
+    "predictions",
+    "query_input_type",
+}
+
+
+def _is_core_help_action(action: argparse.Action) -> bool:
+    if action.help is argparse.SUPPRESS:
+        return False
+    opts = set(action.option_strings or [])
+    if opts & {"-h", "--help", "--more"}:
+        return True
+    if getattr(action, "required", False):
+        return True
+    return getattr(action, "dest", None) in CORE_HELP_DESTS
+
+
+class MoreHelpAction(argparse.Action):
+    def __init__(
+        self,
+        option_strings,
+        dest=argparse.SUPPRESS,
+        default=argparse.SUPPRESS,
+        help=None,
+    ):
+        super().__init__(
+            option_strings=option_strings,
+            dest=dest,
+            default=default,
+            nargs=0,
+            help=help or "Show all options.",
+        )
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        parser.print_help(full=True)
+        parser.exit()
+
+
+class CompactHelpParser(argparse.ArgumentParser):
+    """--help lists required inputs/config; --more lists every option."""
+
+    def format_help(self, *, full: bool = False) -> str:
+        formatter = argparse.ArgumentDefaultsHelpFormatter(prog=self.prog)
+        usage_actions = (
+            self._actions
+            if full
+            else [action for action in self._actions if _is_core_help_action(action)]
+        )
+        formatter.add_usage(self.usage, usage_actions, self._mutually_exclusive_groups)
+        formatter.add_text(self.description)
+        for action_group in self._action_groups:
+            actions = list(action_group._group_actions)
+            if not full:
+                actions = [action for action in actions if _is_core_help_action(action)]
+            if not actions:
+                continue
+            formatter.start_section(action_group.title)
+            formatter.add_text(action_group.description)
+            formatter.add_arguments(actions)
+            formatter.end_section()
+        if full:
+            formatter.add_text(self.epilog)
+        else:
+            formatter.add_text(f"Show all options: {self.prog} --more")
+        return formatter.format_help()
+
+    def print_help(self, file=None, *, full: bool = False) -> None:
+        if file is None:
+            file = sys.stdout
+        self._print_message(self.format_help(full=full), file)
+
+
+def add_more_help_arg(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--more",
+        action=MoreHelpAction,
+        help="Show all options.",
+    )
+
 
 # -----------------------------------------------------------------------------
 # Logging / config helpers
@@ -769,12 +863,13 @@ def add_rf_fdr_args(parser: argparse.ArgumentParser) -> None:
 def build_run_parser(
     prog: Optional[str] = None, add_help: bool = True
 ) -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = CompactHelpParser(
         prog=prog,
         description="Run the single-label NetworkParser workflow.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         add_help=add_help,
     )
+    add_more_help_arg(parser)
 
     parser.add_argument(
         "--genomic",
@@ -892,12 +987,13 @@ def build_run_parser(
 def build_train_hierarchy_parser(
     prog: Optional[str] = None, add_help: bool = True
 ) -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = CompactHelpParser(
         prog=prog,
         description="Train the hierarchical NetworkParser protocol (2+ levels): placement first, phenotype endpoints under parent branches.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         add_help=add_help,
     )
+    add_more_help_arg(parser)
 
     parser.add_argument(
         "--genomic",
@@ -1126,12 +1222,13 @@ def build_train_hierarchy_parser(
 def build_query_parser(
     prog: Optional[str] = None, add_help: bool = True
 ) -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = CompactHelpParser(
         prog=prog,
         description="Apply a trained hierarchical NetworkParser registry or binary model bundle to new strain/sample input.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         add_help=add_help,
     )
+    add_more_help_arg(parser)
 
     parser.add_argument(
         "--genomic",
@@ -1222,7 +1319,7 @@ def build_query_parser(
 def build_evaluate_parser(
     prog: Optional[str] = None, add_help: bool = True
 ) -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = CompactHelpParser(
         prog=prog,
         description=(
             "Evaluate saved NetworkParser query predictions against labelled metadata. "
@@ -1232,6 +1329,7 @@ def build_evaluate_parser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         add_help=add_help,
     )
+    add_more_help_arg(parser)
     parser.add_argument(
         "--predictions",
         required=True,
@@ -1285,7 +1383,7 @@ def build_evaluate_parser(
 def build_cross_validate_parser(
     prog: Optional[str] = None, add_help: bool = True
 ) -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = CompactHelpParser(
         prog=prog,
         description=(
             "Run leakage-aware repeated cross-validation for one supervised label. "
@@ -1295,6 +1393,7 @@ def build_cross_validate_parser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         add_help=add_help,
     )
+    add_more_help_arg(parser)
     parser.add_argument(
         "--genomic", required=True, help="Training genomic input file or directory."
     )
@@ -1341,7 +1440,7 @@ def build_cross_validate_parser(
 def build_bundle_parser(
     prog: Optional[str] = None, add_help: bool = True
 ) -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = CompactHelpParser(
         prog=prog,
         description=(
             "Package a trained NetworkParser registry into a portable .npb model bundle. "
@@ -1351,6 +1450,7 @@ def build_bundle_parser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         add_help=add_help,
     )
+    add_more_help_arg(parser)
     parser.add_argument(
         "--registry",
         required=True,
@@ -1390,7 +1490,7 @@ def build_bundle_parser(
 
 def build_top_parser(
     prog: Optional[str] = None,
-    parser_class: Type[argparse.ArgumentParser] = argparse.ArgumentParser,
+    parser_class: Type[argparse.ArgumentParser] = CompactHelpParser,
 ) -> argparse.ArgumentParser:
     parser = parser_class(
         prog=prog,
@@ -1436,6 +1536,7 @@ def build_top_parser(
         ),
         add_help=True,
     )
+    add_more_help_arg(annotate)
     annotate.add_argument(
         "--registry",
         required=True,
@@ -1504,6 +1605,7 @@ def build_top_parser(
         ),
         add_help=True,
     )
+    add_more_help_arg(evaluate_hier)
     evaluate_hier.add_argument(
         "--predictions",
         required=True,
