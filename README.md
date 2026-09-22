@@ -35,6 +35,8 @@ python run_network_parser.py query --help
 python run_network_parser.py evaluate --help
 ```
 
+`--help` lists required inputs and config. Add `--more` for the full option list.
+
 Before a run starts, the program checks arguments, an optional `--config` JSON file, input paths, and VCF counts. A VCF training folder needs at least 10 files by default (`min_sample_presence`). If something is wrong, it prints a numbered list of problems and exits.
 
 ## 2. Inputs
@@ -299,6 +301,8 @@ python run_network_parser.py annotate-panels \
 ```bash
 python run_network_parser.py <command> --help
 ```
+
+Add `--more` for the full option list.
 
 | Command | Role |
 |---|---|

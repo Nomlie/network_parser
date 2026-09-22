@@ -17,6 +17,8 @@ python run_network_parser.py train-hierarchy --help
 python run_network_parser.py query --help
 ```
 
+Add `--more` for the full option list.
+
 ## 1. Lifecycle (what you run)
 
 ```text
@@ -30,7 +32,7 @@ python run_network_parser.py query --help
        │         (no query leakage)              │  (no re-filter / retrain)
 ```
 
-Each command is `python run_network_parser.py <command>`.
+Each command is `python run_network_parser.py <command>`. Add `--more` for the full option list.
 
 | CLI | Role |
 |-----|------|
