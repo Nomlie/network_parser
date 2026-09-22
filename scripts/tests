@@ -294,7 +294,7 @@ pandoc /Users/nmfuphicsir.co.za/Documents/pHDProject/Manuscript/NetworkParser_ma
 
 
 cd /Users/nmfuphicsir.co.za/Documents/pHDProject/Thesis
-pdflatex Introduction.tex
+pdflatex Introduction.tex 
 biber Introduction
 pdflatex Introduction.tex
 pdflatex Introduction.tex
