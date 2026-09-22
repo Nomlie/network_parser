@@ -21,13 +21,15 @@ python run_network_parser.py train-hierarchy \
   --hierarchy_labels Lineage_clean AMR_binary Resistance_Profile_Collapsed \
   --hierarchy_preset lineage_amr_profile \
   --ref_fasta data/reference/H37Rv.gbk \
+  --config data/config.json \
   --output_dir demo_results/train
 
 python run_network_parser.py query \
   --genomic data/test \
-  --bundle demo_results/train/networkparser_model_bundle.npb \
+  --bundle model/networkparser_model_bundle.npb \
   --query_input_type vcf \
   --ref_fasta data/reference/H37Rv.gbk \
+  --config data/config.json \
   --output_dir demo_results/query
 ```
 
