@@ -39,7 +39,7 @@ Before a run starts, the program checks arguments, an optional `--config` JSON f
 
 ## 2. Inputs
 
-You need genomic data, matching metadata, a reference genome for VCF, FASTA, or FASTQ, and (for query) a trained model. Settings for a repeatable run live in [`input/config.json`](input/config.json). The trained model is written to [`model/`](model/).
+You need genomic data, matching metadata, a reference genome for VCF, FASTA, or FASTQ, and (for query) a trained model. Settings for a repeatable run live in [`data/config.json`](data/config.json). The trained model is written to [`model/`](model/).
 
 ### Genomic data
 
@@ -90,7 +90,7 @@ The demo uses H37Rv (`data/reference/H37Rv.fasta` / `H37Rv.gbk`). AFRO demo VCFs
 
 ### Config file
 
-Most settings are command-line flags. For a repeatable experiment, put them in JSON and pass `--config`. A typical file is [`input/config.json`](input/config.json):
+Most settings are command-line flags. For a repeatable experiment, put them in JSON and pass `--config`. A typical file is [`data/config.json`](data/config.json):
 
 ```json
 {
@@ -181,7 +181,7 @@ python run_network_parser.py train-hierarchy \
   --meta data/train_metadata.csv \
   --hierarchy_labels Lineage_clean AMR_binary \
   --ref_fasta data/reference/H37Rv.fasta \
-  --config input/config.json \
+  --config data/config.json \
   --output_dir model \
   --n_jobs -1
 ```
@@ -202,7 +202,7 @@ python run_network_parser.py train-hierarchy \
   --meta data/train_metadata.csv \
   --hierarchy_preset lineage_amr_profile \
   --ref_fasta data/reference/H37Rv.gbk \
-  --config input/config.json \
+  --config data/config.json \
   --output_dir model
 ```
 
@@ -216,7 +216,7 @@ python run_network_parser.py run \
   --meta data/train_metadata.csv \
   --label Lineage_clean \
   --ref_fasta data/reference/H37Rv.fasta \
-  --config input/config.json \
+  --config data/config.json \
   --output_dir model \
   --n_jobs -1
 ```
@@ -229,7 +229,7 @@ python run_network_parser.py query \
   --bundle model/networkparser_model_bundle.npb \
   --query_input_type auto \
   --ref_fasta data/reference/H37Rv.fasta \
-  --config input/config.json \
+  --config data/config.json \
   --output_dir results/query \
   --n_jobs -1
 ```
@@ -275,7 +275,7 @@ python run_network_parser.py cross-validate \
   --genomic data/train \
   --meta data/train_metadata.csv \
   --label AMR_binary \
-  --config input/config.json \
+  --config data/config.json \
   --output_dir results/cv \
   --n_repeats 3 \
   --n_splits 5
