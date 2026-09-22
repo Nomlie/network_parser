@@ -1,0 +1,18 @@
+{
+  "qual_threshold": 30.0,
+  "min_dp_per_sample": 10,
+  "min_gq_per_sample": 0,
+  "mq_threshold": 40.0,
+  "mq0f_threshold": 0.1,
+  "assume_absent_variant_is_reference": true,
+  "expand_gvcf_ref_blocks": true,
+  "min_feature_recovery_fraction": 0.5,
+  "min_callable_fraction": 0.5,
+  "enforce_query_callability_gates": true,
+  "min_sample_presence": 10,
+  "n_jobs": -1,
+  "random_state": 42,
+  "central_feature_filter_method": "rf_fdr",
+  "rf_selector_fallback_strategy": "stop",
+  "feature_panel_threshold_failure_strategy": "stop"
+}
