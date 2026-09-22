@@ -39,7 +39,7 @@ Before a run starts, the program checks arguments, an optional `--config` JSON f
 
 ## 2. Inputs
 
-You need genomic data, matching metadata, and a reference genome for VCF, FASTA, or FASTQ.
+You need genomic data, matching metadata, a reference genome for VCF, FASTA, or FASTQ, and (for query) a trained model. Settings for a repeatable run live in [`input/config.json`](input/config.json). The trained model is written to [`model/`](model/).
 
 ### Genomic data
 
@@ -88,6 +88,45 @@ The demo uses H37Rv (`data/reference/H37Rv.fasta` / `H37Rv.gbk`). AFRO demo VCFs
 
 `data/` is a small AFRO-TB subset for trying the pipeline (150 train / 30 test VCFs, no shared sample IDs). Resistance labels here come from genotype/catalogue calls, not from independent phenotypic DST. The paper used a larger cohort. See [`data/README.md`](data/README.md).
 
+### Config file
+
+Most settings are command-line flags. For a repeatable experiment, put them in JSON and pass `--config`. A typical file is [`input/config.json`](input/config.json):
+
+```json
+{
+  "qual_threshold": 30.0,
+  "min_dp_per_sample": 10,
+  "min_gq_per_sample": 0,
+  "assume_absent_variant_is_reference": true,
+  "n_jobs": -1,
+  "random_state": 42,
+  "central_feature_filter_method": "rf_fdr",
+  "rf_selector_fallback_strategy": "stop",
+  "feature_panel_threshold_failure_strategy": "stop"
+}
+```
+
+This example matches variant-only VCF cohorts (GQ often missing; absent sites treated as reference). Edit the file rather than copying a new JSON blob into every command.
+
+The defaults stop the run if FDR keeps no features or no panel reaches the score threshold. Fallbacks such as `top_n`, `unfiltered`, and `best_available` have to be turned on on purpose.
+
+**Known-marker seed** (WHO-style catalogue forced into AMR/profile panels) is off until you enable it. See [`docs/KNOWN_MARKER_SEED.md`](docs/KNOWN_MARKER_SEED.md).
+
+All fields: [`network_parser/config.py`](network_parser/config.py).
+
+### Trained model
+
+The repository ships a trained AFRO hierarchy model in [`model/`](model/):
+
+| File | Use |
+|---|---|
+| `model/networkparser_model_bundle.npb` | `--bundle` for query |
+| `model/hierarchical_model_registry.json` | `--registry` for query, annotate, or `bundle` |
+
+Hierarchy: `Lineage_clean` → `AMR_binary` → `Resistance_Profile_Collapsed`. You can run `query` on new samples without retraining. `train-hierarchy` with `--output_dir model` replaces these files.
+
+`.npb` files contain Python pickle objects. Load them only from this repository or another trusted training run.
+
 ## 3. How the pipeline works
 
 ### Hierarchical training
@@ -132,7 +171,7 @@ If a query sample falls below those gates, the result is review/abstention inste
 
 ## 4. Run the pipeline
 
-The examples use the demo data. Swap in your own paths for a real cohort. Even this demo can take a long time with default RF-FDR settings.
+The examples use the demo data and the shipped model in `model/`. Swap in your own paths for a real cohort. Retraining with default RF-FDR settings can take a long time; query does not need a retrain.
 
 ### Train a hierarchy
 
@@ -142,11 +181,12 @@ python run_network_parser.py train-hierarchy \
   --meta data/train_metadata.csv \
   --hierarchy_labels Lineage_clean AMR_binary \
   --ref_fasta data/reference/H37Rv.fasta \
-  --output_dir results/train \
+  --config input/config.json \
+  --output_dir model \
   --n_jobs -1
 ```
 
-This writes `hierarchical_model_registry.json` and, by default, `networkparser_model_bundle.npb`.
+This writes `model/hierarchical_model_registry.json` and `model/networkparser_model_bundle.npb`.
 
 If your metadata already uses these column names, you can pass a preset:
 
@@ -162,7 +202,8 @@ python run_network_parser.py train-hierarchy \
   --meta data/train_metadata.csv \
   --hierarchy_preset lineage_amr_profile \
   --ref_fasta data/reference/H37Rv.gbk \
-  --output_dir results/train
+  --config input/config.json \
+  --output_dir model
 ```
 
 If you set both, `--hierarchy_labels` is used.
@@ -175,7 +216,8 @@ python run_network_parser.py run \
   --meta data/train_metadata.csv \
   --label Lineage_clean \
   --ref_fasta data/reference/H37Rv.fasta \
-  --output_dir results/single_label \
+  --config input/config.json \
+  --output_dir model \
   --n_jobs -1
 ```
 
@@ -184,9 +226,10 @@ python run_network_parser.py run \
 ```bash
 python run_network_parser.py query \
   --genomic data/test \
-  --bundle results/train/networkparser_model_bundle.npb \
+  --bundle model/networkparser_model_bundle.npb \
   --query_input_type auto \
   --ref_fasta data/reference/H37Rv.fasta \
+  --config input/config.json \
   --output_dir results/query \
   --n_jobs -1
 ```
@@ -199,9 +242,7 @@ python run_network_parser.py query \
 | `fasta` | FASTA sequence |
 | `fastq` | Directory of paired-end FASTQ files (BWA + bcftools; optional panel calling) |
 
-You can pass `--registry hierarchical_model_registry.json` instead of `--bundle`. The bundle is the portable file for query.
-
-`.npb` files contain Python pickle objects. Load them only from trusted sources.
+You can pass `--registry model/hierarchical_model_registry.json` instead of `--bundle`. The bundle is the portable file for query.
 
 ### Evaluate
 
@@ -234,6 +275,7 @@ python run_network_parser.py cross-validate \
   --genomic data/train \
   --meta data/train_metadata.csv \
   --label AMR_binary \
+  --config input/config.json \
   --output_dir results/cv \
   --n_repeats 3 \
   --n_splits 5
@@ -247,7 +289,7 @@ Adds gene names, predicted consequences, and optional catalogue labels to the pa
 
 ```bash
 python run_network_parser.py annotate-panels \
-  --registry results/train/hierarchical_model_registry.json \
+  --registry model/hierarchical_model_registry.json \
   --output_dir results/annotation \
   --catalogue path/to/resistance_catalogue.tsv
 ```
@@ -269,45 +311,12 @@ python run_network_parser.py <command> --help
 | `cross-validate` | Repeated nested CV for one label |
 | `annotate-panels` | Gene / catalogue context on selected panels |
 
-## 6. Configuration
-
-Most settings are command-line flags. For a repeatable experiment, put them in JSON and pass `--config`:
-
-```json
-{
-  "qual_threshold": 30.0,
-  "min_dp_per_sample": 10,
-  "min_gq_per_sample": 0,
-  "assume_absent_variant_is_reference": true,
-  "n_jobs": -1,
-  "random_state": 42,
-  "central_feature_filter_method": "rf_fdr",
-  "rf_selector_fallback_strategy": "stop",
-  "feature_panel_threshold_failure_strategy": "stop"
-}
-```
-
-```bash
-python run_network_parser.py train-hierarchy \
-  --genomic data/train \
-  --meta data/train_metadata.csv \
-  --hierarchy_labels Lineage_clean AMR_binary \
-  --config path/to/config.json \
-  --output_dir results/train
-```
-
-The defaults stop the run if FDR keeps no features or no panel reaches the score threshold. Fallbacks such as `top_n`, `unfiltered`, and `best_available` have to be turned on on purpose.
-
-**Known-marker seed** (WHO-style catalogue forced into AMR/profile panels) is off until you enable it. See [`docs/KNOWN_MARKER_SEED.md`](docs/KNOWN_MARKER_SEED.md).
-
-All fields: [`network_parser/config.py`](network_parser/config.py).
-
-## 7. Outputs
+## 6. Outputs
 
 | File | Produced by | Purpose |
 |---|---|---|
-| `hierarchical_model_registry.json` | `train-hierarchy` | Hierarchy, node paths, features, fallbacks |
-| `networkparser_model_bundle.npb` | `train-hierarchy` / `bundle` | Portable query artefact |
+| `model/hierarchical_model_registry.json` | `train-hierarchy` | Hierarchy, node paths, features, fallbacks |
+| `model/networkparser_model_bundle.npb` | `train-hierarchy` / `bundle` | Portable query artefact |
 | `query_predictions.csv` | `query` | Full prediction table |
 | `query_predictions_compact.tsv` | `query` | Compact table |
 | `query_predictions_readable.html` | `query` | Human-readable report |
@@ -317,7 +326,7 @@ All fields: [`network_parser/config.py`](network_parser/config.py).
 
 Each trained node folder also has the selected-feature list, ranked marker tables, and the model file.
 
-## 8. Troubleshooting
+## 7. Troubleshooting
 
 **Samples do not align.** Sample IDs must match exactly between VCF names (minus `.vcf` / `.vcf.gz`) and metadata. Check duplicates and extra spaces.
 
@@ -331,7 +340,7 @@ Each trained node folder also has the selected-feature list, ranked marker table
 
 **Too few VCF files.** Training needs at least `min_sample_presence` VCFs (default 10) directly in `--genomic`. Nested folders are ignored.
 
-## 9. Tests and further reading
+## 8. Tests and further reading
 
 ```bash
 pytest -q
